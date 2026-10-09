@@ -6,7 +6,7 @@
 
 use egui::{Align2, FontId, Stroke, pos2};
 
-use super::plot::{Scale, band, bars, corners};
+use super::plot::{Past, Scale, band, bars, corners};
 use super::slider::slider;
 use super::track::track;
 use super::*;
@@ -320,7 +320,7 @@ pub(super) fn show(
         let headroom = pass.input.headroom;
         let channels = current.image.channels();
         let display = &current.display;
-        band(pass, ui, plot_rect, |t| {
+        band(pass, ui, plot_rect, Past::Rule, |t| {
             let value = transfer.to_linear(plotted.min + t * span);
             (
                 Color::from_linear(display.shade(value, channels, headroom)),

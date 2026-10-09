@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use super::plot::{band, bars, corners, white_line};
+use super::plot::{Past, band, bars, corners, white_line};
 use super::*;
 use crate::image::Transfer;
 use crate::image::display::{Display, Headroom, ToneMap};
@@ -274,11 +274,12 @@ pub(super) fn show(
     );
 
     // What each output comes out as, along the foot: gray from black to
-    // white, the accent along the top past white where the surface goes
-    // there, and under a false color the ramp, read at the output value.
+    // white, chevrons in the accent over the stretch past white where the
+    // surface goes there, and under a false color the ramp, read at the
+    // output value.
     let display = &current.display;
     let false_colored = display.false_colored(gray);
-    band(pass, ui, plot_rect, |t| {
+    band(pass, ui, plot_rect, Past::Chevrons, |t| {
         let out = ENCODING.to_linear(t * top);
         let color = if false_colored {
             display.colormap().color(out.clamp(0.0, 1.0))

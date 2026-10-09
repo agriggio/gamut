@@ -37,7 +37,9 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
   heading; and the plots run the panel's whole width. Under the Output,
   Display and Gain map plots is a row of stops: from white for the first
   two, so a plot reads as stops below clipping — or above white on an HDR
-  screen — and for the gain map in stops of lift.
+  screen — and for the gain map in stops of lift. On an HDR screen, the
+  part of the Output band past white, which the panel can only draw at
+  white, is overlaid with right-pointing chevrons to show it is lifted.
 
 ## 0.11.0 - 2026-10-10
 

@@ -2839,3 +2839,57 @@ fn the_raw_data_tab_without_exiftool_offers_a_way_out() {
     let _ = click(&mut harness, "Copy tags");
     assert!(harness.query_by_label("JSON").is_none(), "no menu opens");
 }
+
+/// The chevrons over the Output band, as the side panel painted them: each
+/// a right-pointing mark in the accent, its point halfway down.
+fn chevrons_in_side(harness: &Harness<'static, State>) -> Vec<[egui::Pos2; 3]> {
+    let side = egui::PanelState::load(&harness.ctx, egui::Id::new("side"))
+        .expect("the side panel")
+        .outer_rect;
+    let accent = egui::Color32::from(Theme::FALLBACK.accent);
+    harness
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Path(path)
+                if path.points.len() == 3
+                    && !path.closed
+                    && path.stroke.color == egui::epaint::ColorMode::Solid(accent) =>
+            {
+                let [top, point, foot] = [path.points[0], path.points[1], path.points[2]];
+                (top.x == foot.x
+                    && point.x > top.x
+                    && (point.y - (top.y + foot.y) / 2.0).abs() < 1e-3
+                    && side.contains(point))
+                .then_some([top, point, foot])
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The stretch of the Output band past white — what an HDR surface lifts
+/// above it, which the panel can only draw at white — wears chevrons, and an
+/// SDR surface's band, which ends at white, wears none.
+#[test]
+fn the_output_band_wears_chevrons_past_white_only_on_a_surface_with_room() {
+    let mut with_histogram = panels();
+    with_histogram.side = Some(super::side::Side::Histogram);
+    let harness = open(WINDOW, 1, with_histogram);
+    assert!(chevrons_in_side(&harness).is_empty());
+
+    let mut harness = build(WINDOW, 1, with_histogram);
+    let state = harness.state_mut();
+    state.input.headroom = Headroom::Above;
+    state.input.room = 4.0;
+    harness.run();
+    let chevrons = chevrons_in_side(&harness);
+    assert!(!chevrons.is_empty());
+    // All of them past the white line, which on a room of 4 stands short of
+    // the band's end: none reaches back into the stretch below white.
+    let white = painted_in_side(&harness, "0").expect("the 0 of the row of stops");
+    for [top, ..] in chevrons {
+        assert!(top.x >= white.min.x, "{top:?} left of {white:?}");
+    }
+}

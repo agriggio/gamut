@@ -225,6 +225,15 @@ claim a bar that is not the pixel's.
 
 ## The Output section
 
+The band under the plot is what each output comes out as, and the panel
+cannot show past white: its target is SDR, so the stretch an HDR surface
+lifts above white would be drawn at white, the same as white itself. That
+stretch is overlaid with chevrons pointing right, in the accent
+(`plot::Past::Chevrons`), so that it reads as lifted rather than as a run of
+white. The Display band keeps an accent rule along its top instead
+(`Past::Rule`): there the band is the levels track, its handles are drawn
+over it, and a pattern would fight them.
+
 ### What is written in the corners
 
 `Plot::clipped`, asked of the Output plot at black and at white, is the

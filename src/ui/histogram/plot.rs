@@ -334,13 +334,30 @@ pub(super) fn corners(
     }
 }
 
+/// How a band marks the stretch of it where the screen goes past white,
+/// which the panel cannot show, since it cannot glow.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Past {
+    /// The accent along its top.
+    Rule,
+    /// A run of chevrons pointing right, in the accent, over it: what goes
+    /// out lifted above white, on the band that is nothing but what goes
+    /// out.
+    Chevrons,
+}
+
 /// The band under the plot `bars`: a device pixel to the cell, each the
 /// color `shade` gives for its place along the axis, from 0 at the left to
-/// 1 at the right, with the accent along its top where `shade` says the
-/// screen goes past white there — which the panel cannot show, since it
-/// cannot glow, so says. Outlined outside the color rather than over it,
-/// so that a band that comes out black is still a band on a dark panel.
-pub(super) fn band(pass: &Pass, ui: &egui::Ui, bars: Rect, shade: impl Fn(f32) -> Shade) {
+/// 1 at the right, marked as `past` says where `shade` says the screen goes
+/// past white there. Outlined outside the color rather than over it, so
+/// that a band that comes out black is still a band on a dark panel.
+pub(super) fn band(
+    pass: &Pass,
+    ui: &egui::Ui,
+    bars: Rect,
+    past: Past,
+    shade: impl Fn(f32) -> Shade,
+) {
     let theme = pass.theme;
     let painter = ui.painter();
     let grid = pass.grid;
@@ -348,6 +365,7 @@ pub(super) fn band(pass: &Pass, ui: &egui::Ui, bars: Rect, shade: impl Fn(f32) -
     let (top, bottom) = (grid.snap(band.y), grid.snap(band.bottom()));
     let hair = grid.device_pixels(1.0);
     let cells: Vec<_> = grid.columns(bars.x, bars.width).collect();
+    let mut lifted: Option<(f32, f32)> = None;
     for column in &cells {
         let (left, right) = (column.left, column.right);
         let (color, above) = shade(column.t_center());
@@ -357,12 +375,26 @@ pub(super) fn band(pass: &Pass, ui: &egui::Ui, bars: Rect, shade: impl Fn(f32) -
             color,
         );
         if above {
-            painter.rect_filled(
-                egui::Rect::from_min_max(pos2(left, top), pos2(right, top + hair)),
-                0.0,
-                theme.accent,
-            );
+            match past {
+                Past::Rule => {
+                    painter.rect_filled(
+                        egui::Rect::from_min_max(pos2(left, top), pos2(right, top + hair)),
+                        0.0,
+                        theme.accent,
+                    );
+                }
+                Past::Chevrons => {
+                    lifted = Some(lifted.map_or((left, right), |(from, _)| (from, right)));
+                }
+            }
         }
+    }
+    if let Some((from, to)) = lifted {
+        chevrons(
+            pass,
+            ui,
+            egui::Rect::from_min_max(pos2(from, top), pos2(to, bottom)),
+        );
     }
     let (Some(first), Some(last)) = (cells.first(), cells.last()) else {
         return;
@@ -380,6 +412,34 @@ pub(super) fn band(pass: &Pass, ui: &egui::Ui, bars: Rect, shade: impl Fn(f32) -
         hair,
         theme.border.into(),
     );
+}
+
+/// How far apart the chevrons over a band's lifted stretch stand, and how
+/// far each one is kept off the band's top and bottom.
+const CHEVRON_PITCH: f32 = 6.0;
+const CHEVRON_INSET: f32 = 2.0;
+
+/// Chevrons pointing right, one every [`CHEVRON_PITCH`] from the left of
+/// `stretch` and cut off at its right, in the accent: the stretch of a band
+/// that is lifted past white.
+fn chevrons(pass: &Pass, ui: &egui::Ui, stretch: egui::Rect) {
+    let grid = pass.grid;
+    let painter = ui.painter().with_clip_rect(stretch);
+    let stroke = egui::Stroke::new(grid.line_width(1.0), Color32::from(pass.theme.accent));
+    let (high, low) = (
+        stretch.top() + CHEVRON_INSET,
+        stretch.bottom() - CHEVRON_INSET,
+    );
+    let middle = (high + low) / 2.0;
+    let depth = (low - high) / 2.0;
+    let mut x = stretch.left() + CHEVRON_INSET;
+    while x < stretch.right() {
+        painter.line(
+            vec![pos2(x, high), pos2(x + depth, middle), pos2(x, low)],
+            stroke,
+        );
+        x += CHEVRON_PITCH;
+    }
 }
 
 /// The row of whole stops along a plot's axis, drawn in `row`, which spans
