@@ -164,10 +164,22 @@ pub(super) fn show(
     };
     bars(pass, ui, lift, plot_rect, false, &accent_rule(pass, mark));
     let dim = Color32::from(pass.theme.text_dim);
+    let (low, high) = (map.code_stops(lift.min), map.code_stops(lift.max));
     corners(
         ui,
         plot_rect,
-        Some((stops_words(map.code_stops(lift.min)), dim)),
-        Some((stops_words(map.code_stops(lift.max)), dim)),
+        Some((stops_words(low), dim)),
+        Some((stops_words(high), dim)),
+    );
+
+    // The row of stops under the plot: each whole stop of lift where the
+    // map's codes put it, which on a map read through a curve is not evenly
+    // spaced.
+    plot::ev_scale(
+        pass,
+        ui,
+        ev_row(plot_rect, plot_rect.bottom() + PLOT_INSET),
+        low.min(high).floor() as i32..=low.max(high).ceil() as i32,
+        |stop| Some(map.code_for_stops(stop as f32)? / 255.0),
     );
 }

@@ -635,7 +635,11 @@ or a *Window* rule is pressed, and the exposure survives that. The share
 of the picture the screen is throwing away is written in the top corners of
 the Output plot at the head of the panel — how much is at or below black on
 the left, how much is at or above white on the right — and only when there
-is any, so a number there is news. Pointing at a plot names the value under
+is any, so a number there is news. A row of stops under
+the Output and Display plots counts from white — 0 is what comes out white,
+`-2` is two stops under it, and on an HDR screen `+1` is a stop over — and
+the one under the gain map's plot counts how far the map lifts the picture.
+Pointing at a plot names the value under
 the pointer at that stage; pointing at the picture marks the pixel on every
 plot and writes its value at each stage, from the file at the foot of the
 panel to what the screen shows at the top.

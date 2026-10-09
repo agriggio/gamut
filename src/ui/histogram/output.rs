@@ -261,6 +261,18 @@ pub(super) fn show(
     });
     corners(ui, plot_rect, left, right);
 
+    // The row of stops under the band: 0 at white, below it how far under
+    // white an output is, and on a surface with room above white how far
+    // past it the screen goes, up to the room. Exact, the output's values
+    // being ratios to white already.
+    plot::ev_scale(
+        pass,
+        ui,
+        ev_row(plot_rect, ramp(plot_rect).bottom()),
+        -24..=binned.room.log2().ceil() as i32,
+        |stop| Some(ENCODING.to_encoded((stop as f32).exp2()) / top),
+    );
+
     // What each output comes out as, along the foot: gray from black to
     // white, the accent along the top past white where the surface goes
     // there, and under a false color the ramp, read at the output value.

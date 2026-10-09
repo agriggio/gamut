@@ -280,6 +280,35 @@ impl GainMap {
             / channels as f32
     }
 
+    /// The fractional code [`GainMap::code_stops`] says stands for `stops`,
+    /// read between the two codes either side of it: where a lift of that
+    /// many stops is on [`GainMap::lift_plot`]'s axis. `None` past either
+    /// end of what the map can describe.
+    pub fn code_for_stops(&self, stops: f32) -> Option<f32> {
+        let table = self.stops_table();
+        let channels = if self.channels >= 3 { COLOR } else { 1 };
+        let at = |code: usize| {
+            (0..channels)
+                .map(|channel| table[channel * 256 + code])
+                .sum::<f32>()
+                / channels as f32
+        };
+        (0..255).find_map(|code| {
+            let (low, high) = (at(code), at(code + 1));
+            let (lower, upper) = (low.min(high), low.max(high));
+            if !(lower..=upper).contains(&stops) {
+                return None;
+            }
+            let span = high - low;
+            let fraction = if span.abs() > f32::EPSILON {
+                (stops - low) / span
+            } else {
+                0.0
+            };
+            Some(code as f32 + fraction)
+        })
+    }
+
     /// The map's codes under base pixel `(x, y)` of a `width` by `height`
     /// base, blended between the four around it as [`GainMap::gain_at`]
     /// blends their gains: where the pixel stands on
@@ -586,6 +615,17 @@ mod tests {
         assert!(gray.code_stops(0.0).abs() < 1e-5);
         assert!((gray.code_stops(255.0) - 2.0).abs() < 1e-3);
         assert!((gray.code_stops(127.5) - 1.0).abs() < 1e-3, "between codes");
+        for code in [0.0, 51.0, 127.5, 200.25, 255.0] {
+            let back = gray
+                .code_for_stops(gray.code_stops(code))
+                .expect("described");
+            assert!((back - code).abs() < 1e-2, "{code} came back {back}");
+        }
+        assert_eq!(
+            gray.code_for_stops(3.0),
+            None,
+            "past what the map describes"
+        );
         assert_eq!(gray.code_at(3, 0, 4, 1), [255.0; 3]);
 
         // The base is twice the map's width: its first two pixels read the

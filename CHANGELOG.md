@@ -34,7 +34,10 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
   buttons that act on every plot, and the one that marks the clipped
   pixels, are in a row at the top of the panel, as the information's tabs
   are; the gain map's section has the button that shows the map in its
-  heading; and the plots run the panel's whole width.
+  heading; and the plots run the panel's whole width. Under the Output,
+  Display and Gain map plots is a row of stops: from white for the first
+  two, so a plot reads as stops below clipping — or above white on an HDR
+  screen — and for the gain map in stops of lift.
 
 ## 0.11.0 - 2026-10-10
 

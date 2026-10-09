@@ -78,9 +78,11 @@ impl Section {
         let head = LABEL_HEIGHT + HEAD_GAP + PLOT_INSET;
         let band = PLOT_INSET + RAMP_GAP + RAMP_HEIGHT;
         match self {
-            // The plot and the band of what each output comes out as.
-            Section::Output => head + PLOT_HEIGHT + band,
-            // The plot, the band, and the three rows of settings under it,
+            // The plot, the band of what each output comes out as, and the
+            // row of stops under it.
+            Section::Output => head + PLOT_HEIGHT + band + EV_ROW,
+            // The plot, the band, the row of stops, and the three rows of
+            // settings under them,
             // which take the inset under the plot as their own: see
             // `display::ROWS_HEIGHT`.
             Section::Display => {
@@ -89,11 +91,12 @@ impl Section {
                     + display::SWATCH_HEIGHT
                     + RAMP_GAP
                     + RAMP_HEIGHT
+                    + EV_ROW
                     + display::ROWS_HEIGHT
             }
-            // A shorter plot, and nothing under it: how much of the lift is
-            // applied is the header's to say.
-            Section::GainMap => head + SHORT_PLOT_HEIGHT + PLOT_INSET,
+            // A shorter plot and the row of stops under it: how much of the
+            // lift is applied is the header's to say.
+            Section::GainMap => head + SHORT_PLOT_HEIGHT + PLOT_INSET + EV_ROW,
             // The line of the pixel's values, a shorter plot, and nothing
             // under it.
             Section::Image => {

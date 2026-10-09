@@ -208,6 +208,23 @@ const CELL_GAP: f32 = 4.0;
 /// enough that the longest button label has room in the narrowest cell.
 const ROW_TEXT: f32 = TEXT_SIZE * 0.85;
 
+/// The row of whole stops under a plot — see [`plot::ev_scale`]: the gap
+/// above it, how long a tick is, how tall the row is with its numbers under
+/// the ticks, the least room between two ticks before the rest of that side
+/// is left off, and the least between two numbers.
+const EV_GAP: f32 = 2.0;
+const EV_TICK: f32 = 3.0;
+const EV_HEIGHT: f32 = EV_TICK + CLIP_TEXT + 1.0;
+const EV_ROW: f32 = EV_GAP + EV_HEIGHT;
+const EV_TICK_GAP: f32 = 4.0;
+const EV_LABEL_GAP: f32 = 4.0;
+
+/// The row of whole stops under whatever ends at `bottom`, across the plot
+/// `bars`.
+fn ev_row(bars: Rect, bottom: f32) -> Rect {
+    Rect::new(bars.x, bottom + EV_GAP, bars.width, EV_HEIGHT)
+}
+
 /// The word set beside the line that marks white, when white is not the top
 /// of the plot.
 const WHITE_LABEL: &str = "white";

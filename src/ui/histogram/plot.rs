@@ -382,6 +382,86 @@ pub(super) fn band(pass: &Pass, ui: &egui::Ui, bars: Rect, shade: impl Fn(f32) -
     );
 }
 
+/// The row of whole stops along a plot's axis, drawn in `row`, which spans
+/// the plot's width: a tick at every stop from `stops` that `place` puts on
+/// the axis — as a fraction of the way along it, or `None` off it — and the
+/// stop's number under the ticks there is room to write it beside.
+///
+/// Worked out from 0 outward each way, so that 0 is always written and the
+/// others give way to it and to their neighbors nearer 0; a direction stops
+/// where its ticks come closer than [`EV_TICK_GAP`], which on an axis spaced
+/// on a curve or in linear light is where the stops crowd into the shadows
+/// past reading. Exact wherever it is drawn: a tick stands where the stop's
+/// value falls on the axis, worked out from the value rather than from the
+/// bins.
+pub(super) fn ev_scale(
+    pass: &Pass,
+    ui: &egui::Ui,
+    row: Rect,
+    stops: std::ops::RangeInclusive<i32>,
+    place: impl Fn(i32) -> Option<f32>,
+) {
+    let theme = pass.theme;
+    let grid = pass.grid;
+    let painter = ui.painter();
+    let font = FontId::proportional(CLIP_TEXT);
+    let hair = grid.line_width(1.0);
+    let at = |t: f32| row.x + t * row.width;
+    // The extents the labels written so far take, so that the next one out
+    // is left off where it would touch.
+    let mut taken: Vec<(f32, f32)> = Vec::new();
+    let draw = |stop: i32, x: f32, taken: &mut Vec<(f32, f32)>| {
+        painter.rect_filled(
+            egui::Rect::from(grid.rect(Rect::new(x - hair / 2.0, row.y, hair, EV_TICK))),
+            0.0,
+            theme.text_dim,
+        );
+        let words = if stop == 0 {
+            "0".to_string()
+        } else {
+            format!("{stop:+}")
+        };
+        let width = width_of(ui, &words, CLIP_TEXT);
+        let left = (x - width / 2.0).clamp(row.x, row.right() - width);
+        let span = (left - EV_LABEL_GAP / 2.0, left + width + EV_LABEL_GAP / 2.0);
+        if taken.iter().any(|(a, b)| span.0 < *b && *a < span.1) {
+            return;
+        }
+        taken.push(span);
+        let ink: Color32 = if stop == 0 {
+            theme.text_primary.into()
+        } else {
+            theme.text_dim.into()
+        };
+        painter.text(
+            pos2(grid.snap(left), row.y + EV_TICK),
+            Align2::LEFT_TOP,
+            words,
+            font.clone(),
+            ink,
+        );
+    };
+    let (low, high) = (*stops.start(), *stops.end());
+    let walk = |from: i32, to: i32, step: i32, taken: &mut Vec<(f32, f32)>| {
+        let mut last: Option<f32> = None;
+        let mut stop = from;
+        while (step > 0 && stop <= to) || (step < 0 && stop >= to) {
+            if let Some(t) = place(stop).filter(|t| (0.0..=1.0).contains(t)) {
+                let x = at(t);
+                if last.is_some_and(|last| (x - last).abs() < EV_TICK_GAP) {
+                    break;
+                }
+                last = Some(x);
+                draw(stop, x, taken);
+            }
+            stop += step;
+        }
+    };
+    let start = 0.clamp(low, high);
+    walk(start, high, 1, &mut taken);
+    walk(start - 1, low, -1, &mut taken);
+}
+
 /// The line across the plot `bars` that marks white, `white` of the way up
 /// it, where white is not the top of the plot: on a surface with room above
 /// white, the room above it can then be seen as the room it is rather than

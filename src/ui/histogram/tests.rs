@@ -353,10 +353,14 @@ fn the_false_colors_are_under_the_display_band_and_nowhere_else() {
         "the ramps sit under the band"
     );
     assert!(last.right() <= with.right() + 0.01, "{last:?}");
+    assert!(
+        swatch_button(with, 0).y >= ev_row(with, ramp(with).bottom()).bottom(),
+        "the false colors are under the row of stops"
+    );
     assert_eq!(
         swatch_button(with, 0).bottom(),
-        ramp(without).bottom(),
-        "the false colors end where the band alone would have"
+        ramp(without).bottom() + EV_ROW,
+        "the false colors end where the band and its stops alone would have"
     );
     assert!(swatch_button(with, 0).bottom() <= Rows::new(rect).exposure.y);
 }

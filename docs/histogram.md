@@ -150,6 +150,37 @@ an HDR surface whose monitor has not said — it is resolved as the largest
 output any value reaches, rounded up to a whole stop above white, and the
 key carries what it was resolved to.
 
+## The row of stops
+
+Under the Output and Display bands, and under the Gain map plot, a row of
+whole stops (`plot::ev_scale`): a tick at each stop where its value falls on
+the plot's axis, and its number under the ticks there is room to write.
+Each section says where a stop is (`place`), and the ticks are worked out
+from the value, not the bins, so they are exact wherever they are drawn.
+
+- **Output** counts from white: its values are ratios to white already, so a
+  stop is `2^n` encoded on sRGB's curve over the axis's top. On a surface with
+  room above white the row runs past 0 to the room, which is the one thing
+  the band, held to what the panel can show, cannot say.
+- **Display** counts from the value the window puts at white — the white
+  handle, `Display::displayed_bounds` — so the plot reads as stops below
+  clipping, as a camera's does, and a stop on the exposure slider moves the
+  row by exactly a stop. A window whose white is past the plot's end has no 0
+  on it, which is the truth: nothing plotted reaches the clip. It is left off
+  a measurement (`Referred::Measured`), whose values are not light.
+- **Gain map** counts the lift itself, the axis's own unit: a stop sits at
+  `GainMap::code_for_stops`, the inverse of `code_stops`, so on a map read
+  through a curve the ticks are not evenly spaced, as they should not be.
+
+The Image section has none: its point is the file's own units, and its stops
+would be the Display row's again with no window on them.
+
+Every row is worked out from 0 outward each way, so 0 is always written and
+the numbers further out give way to those nearer 0. A side stops where its
+ticks come closer than `EV_TICK_GAP`: on a curve the shadows crowd past
+reading around eight stops under white, and on a linear axis, where each
+stop down is half the distance of the last, after four or five.
+
 ## The pixel traced down the column
 
 `histogram::marked` hands every section its `Mark`: the bin its rule stands

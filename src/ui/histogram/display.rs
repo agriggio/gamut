@@ -95,7 +95,7 @@ pub(super) fn plot_area(rect: Rect, gray: bool) -> Rect {
 pub(super) fn swatch_button(bars: Rect, index: usize) -> Rect {
     let row = Rect::new(
         bars.x,
-        ramp(bars).bottom() + RAMP_GAP,
+        ramp(bars).bottom() + EV_ROW + RAMP_GAP,
         bars.width,
         SWATCH_HEIGHT,
     );
@@ -139,7 +139,7 @@ impl Rows {
             )
         };
 
-        let mut y = ramp(full_bars(rect)).bottom() + ROW_GAP;
+        let mut y = ramp(full_bars(rect)).bottom() + EV_ROW + ROW_GAP;
         let (exposure, exposure_label) = line(y);
         let mut next = || {
             y += ROW_HEIGHT + ROW_GAP;
@@ -328,6 +328,7 @@ pub(super) fn show(
             )
         });
         curve(pass, ui, current, plot_rect);
+        stops(pass, ui, current, plot_rect);
     }
 
     let held = track(pass, ui, current, plot_rect);
@@ -338,6 +339,42 @@ pub(super) fn show(
     let readout = held.or_else(|| mark.map(|mark| mark.words.clone()));
     section::header(pass, ui, Section::Display, rect, readout.as_deref());
 }
+
+/// The row of stops under the band: 0 at the value the window puts at
+/// white — the white handle — and each stop below it and above it where it
+/// falls on the axis, so that the plot reads as stops below clipping, and a
+/// stop of exposure moves the row by exactly a stop.
+///
+/// Left off a measurement, whose values are quantities rather than light
+/// and have no stops to count, and off a window whose white is not a
+/// positive number of anything.
+fn stops(pass: &Pass, ui: &egui::Ui, current: &Current, bars: Rect) {
+    if current.image.referred == crate::image::Referred::Measured {
+        return;
+    }
+    let (_, white) = current.display.displayed_bounds();
+    if !(white.is_finite() && white > 0.0) {
+        return;
+    }
+    let plotted = &current.stats.plot;
+    let span = plotted.max - plotted.min;
+    let transfer = current.image.color.transfer;
+    plot::ev_scale(
+        pass,
+        ui,
+        ev_row(bars, ramp(bars).bottom()),
+        -EV_REACH..=EV_REACH,
+        |stop| {
+            let value = white * (stop as f32).exp2();
+            Some((transfer.to_encoded(value) - plotted.min) / span)
+        },
+    );
+}
+
+/// How many stops either way of white the Display section's row is looked
+/// for over: past the deepest shadows any axis spaces apart, and past the
+/// most any window leaves above white.
+const EV_REACH: i32 = 24;
 
 /// What the display does to every value on the plot, drawn over it.
 ///
