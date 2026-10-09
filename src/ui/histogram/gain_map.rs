@@ -57,13 +57,13 @@ fn lift_words(stops: f32) -> String {
 }
 
 /// What the section says with the pointer on its plot at `bin`.
-pub(super) fn bin_mark(current: &Current, lift: Option<&Plot>, bin: usize) -> Mark {
-    let (Some(lift), Some(map)) = (lift, current.picture_face().image.gain_map.as_deref()) else {
+pub(super) fn bin_mark(lift: Option<&Plot>, bin: usize) -> Mark {
+    let Some(lift) = lift else {
         return Mark::default();
     };
     Mark {
         bin: Some(bin),
-        words: format!("{} stops", lift_words(map.code_stops(bin_value(lift, bin)))),
+        words: format!("{} stops", lift_words(bin_value(lift, bin))),
         ..Mark::default()
     }
 }
@@ -82,8 +82,7 @@ pub(super) fn pixel_mark(current: &Current, lift: Option<&Plot>, x: u32, y: u32)
     let size = [current.image.width, current.image.height];
     let [x, y] = current.turn.stored([x, y], size);
     let stops = map.stops_at(x, y, size[0], size[1]);
-    let codes = map.code_at(x, y, size[0], size[1]);
-    let mean = codes.iter().sum::<f32>() / codes.len() as f32;
+    let mean = stops.iter().sum::<f32>() / stops.len() as f32;
     let words = if map.channels == 1 {
         format!("{} stops", lift_words(stops[0]))
     } else {
@@ -164,7 +163,7 @@ pub(super) fn show(
     };
     bars(pass, ui, lift, plot_rect, false, &accent_rule(pass, mark));
     let dim = Color32::from(pass.theme.text_dim);
-    let (low, high) = (map.code_stops(lift.min), map.code_stops(lift.max));
+    let (low, high) = (lift.min, lift.max);
     corners(
         ui,
         plot_rect,
@@ -172,14 +171,13 @@ pub(super) fn show(
         Some((stops_words(high), dim)),
     );
 
-    // The row of stops under the plot: each whole stop of lift where the
-    // map's codes put it, which on a map read through a curve is not evenly
-    // spaced.
+    // The row of stops under the plot: each whole stop of lift, evenly
+    // spaced, the axis being in stops.
     plot::ev_scale(
         pass,
         ui,
         ev_row(plot_rect, plot_rect.bottom() + PLOT_INSET),
         low.min(high).floor() as i32..=low.max(high).ceil() as i32,
-        |stop| Some(map.code_for_stops(stop as f32)? / 255.0),
+        |stop| Some((stop as f32 - low) / (high - low)),
     );
 }

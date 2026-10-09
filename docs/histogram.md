@@ -94,17 +94,23 @@ file whose reading moves no color — gray, or BT.709 with no gain map
 (`DecodedImage::color_moves`) — is not walked twice, and the stats are
 shared.
 
-**Gain map** is `GainMap::lift_plot`: the map's histogram, binned on its
-own codes, one to a bin — for the reason the Image plot is binned on the
-file's curve: the map's 8-bit values over uniform bins in stops land unevenly
-wherever the map holds less than its whole range of codes or reads them
-through a curve, as Apple's maps do through Rec. 709's, and the plot comes
-out as a comb. Its axis is codes 0 to 255, and what a place on it is worth is
-`GainMap::code_stops`, which is what the corners and the readout write: the
-ends are the stops the map is described for, and where in that the picture's
-lift sits is the shape of the plot. A map with a channel each has a plane
-each, and its luminance plane is the mean of the three codes; a pixel stands
-on it at `GainMap::code_at`, the codes blended as `gain_at` blends gains. How much of the
+**Gain map** is `GainMap::lift_plot`: the map's histogram in stops at the
+whole of the lift, evenly spaced, over the lift the picture's map holds —
+from nothing, or from the least where it darkens, to the most
+(`GainMap::lift_range`) — rather than over everything its codes could
+describe, which on a map described down into darkening it never does would
+leave an empty stretch left of 0. The map is 8-bit, and its codes reach
+stops through a curve wherever its gamma is not one or it is Apple's, read
+through Rec. 709's: a bin to a code would put the axis on that curve, and a
+code dropped into the one bin its middle falls in would comb. So each code
+stands for the stretch of stops from halfway to the code below to halfway to
+the code above, and its count is spread over the bins that stretch covers,
+in proportion — the honest plot of a quantized value on an axis that is not
+its own — counted in sixteenths of a pixel (`SHARES`) so that a code spread
+thin keeps something in each bin. A map with a channel each has a plane
+each, and its luminance plane is the mean of the three, spread pixel by
+pixel over the mean of their stretches; a pixel stands on it at the mean of
+`GainMap::stops_at`. How much of the
 lift is applied (`GainMap::applied_stops`, the same number the information
 panel's *Applied* row says) is written in the header while the pointer is
 reading nothing — none on a screen with no room above white, which is most
@@ -168,9 +174,8 @@ from the value, not the bins, so they are exact wherever they are drawn.
   row by exactly a stop. A window whose white is past the plot's end has no 0
   on it, which is the truth: nothing plotted reaches the clip. It is left off
   a measurement (`Referred::Measured`), whose values are not light.
-- **Gain map** counts the lift itself, the axis's own unit: a stop sits at
-  `GainMap::code_for_stops`, the inverse of `code_stops`, so on a map read
-  through a curve the ticks are not evenly spaced, as they should not be.
+- **Gain map** counts the lift itself, the axis's own unit, so its ticks are
+  evenly spaced.
 
 The Image section has none: its point is the file's own units, and its stops
 would be the Display row's again with no window on them.
