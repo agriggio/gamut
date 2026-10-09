@@ -73,7 +73,7 @@ baseline exposure, a profile's tone curve, a gain table — is a `Section`
 variant placed between Display and Image at a height of its own: a 1D stage
 composes into the Display curve and takes a header of its own, and a stage
 that lifts each pixel by its own amount is shaped as the Gain map section
-is, a histogram of the lift and a band of how much of it is applied.
+is, a histogram of the lift with how much of it is applied in its header.
 
 The row of buttons — the luminance and color planes and the logarithmic
 counts, then, set apart, the marks on the picture, and at the far end the
@@ -97,10 +97,14 @@ shared.
 **Gain map** is `GainMap::lift_plot`: each of the map's values at the whole
 of the lift, in stops, over the stops the map holds. A map with a channel
 each has a plane each, and its luminance plane is the mean of the three in
-stops, as a pixel's luminance is a mean of its channels. Under it the band
-is filled in the accent as far as the lift is applied
-(`GainMap::applied_stops`, the same number the information panel's *Applied*
-row says), which is none on a screen with no room above white. The map's
+stops, as a pixel's luminance is a mean of its channels. How much of the
+lift is applied (`GainMap::applied_stops`, the same number the information
+panel's *Applied* row says) is written in the header while the pointer is
+reading nothing — none on a screen with no room above white, which is most
+screens. There is no band under the plot as the Output and Display plots
+have: theirs show what a value comes out as, and one filled to the applied
+share would only say what the header's words do, and on an SDR screen would
+be an empty strip. The map's
 histogram is a walk over the map, kept in egui's data for as long as the
 picture's map is the same one. The section reads the picture's map
 (`Current::picture_face`), so that it stays while the map is shown in the

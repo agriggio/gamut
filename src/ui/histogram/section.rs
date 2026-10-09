@@ -91,9 +91,9 @@ impl Section {
                     + RAMP_HEIGHT
                     + display::ROWS_HEIGHT
             }
-            // A shorter plot, and the band of how much of the lift is
-            // applied.
-            Section::GainMap => head + SHORT_PLOT_HEIGHT + band,
+            // A shorter plot, and nothing under it: how much of the lift is
+            // applied is the header's to say.
+            Section::GainMap => head + SHORT_PLOT_HEIGHT + PLOT_INSET,
             // The line of the pixel's values, a shorter plot, and nothing
             // under it.
             Section::Image => {

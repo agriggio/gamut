@@ -1,11 +1,11 @@
 //! The Gain map section, for a picture that carries one: how far the map
-//! lifts the picture, as a histogram in stops at the whole of the lift, and
-//! along its foot how much of that lift the display's room is showing. The
-//! button that shows the map in the picture's place is in its header.
+//! lifts the picture, as a histogram in stops at the whole of the lift, with
+//! how much of that lift the display's room is showing written in its
+//! header beside the button that shows the map in the picture's place.
 
 use std::sync::Arc;
 
-use super::plot::{PLOT_BACKGROUND, band, bars, corners};
+use super::plot::{PLOT_BACKGROUND, bars, corners};
 use super::*;
 use crate::image::auxiliary::{Auxiliary, Showing};
 use crate::image::gain_map::GainMap;
@@ -122,8 +122,8 @@ fn summary(current: &Current, map: &GainMap) -> String {
 }
 
 /// The Gain map section, laid out at `rect`: the button that shows the map,
-/// the histogram of its lift with the axis's two ends in its corners, and
-/// the band filled in the accent as far as the lift is applied.
+/// and the histogram of its lift with the axis's two ends in its corners.
+/// How much of the lift is on screen is the header's to say, in words.
 pub(super) fn show(
     pass: &mut Pass,
     ui: &mut egui::Ui,
@@ -169,22 +169,4 @@ pub(super) fn show(
         Some((stops_words(lift.min), dim)),
         Some((stops_words(lift.max), dim)),
     );
-
-    // How much of the lift is on screen: the band filled in the accent from
-    // the foot of the axis up to the stops the display's room is showing,
-    // which is none on a screen with no room above white and the whole of it
-    // on one with room for it all.
-    let weight = current
-        .picture_face()
-        .lift
-        .as_ref()
-        .map_or(0.0, |lift| lift.weight());
-    let applied = map.applied_stops(weight);
-    let accent = pass.theme.accent;
-    let span = lift.max - lift.min;
-    band(pass, ui, plot_rect, |t| {
-        let stops = lift.min + t * span;
-        let filled = weight > 0.0 && stops <= applied;
-        (if filled { accent } else { PLOT_BACKGROUND }, false)
-    });
 }
