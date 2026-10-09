@@ -104,11 +104,7 @@ fn summary(current: &Current, map: &GainMap) -> String {
         .as_ref()
         .map_or(0.0, |lift| lift.weight());
     let range = match map.lift_range() {
-        Some([low, high]) => format!(
-            "{}\u{2013}{} stops",
-            stops_words(low.min(0.0)),
-            stops_words(high)
-        ),
+        Some([low, high]) => format!("{}\u{2013}{} stops", stops_words(low), stops_words(high)),
         None => "no lift".to_string(),
     };
     let shown = if weight >= 1.0 {

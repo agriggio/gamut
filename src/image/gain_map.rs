@@ -219,10 +219,12 @@ impl GainMap {
     }
 
     /// The map's histogram: how much of the picture is lifted how far, in
-    /// stops at the whole of the lift, evenly spaced, over the lift this
-    /// picture's map holds — from nothing, or from the least where the map
-    /// darkens somewhere, to the most ([`GainMap::lift_range`]) — rather
-    /// than over everything its codes could describe.
+    /// stops at the whole of the lift, evenly spaced, over the range the
+    /// map is described for — its lowest code to its highest
+    /// ([`GainMap::described_range`]) — as a graded file is plotted over the
+    /// range its codes can hold rather than stretched to what it uses. Where
+    /// the picture does not reach an end of that range, the plot says so by
+    /// leaving the stretch empty.
     ///
     /// Each code stands for a stretch of stops, from halfway to the code
     /// below to halfway to the code above, and its count is spread over the
@@ -240,8 +242,8 @@ impl GainMap {
     /// A walk over the map, on a stride past [`MAX_PLOTTED`] values; the
     /// caller keeps the answer.
     pub fn lift_plot(&self) -> Option<Plot> {
-        let [low, high] = self.lift_range()?;
-        let low = low.min(0.0);
+        self.lift_range()?;
+        let [low, high] = self.described_range()?;
         let span = high - low;
         if span.partial_cmp(&f32::MIN_POSITIVE) != Some(std::cmp::Ordering::Greater) {
             return None;
@@ -328,6 +330,23 @@ impl GainMap {
             luma: whole(luma),
             color: color.then(|| [whole(plane(0)), whole(plane(1)), whole(plane(2))]),
         })
+    }
+
+    /// The least and the most any code of the map can lift the base by, in
+    /// stops, at the whole of the lift: the range the file describes its map
+    /// over, from its lowest code to its highest, whatever this picture's
+    /// map holds of it. `None` where no code says anything finite.
+    pub fn described_range(&self) -> Option<[f32; 2]> {
+        let channels = if self.channels >= 3 { COLOR } else { 1 };
+        self.stops_table()[..channels * 256]
+            .iter()
+            .copied()
+            .filter(|stops| stops.is_finite())
+            .fold(None, |range: Option<[f32; 2]>, stops| {
+                Some(range.map_or([stops, stops], |[low, high]| {
+                    [low.min(stops), high.max(stops)]
+                }))
+            })
     }
 
     /// Each value of each channel as the stops it lifts by at the whole of
@@ -637,8 +656,8 @@ mod tests {
         // The mean of 0, 0 and 3 stops is one, a third of the way along.
         assert!(plot.luma[plot.bin_at(1.0).expect("on the axis")] > 0);
 
-        // The axis runs over what the picture's map holds, from nothing,
-        // whatever more its codes could describe.
+        // The axis runs over the range the map is described for, whatever of
+        // it the picture's map holds.
         let mut darkening = iso(2.0);
         darkening.gain_map_min = [-1.0; 3];
         let partway = GainMap {
@@ -649,8 +668,17 @@ mod tests {
             lift: Lift::Iso(darkening),
         };
         let plot = partway.lift_plot().expect("a lift to plot");
-        assert_eq!(plot.min, 0.0, "no room for the darkening it does not do");
+        assert!(
+            (plot.min + 1.0).abs() < 1e-3,
+            "the darkening its codes describe, which this map does not use: {}",
+            plot.min
+        );
         assert!((plot.max - 2.0).abs() < 1e-3);
+        let low = plot.bin_at(1.0).expect("on the axis");
+        assert!(
+            plot.luma[..low].iter().all(|count| *count == 0),
+            "nothing below the codes the map holds"
+        );
 
         // Every code of a map read through a curve still fills the stretch
         // it stands for: no empty bin between two the map holds, the comb

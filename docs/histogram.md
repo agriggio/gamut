@@ -95,11 +95,13 @@ file whose reading moves no color — gray, or BT.709 with no gain map
 shared.
 
 **Gain map** is `GainMap::lift_plot`: the map's histogram in stops at the
-whole of the lift, evenly spaced, over the lift the picture's map holds —
-from nothing, or from the least where it darkens, to the most
-(`GainMap::lift_range`) — rather than over everything its codes could
-describe, which on a map described down into darkening it never does would
-leave an empty stretch left of 0. The map is 8-bit, and its codes reach
+whole of the lift, evenly spaced, over the range the file describes the map
+for — its lowest code to its highest (`GainMap::described_range`) — for the
+reason a graded file's plot is over 0..1: the axis is the file's, and what
+of it the picture uses is the plot's shape. A map described down into
+darkening it never does leaves the stretch below its lowest code empty,
+with 0 marked inside the axis, which is what the file says. The header
+writes the range the picture's map does hold (`GainMap::lift_range`). The map is 8-bit, and its codes reach
 stops through a curve wherever its gamma is not one or it is Apple's, read
 through Rec. 709's: a bin to a code would put the axis on that curve, and a
 code dropped into the one bin its middle falls in would comb. So each code
