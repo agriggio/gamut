@@ -94,10 +94,17 @@ file whose reading moves no color — gray, or BT.709 with no gain map
 (`DecodedImage::color_moves`) — is not walked twice, and the stats are
 shared.
 
-**Gain map** is `GainMap::lift_plot`: each of the map's values at the whole
-of the lift, in stops, over the stops the map holds. A map with a channel
-each has a plane each, and its luminance plane is the mean of the three in
-stops, as a pixel's luminance is a mean of its channels. How much of the
+**Gain map** is `GainMap::lift_plot`: the map's histogram, binned on its
+own codes, one to a bin — for the reason the Image plot is binned on the
+file's curve: the map's 8-bit values over uniform bins in stops land unevenly
+wherever the map holds less than its whole range of codes or reads them
+through a curve, as Apple's maps do through Rec. 709's, and the plot comes
+out as a comb. Its axis is codes 0 to 255, and what a place on it is worth is
+`GainMap::code_stops`, which is what the corners and the readout write: the
+ends are the stops the map is described for, and where in that the picture's
+lift sits is the shape of the plot. A map with a channel each has a plane
+each, and its luminance plane is the mean of the three codes; a pixel stands
+on it at `GainMap::code_at`, the codes blended as `gain_at` blends gains. How much of the
 lift is applied (`GainMap::applied_stops`, the same number the information
 panel's *Applied* row says) is written in the header while the pointer is
 reading nothing — none on a screen with no room above white, which is most

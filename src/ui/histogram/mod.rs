@@ -439,7 +439,7 @@ fn marked(
             *traced.slot(section) = Some(match section {
                 Section::Output => output::bin_mark(plots.output, bin),
                 Section::Display => display::bin_mark(current, headroom, bin),
-                Section::GainMap => gain_map::bin_mark(plots.lift, bin),
+                Section::GainMap => gain_map::bin_mark(current, plots.lift, bin),
                 Section::Image => stored::bin_mark(current, bin),
             });
             return traced;
