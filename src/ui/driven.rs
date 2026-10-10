@@ -98,7 +98,7 @@ fn picture(width: u32, height: u32) -> Current {
     Current::of(image, "photo.png")
 }
 
-fn panels() -> Panels {
+pub(super) fn panels() -> Panels {
     Panels {
         show_ui: true,
         show_filmstrip: false,
@@ -117,7 +117,7 @@ fn panels() -> Panels {
     }
 }
 
-fn input(logical: [f32; 2], count: usize) -> FrameInput {
+pub(super) fn input(logical: [f32; 2], count: usize) -> FrameInput {
     FrameInput {
         logical,
         scale: 1.0,

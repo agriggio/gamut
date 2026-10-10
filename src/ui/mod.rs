@@ -40,6 +40,8 @@ pub mod style;
 
 #[cfg(test)]
 mod driven;
+#[cfg(test)]
+mod lab;
 
 use std::rc::Rc;
 use std::sync::Arc;
