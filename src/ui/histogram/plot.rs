@@ -500,45 +500,22 @@ pub(super) fn ev_scale(
     stops: std::ops::RangeInclusive<i32>,
     place: impl Fn(i32) -> Option<f32>,
 ) {
-    let theme = pass.theme;
-    let grid = pass.grid;
-    let painter = ui.painter();
-    let font = FontId::proportional(CLIP_TEXT);
-    let hair = grid.line_width(1.0);
     let at = |t: f32| row.x + t * row.width;
     // The extents the labels written so far take, so that the next one out
     // is left off where it would touch.
     let mut taken: Vec<(f32, f32)> = Vec::new();
     let draw = |stop: i32, x: f32, taken: &mut Vec<(f32, f32)>| {
-        painter.rect_filled(
-            egui::Rect::from(grid.rect(Rect::new(x - hair / 2.0, row.y, hair, EV_TICK))),
-            0.0,
-            theme.text_dim,
-        );
         let words = if stop == 0 {
             "0".to_string()
         } else {
             format!("{stop:+}")
         };
-        let width = width_of(ui, &words, CLIP_TEXT);
-        let left = (x - width / 2.0).clamp(row.x, row.right() - width);
-        let span = (left - EV_LABEL_GAP / 2.0, left + width + EV_LABEL_GAP / 2.0);
-        if taken.iter().any(|(a, b)| span.0 < *b && *a < span.1) {
-            return;
-        }
-        taken.push(span);
-        let ink: Color32 = if stop == 0 {
-            theme.text_primary.into()
+        let ink = if stop == 0 {
+            pass.theme.text_primary
         } else {
-            theme.text_dim.into()
+            pass.theme.text_dim
         };
-        painter.text(
-            pos2(grid.snap(left), row.y + EV_TICK),
-            Align2::LEFT_TOP,
-            words,
-            font.clone(),
-            ink,
-        );
+        tick(pass, ui, row, x, &words, ink.into(), taken);
     };
     let (low, high) = (*stops.start(), *stops.end());
     let walk = |from: i32, to: i32, step: i32, taken: &mut Vec<(f32, f32)>| {
@@ -559,6 +536,64 @@ pub(super) fn ev_scale(
     let start = 0.clamp(low, high);
     walk(start, high, 1, &mut taken);
     walk(start - 1, low, -1, &mut taken);
+}
+
+/// A row of values along a plot's axis, drawn in `row`, which spans the
+/// plot's width: a tick at each of `ticks`, a fraction of the way along the
+/// axis and the words for the value there, and the words under the ticks
+/// there is room to write them beside, the earlier in `ticks` first.
+pub(super) fn value_scale(pass: &Pass, ui: &egui::Ui, row: Rect, ticks: &[(f32, String)]) {
+    let mut taken: Vec<(f32, f32)> = Vec::new();
+    for (t, words) in ticks {
+        if (0.0..=1.0).contains(t) {
+            let x = row.x + t * row.width;
+            tick(
+                pass,
+                ui,
+                row,
+                x,
+                words,
+                pass.theme.text_dim.into(),
+                &mut taken,
+            );
+        }
+    }
+}
+
+/// One tick of a row along an axis, at `x` in `row`, and `words` under it
+/// in `ink`, held inside the row and left off where they would touch any of
+/// `taken`, the extents of the words written before them, which they join.
+fn tick(
+    pass: &Pass,
+    ui: &egui::Ui,
+    row: Rect,
+    x: f32,
+    words: &str,
+    ink: Color32,
+    taken: &mut Vec<(f32, f32)>,
+) {
+    let grid = pass.grid;
+    let painter = ui.painter();
+    let hair = grid.line_width(1.0);
+    painter.rect_filled(
+        egui::Rect::from(grid.rect(Rect::new(x - hair / 2.0, row.y, hair, EV_TICK))),
+        0.0,
+        pass.theme.text_dim,
+    );
+    let width = width_of(ui, words, CLIP_TEXT);
+    let left = (x - width / 2.0).clamp(row.x, row.right() - width);
+    let span = (left - EV_LABEL_GAP / 2.0, left + width + EV_LABEL_GAP / 2.0);
+    if taken.iter().any(|(a, b)| span.0 < *b && *a < span.1) {
+        return;
+    }
+    taken.push(span);
+    painter.text(
+        pos2(grid.snap(left), row.y + EV_TICK),
+        Align2::LEFT_TOP,
+        words,
+        FontId::proportional(CLIP_TEXT),
+        ink,
+    );
 }
 
 /// The rule that marks white on the plot `bars`, where white is not the top

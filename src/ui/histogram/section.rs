@@ -98,11 +98,8 @@ impl Section {
             // A shorter plot and the row of stops under it: how much of the
             // lift is applied is the header's to say.
             Section::GainMap => head + SHORT_PLOT_HEIGHT + PLOT_INSET + EV_ROW,
-            // The line of the pixel's values, a shorter plot, and nothing
-            // under it.
-            Section::Image => {
-                head + stored::VALUES_HEIGHT + HEAD_GAP + SHORT_PLOT_HEIGHT + PLOT_INSET
-            }
+            // A shorter plot and the row of values under it.
+            Section::Image => head + SHORT_PLOT_HEIGHT + PLOT_INSET + EV_ROW,
         }
     }
 
@@ -116,13 +113,7 @@ impl Section {
         match self {
             Section::Output => Rect::new(x, y, width, PLOT_HEIGHT),
             Section::Display => display::plot_area(rect),
-            Section::GainMap => Rect::new(x, y, width, SHORT_PLOT_HEIGHT),
-            Section::Image => Rect::new(
-                x,
-                y + stored::VALUES_HEIGHT + HEAD_GAP,
-                width,
-                SHORT_PLOT_HEIGHT,
-            ),
+            Section::GainMap | Section::Image => Rect::new(x, y, width, SHORT_PLOT_HEIGHT),
         }
     }
 }
