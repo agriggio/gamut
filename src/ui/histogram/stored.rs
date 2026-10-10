@@ -10,7 +10,7 @@
 
 use egui::{Align2, FontId};
 
-use super::plot::{bars, corners};
+use super::plot::{Counts, bars, corners};
 use super::*;
 use crate::image::Samples;
 use crate::ui::pixel::component;
@@ -103,6 +103,7 @@ pub(super) fn show(
     ui: &mut egui::Ui,
     current: &Current,
     rect: Rect,
+    counts: Counts,
     mark: Option<&Mark>,
 ) {
     let plot_rect = Section::Image.plot(rect, current.image.is_gray());
@@ -119,7 +120,7 @@ pub(super) fn show(
             .collect(),
         _ => accent_rule(pass, mark),
     };
-    bars(pass, ui, plotted, plot_rect, false, &rules);
+    bars(pass, ui, plotted, counts, plot_rect, false, &rules);
     // The ends in the same units as the values: counts, or the number.
     let ends = axis_ends(current, plotted)
         .map(|_| [plotted.min, plotted.max].map(|end| stored_words(current, end)));

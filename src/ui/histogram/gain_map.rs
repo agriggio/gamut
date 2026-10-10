@@ -157,7 +157,15 @@ pub(super) fn show(
         );
         return;
     };
-    bars(pass, ui, lift, plot_rect, false, &accent_rule(pass, mark));
+    bars(
+        pass,
+        ui,
+        lift,
+        plots.lift_counts,
+        plot_rect,
+        false,
+        &accent_rule(pass, mark),
+    );
     let dim = Color32::from(pass.theme.text_dim);
     let (low, high) = (lift.min, lift.max);
     corners(

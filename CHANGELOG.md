@@ -40,6 +40,18 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
   screen — and for the gain map in stops of lift. On an HDR screen, the
   part of the Output band past white, which the panel can only draw at
   white, is overlaid with right-pointing chevrons to show it is lifted.
+- The histogram's plots of the picture share one linear scale, so a bar of
+  the same height is the same share of the picture in every section. A
+  spike far fuller than the rest runs off the top of the plot, capped in the
+  accent color, rather than flattening the rest, and with the pointer on it
+  the section's heading gives the share it holds.
+
+### Removed
+
+- The histogram's logarithmic counts: the button, `y` and the `log_counts`
+  setting. The shared scale cuts off a dominating spike instead. A
+  `log_counts` line, or a `keys.interface.log-counts` line, in the
+  configuration file is passed over.
 
 ## 0.11.0 - 2026-10-10
 

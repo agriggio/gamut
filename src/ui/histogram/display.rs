@@ -6,7 +6,7 @@
 
 use egui::{Align2, FontId, Stroke, pos2};
 
-use super::plot::{Past, Scale, band, bars, corners};
+use super::plot::{Counts, Past, Scale, band, bars, corners};
 use super::slider::slider;
 use super::track::track;
 use super::*;
@@ -290,12 +290,21 @@ pub(super) fn show(
     ui: &mut egui::Ui,
     current: &Current,
     rect: Rect,
+    counts: Counts,
     mark: Option<&Mark>,
 ) {
     let gray = current.image.is_gray();
     let plot_rect = plot_area(rect, gray);
     let plotted = &current.stats.plot;
-    bars(pass, ui, plotted, plot_rect, true, &accent_rule(pass, mark));
+    bars(
+        pass,
+        ui,
+        plotted,
+        counts,
+        plot_rect,
+        true,
+        &accent_rule(pass, mark),
+    );
     let dim = Color32::from(pass.theme.text_dim);
     if let Some([low, high]) = axis_ends(current, plotted) {
         corners(ui, plot_rect, Some((low, dim)), Some((high, dim)));

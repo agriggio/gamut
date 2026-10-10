@@ -588,7 +588,6 @@ pub fn words(tip: Tip) -> Option<String> {
         // The histogram panel's, in as few words as will carry them.
         Tip::Control(Control::Luma) => "Luminance plane",
         Tip::Control(Control::Planes) => "Color planes",
-        Tip::Control(Control::Log) => "Logarithmic counts",
         Tip::Control(Control::Marks) => "Mark the clipped pixels",
         Tip::Control(Control::Reset) => "Reset the display",
         Tip::Control(Control::ShowGainMap) => "Show the gain map in the picture's place",

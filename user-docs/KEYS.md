@@ -725,7 +725,6 @@ where all of it is set.
 | Key | What it does | Name |
 | --- | --- | --- |
 | `h` | Show or hide the histogram | `interface.histogram` |
-| `y` | Count the histogram's bars up its axis, or the logarithm of them | `interface.log-counts` |
 | `i` | Show the file information on its *Curated* tab, or hide it | `interface.info` |
 | `I` | Show the file information on its *Raw Data* tab, or hide it | `interface.raw-data` |
 | `m` | Show or hide the minimap | `interface.minimap` |
@@ -764,16 +763,14 @@ bring them back: `` ` `` and `Esc`. It appears once — after that you know — 
 the message is still up puts them on screen rather than only taking the message
 off.
 
-The histogram plots each bar as its share of the fullest one, which is the
-plot a photograph wants. It is the wrong plot for measurement data, where one
-value often covers most of the image — a masked sea, the black surround of a
-scan — and that one bar flattens everything the rest of the range is doing
-into the axis. `y`, or the button for it at the top of the panel, counts the
-logarithm instead: the tall bar stays at the top and the short ones rise to
-where they can be read beside it. Heights can no longer be compared with each
-other once it is on, which is the point of it being a switch. It applies to
-whichever image is on screen and stays as you set it, and setting it while the
-histogram is closed leaves it that way for when you open it.
+The histogram's bars are linear, and all of the picture's plots share one
+scale, so a bar of the same height holds the same share of the picture in
+every section: where the curve crowds the highlights together, their bars
+stand taller on Output than on Display. A spike that holds far more than
+the rest — a flat sky, the black surround of a scan — runs off the top
+rather than flattening everything else. It is capped in the accent color,
+and with the pointer on it the section's heading says what share of the
+picture it holds.
 
 Under the plot are the band and the rows of settings the plot is drawing,
 described under [The display](#the-display) above: the exposure, the

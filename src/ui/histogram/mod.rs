@@ -241,7 +241,7 @@ pub fn panel(side: Rect) -> Rect {
 
 /// The buttons at the head of the panel, each with where it goes in the row
 /// `row`: what the plots draw — the luminance and the color planes, and the
-/// count axis — then, set apart, the marks on the picture, and at the far
+/// then, set apart, the marks on the picture, and at the far
 /// end the reset, which does something rather than being something.
 ///
 /// They act on every plot down the column, or on the picture, and on no
@@ -255,9 +255,9 @@ pub fn panel(side: Rect) -> Rect {
 fn toolbar(row: Rect, gray: bool) -> Vec<(Control, Rect)> {
     let square = |x: f32| Rect::new(x, row.y, TOOLBAR_HEIGHT, TOOLBAR_HEIGHT);
     let planes: &[Control] = if gray {
-        &[Control::Luma, Control::Log]
+        &[Control::Luma]
     } else {
-        &[Control::Luma, Control::Planes, Control::Log]
+        &[Control::Luma, Control::Planes]
     };
     let mut x = row.x;
     let mut buttons = Vec::new();
@@ -425,6 +425,10 @@ impl Traced {
 struct Plots<'a> {
     pub output: &'a output::Binned,
     pub lift: Option<&'a Plot>,
+    /// The count axis the picture's plots stand on, and the one the gain
+    /// map's does.
+    pub counts: plot::Counts,
+    pub lift_counts: plot::Counts,
 }
 
 /// What each section marks: the pixel under the pointer traced down the
@@ -448,17 +452,35 @@ fn marked(
     pointer: Option<[u32; 2]>,
     headroom: crate::image::display::Headroom,
     plots: &Plots,
+    shown: impl Fn(Plane) -> bool,
 ) -> Traced {
     let mut traced = Traced::default();
     for &(section, rect) in layout {
         let bars = section.plot(rect, current.image.is_gray());
         if let Some(bin) = hovered_bin(bars, cursor) {
-            *traced.slot(section) = Some(match section {
-                Section::Output => output::bin_mark(plots.output, bin),
-                Section::Display => display::bin_mark(current, headroom, bin),
-                Section::GainMap => gain_map::bin_mark(plots.lift, bin),
-                Section::Image => stored::bin_mark(current, bin),
-            });
+            let (mut mark, plotted) = match section {
+                Section::Output => (
+                    output::bin_mark(plots.output, bin),
+                    Some(&plots.output.plot),
+                ),
+                Section::Display => (
+                    display::bin_mark(current, headroom, bin),
+                    Some(&current.stats.plot),
+                ),
+                Section::GainMap => (gain_map::bin_mark(plots.lift, bin), plots.lift),
+                Section::Image => (stored::bin_mark(current, bin), Some(&current.stored.plot)),
+            };
+            // A bar cut off at the top says how much it holds, which its
+            // height no longer can.
+            let counts = match section {
+                Section::GainMap => plots.lift_counts,
+                _ => plots.counts,
+            };
+            let cut = plotted.and_then(|plotted| counts.cut_at(plotted, bin, &shown));
+            if let Some(words) = cut.and_then(share_words) {
+                mark.words = format!("{words} · {}", mark.words);
+            }
+            *traced.slot(section) = Some(mark);
             return traced;
         }
     }
@@ -619,7 +641,12 @@ fn column(pass: &mut Pass, ui: &mut egui::Ui, current: &Current) {
     let plots = Plots {
         output: &binned,
         lift: lift.as_deref(),
+        counts: picture_counts(current, &binned),
+        lift_counts: lift
+            .as_deref()
+            .map_or(plot::Counts::of(&current.stored.plot), plot::Counts::of),
     };
+    let panels = pass.panels;
     let traced = marked(
         current,
         &layout,
@@ -627,6 +654,7 @@ fn column(pass: &mut Pass, ui: &mut egui::Ui, current: &Current) {
         pass.input.pointer,
         pass.input.headroom,
         &plots,
+        |plane| plane.shown(panels),
     );
     for (place, (section, rect)) in layout.into_iter().enumerate() {
         // Every section after the first is parted from the one above by a
@@ -643,12 +671,22 @@ fn column(pass: &mut Pass, ui: &mut egui::Ui, current: &Current) {
         }
         let mark = traced.of(section);
         match section {
-            Section::Output => output::show(pass, ui, current, rect, &binned, mark),
-            Section::Display => display::show(pass, ui, current, rect, mark),
+            Section::Output => output::show(pass, ui, current, rect, &plots, mark),
+            Section::Display => display::show(pass, ui, current, rect, plots.counts, mark),
             Section::GainMap => gain_map::show(pass, ui, current, rect, &plots, mark),
-            Section::Image => stored::show(pass, ui, current, rect, mark),
+            Section::Image => stored::show(pass, ui, current, rect, plots.counts, mark),
         }
     }
+}
+
+/// The count axis the picture's plots share down the column: the one that
+/// cuts off no more than a spike or two on any of them — on the Output's,
+/// which an HDR surface's room squeezes into less of its width, as on the
+/// file's own. Worked out again each pass, from the plots on screen.
+fn picture_counts(current: &Current, binned: &output::Binned) -> plot::Counts {
+    plot::Counts::of(&current.stored.plot)
+        .wider(plot::Counts::of(&current.stats.plot))
+        .wider(plot::Counts::of(&binned.plot))
 }
 
 /// A button on the panel at `rect`: its ground and ink by whether it is
@@ -729,8 +767,6 @@ fn toolbar_buttons(pass: &mut Pass, ui: &mut egui::Ui, gray: bool, row: Rect) {
                     painter.circle_filled(pos2(at[0], at[1]), place.units(PLANE_DISC), plane);
                 }
             }
-            // The count axis as a curve, which is what the switch puts it on.
-            Control::Log => icon::paint(painter, icon::SPLINE, square, ink, background),
             // The warning sign, for what the display has thrown away.
             Control::Marks => icon::paint(painter, icon::TRIANGLE_ALERT, square, ink, background),
             // Back to the start.

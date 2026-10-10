@@ -381,7 +381,6 @@ fn image(b: &mut Builder) -> Vec<Node> {
     let plot = vec![
         b.button("Luminance", Control::Luma),
         b.button("Color Planes", Control::Planes),
-        b.button("Log Counts", Control::Log),
     ];
     vec![
         b.action("Increase Exposure", Action::Exposure(EV_STEP)),
@@ -698,7 +697,6 @@ impl App {
                 | Control::Loupe
                 | Control::Luma
                 | Control::Planes
-                | Control::Log
                 | Control::Marks => panels.lit(control),
                 Control::Depth => current
                     .is_some_and(|current| current.showing == Showing::Auxiliary(Auxiliary::Depth)),

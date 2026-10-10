@@ -208,9 +208,10 @@ pub(super) fn show(
     ui: &mut egui::Ui,
     current: &Current,
     rect: Rect,
-    binned: &Binned,
+    plots: &Plots,
     mark: Option<&Mark>,
 ) {
+    let binned = plots.output;
     let theme = pass.theme;
     let gray = current.image.is_gray();
     let plot_rect = Section::Output.plot(rect, gray);
@@ -218,6 +219,7 @@ pub(super) fn show(
         pass,
         ui,
         &binned.plot,
+        plots.counts,
         plot_rect,
         false,
         &accent_rule(pass, mark),

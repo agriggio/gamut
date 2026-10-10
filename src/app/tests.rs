@@ -158,7 +158,6 @@ fn options() -> Options {
             show_filmstrip: false,
             show_histogram: false,
             show_info: false,
-            log_counts: false,
             browse_folder: true,
             open_map_link: crate::settings::OPEN_MAP_LINK.to_string(),
             exiftool: "exiftool".to_string(),

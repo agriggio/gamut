@@ -286,12 +286,11 @@ fn the_row_of_buttons_heads_the_panel() {
         let buttons = toolbar(row, gray);
         let controls: Vec<Control> = buttons.iter().map(|(control, _)| *control).collect();
         let expected: &[Control] = if gray {
-            &[Control::Luma, Control::Log, Control::Marks, Control::Reset]
+            &[Control::Luma, Control::Marks, Control::Reset]
         } else {
             &[
                 Control::Luma,
                 Control::Planes,
-                Control::Log,
                 Control::Marks,
                 Control::Reset,
             ]
@@ -441,6 +440,8 @@ fn a_pixel_is_traced_down_every_section() {
     let plots = Plots {
         output: &binned,
         lift: lift.as_ref(),
+        counts: picture_counts(&current, &binned),
+        lift_counts: plot::Counts::of(lift.as_ref().unwrap()),
     };
 
     let traced = marked(
@@ -450,6 +451,7 @@ fn a_pixel_is_traced_down_every_section() {
         Some([60, 0]),
         Headroom::None,
         &plots,
+        |_| true,
     );
     for section in [Section::Output, Section::Display, Section::GainMap] {
         let mark = traced
@@ -483,6 +485,7 @@ fn a_pixel_is_traced_down_every_section() {
         Some([60, 0]),
         Headroom::None,
         &plots,
+        |_| true,
     );
     assert!(
         traced
@@ -502,6 +505,7 @@ fn a_pixel_is_traced_down_every_section() {
         Some([999, 0]),
         Headroom::None,
         &plots,
+        |_| true,
     );
     assert!(
         Section::ALL
@@ -573,4 +577,57 @@ fn the_output_piles_what_the_screen_clips_at_white() {
     current.display.set_exposure(2.0);
     let unknown = output::binned_for(&current, Headroom::Above, f32::INFINITY);
     assert_eq!(unknown.room, 4.0);
+}
+
+/// A bar cut off at the top of its plot says what share of the picture it
+/// holds, ahead of its value, with the pointer on it; a bar under the top
+/// says only its value.
+#[test]
+fn a_bar_cut_off_says_its_share() {
+    // Every code once, and as many pixels again at one of them.
+    let data: Vec<u8> = (0..512u32)
+        .map(|x| if x < 256 { x as u8 } else { 200 })
+        .flat_map(|value| [value; 3])
+        .collect();
+    let current = shown(DecodedImage::new(
+        512,
+        1,
+        Samples::U8 {
+            channels: Channels::Rgb,
+            data,
+        },
+        ColorSpace::SRGB,
+        AlphaMode::Opaque,
+    ));
+    let layout = laid_out(&current, 600.0);
+    let binned = output::binned_for(&current, Headroom::None, 1.0);
+    let plots = Plots {
+        output: &binned,
+        lift: None,
+        counts: picture_counts(&current, &binned),
+        lift_counts: plot::Counts::of(&current.stored.plot),
+    };
+    let bars = Section::Image.plot(rect_of(&layout, Section::Image), false);
+    let words_at = |value: u8| {
+        let bin = current
+            .stored
+            .plot
+            .bin_at(f32::from(value) / 255.0)
+            .expect("on the axis");
+        let x = bars.x + (bin as f32 + 0.5) / BINS as f32 * bars.width;
+        marked(
+            &current,
+            &layout,
+            Some([x, bars.y + 1.0]),
+            None,
+            Headroom::None,
+            &plots,
+            |_| true,
+        )
+        .image
+        .expect("marked")
+        .words
+    };
+    assert_eq!(words_at(200), "50% · 200");
+    assert_eq!(words_at(100), "100");
 }

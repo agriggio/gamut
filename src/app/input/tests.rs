@@ -586,10 +586,6 @@ fn the_histogram_panels_buttons_are_named_briefly_and_by_their_keys() {
     assert_eq!(named(Control::Luma).as_deref(), Some("Luminance plane (j)"));
     assert_eq!(named(Control::Planes).as_deref(), Some("Color planes (k)"));
     assert_eq!(
-        named(Control::Log).as_deref(),
-        Some("Logarithmic counts (y)")
-    );
-    assert_eq!(
         named(Control::Marks).as_deref(),
         Some("Mark the clipped pixels (w)")
     );
@@ -640,7 +636,6 @@ fn the_histogram_panels_buttons_are_named_briefly_and_by_their_keys() {
     for widget in [
         Control::Luma,
         Control::Planes,
-        Control::Log,
         Control::Marks,
         Control::Reset,
         Control::Ramp(1),

@@ -93,12 +93,10 @@ controls! {
     /// there is no state for it to be showing and no press of it that puts
     /// the interface back — see [`crate::app::input::Action::Dismiss`].
     Maximize,
-    /// The two plane toggles, the switch between a linear and a logarithmic
-    /// count axis, and the button that puts the rendering back, down the left
-    /// of the histogram panel.
+    /// The two plane toggles, and the button that puts the rendering back,
+    /// at the head of the histogram panel.
     Luma,
     Planes,
-    Log,
     Reset,
     /// The toggle beside the band at the foot of that strip, which paints
     /// the clipped pixels on the picture in the two colors the plot's
@@ -289,7 +287,6 @@ impl Control {
             Control::Maximize => "Maximize".to_string(),
             Control::Luma => "Luminance plane".to_string(),
             Control::Planes => "Color planes".to_string(),
-            Control::Log => "Logarithmic counts".to_string(),
             Control::Marks => "Clipped pixels".to_string(),
             Control::Reset => "Reset".to_string(),
             Control::Ramp(index) => format!("False color {index}"),

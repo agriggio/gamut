@@ -127,10 +127,6 @@ pub enum Action {
     /// still has its response curve and its ramp to read.
     ToggleLuma,
     TogglePlanes,
-    /// Whether that panel's plot counts up its axis or the logarithm of its
-    /// counts. About the plot rather than about the image, which is why it
-    /// is not one of the things [`Action::ResetDisplay`] puts back.
-    ToggleLogCounts,
     /// The information panel on one of its tabs, or away where it is up on
     /// that tab already: `i` the curated facts, `I` every tag exiftool
     /// reads. The panel's button is the plain toggle, which keeps the tab.
@@ -403,7 +399,6 @@ pub(super) fn action_of(tip: Tip) -> Option<Action> {
         // cycles through.
         Tip::Control(Control::Luma) => ToggleLuma,
         Tip::Control(Control::Planes) => TogglePlanes,
-        Tip::Control(Control::Log) => ToggleLogCounts,
         Tip::Control(Control::Marks) => MarkClipped,
         Tip::Control(Control::Reset) => ResetDisplay,
         // Only the swatches that are actually on offer: an index past the
@@ -1000,12 +995,6 @@ pub static ROWS: &[Row] = &[
         when: None,
         help: "Toggle the color planes on the histogram",
         keys: one!("interface.planes", TogglePlanes, [key('k')]),
-    },
-    Row {
-        section: Section::Interface,
-        when: None,
-        help: "Toggle a logarithmic count axis on the histogram",
-        keys: one!("interface.log-counts", ToggleLogCounts, [key('y')]),
     },
     // The same key as the two pixel copies, with nothing held: what it
     // switches is what they take away with them.
@@ -2189,7 +2178,6 @@ impl App {
             ToggleHistogram => return self.press(Control::Histogram),
             ToggleLuma => return self.press(Control::Luma),
             TogglePlanes => return self.press(Control::Planes),
-            ToggleLogCounts => return self.press(Control::Log),
             ToggleInfo => return self.show_info_on(ui::tags::Tab::Facts),
             ToggleRawData => return self.show_info_on(ui::tags::Tab::Tags),
             ToggleMinimap => return self.press(Control::Minimap),
@@ -3131,7 +3119,6 @@ impl App {
             | Control::Loupe
             | Control::Luma
             | Control::Planes
-            | Control::Log
             | Control::Marks => {
                 let flag = self
                     .panels

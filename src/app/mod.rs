@@ -767,7 +767,6 @@ impl App {
                 },
                 show_luma: true,
                 show_planes: true,
-                log_counts: config.log_counts,
                 mark_clipped: false,
                 show_minimap: config.show_minimap,
                 show_grid: false,

@@ -531,14 +531,6 @@ pub(super) const ROTATE_CW_SQUARE: &[Mark] = &[
     Mark::Line([18.0, 5.0], [16.0, 5.0]),
 ];
 
-/// Lucide's `spline`: a curve between two of its own control points, for the
-/// switch that bends the count axis.
-pub(super) const SPLINE: &[Mark] = &[
-    Mark::arc([17.0, 17.0], 12.0, 180.0, 90.0),
-    Mark::circle([5.0, 19.0], 2.0),
-    Mark::circle([19.0, 5.0], 2.0),
-];
-
 /// Lucide's `triangle-alert`: the sign that says something is wrong here,
 /// for the toggle that paints the pixels the display has thrown away. What
 /// every editor's clipping warning wears, so it needs no learning.
@@ -1275,7 +1267,7 @@ mod tests {
 
     /// Every icon in the table, so that a new one is held to the same
     /// promises as the rest.
-    const ICONS: [&[Mark]; 46] = [
+    const ICONS: [&[Mark]; 45] = [
         CHART_AREA,
         INFO,
         CIRCLE_QUESTION_MARK,
@@ -1299,7 +1291,6 @@ mod tests {
         CHEVRONS_UP_DOWN,
         CHEVRONS_DOWN_UP,
         ROTATE_CCW,
-        SPLINE,
         TRIANGLE_ALERT,
         GRID_3X3,
         MAXIMIZE_2,

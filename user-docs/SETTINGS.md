@@ -34,7 +34,6 @@ settings are:
 | `show_filmstrip` | `true` | The file list, while there is more than one file |
 | `show_histogram` | `false` | The histogram, in the panel down the right; it wins over `show_info` when both are on |
 | `show_info` | `false` | The file information, in the panel down the right |
-| `log_counts` | `false` | The histogram's bars as tall as the logarithm of their counts |
 | `browse_folder` | `true` | A single file opened by itself steps on through the other images in its folder |
 | `exiftool` | `exiftool` | The program the info panel's *Raw Data* tab reads every tag with: a name looked for on your `PATH` and where packages put it, or a path to it |
 | `open_map_link` | `https://geojson.io/#data=data:application/json,%7B%22type%22%3A%22Feature%22%2C%22properties%22%3A%7B%7D%2C%22geometry%22%3A%7B%22type%22%3A%22Point%22%2C%22coordinates%22%3A%5B{lng}%2C{lat}%5D%7D%7D` | The web page the map button in the info panel's *Location* section opens. `{lat}` and `{lng}` become where the picture was taken, in degrees, negative south and west; the link must have both |

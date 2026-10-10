@@ -513,11 +513,6 @@ pub struct Panels {
     /// refuses to switch off is a toggle that owes an explanation.
     pub show_luma: bool,
     pub show_planes: bool,
-    /// Whether the plot's bars are as tall as the logarithm of their counts
-    /// rather than as tall as the counts themselves. Off by default, which is
-    /// what a photograph wants; on, a measurement's one dominating bin — a
-    /// masked sea, the surround of a scan — stops flattening everything else.
-    pub log_counts: bool,
     /// Whether the pixels the window has taken to black or to white are
     /// painted in the warning colors. A way of looking at the picture, like
     /// the grid, rather than a setting of it: it stays on from one file to
@@ -569,7 +564,6 @@ impl Panels {
             Control::Loupe => &mut self.show_loupe,
             Control::Luma => &mut self.show_luma,
             Control::Planes => &mut self.show_planes,
-            Control::Log => &mut self.log_counts,
             Control::Marks => &mut self.mark_clipped,
             _ => return None,
         })

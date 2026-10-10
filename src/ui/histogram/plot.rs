@@ -140,30 +140,115 @@ pub(super) fn tallest(counts: &[u32; BINS], bins: Range<usize>) -> u32 {
     counts[bins].iter().copied().max().unwrap_or(0)
 }
 
-/// How tall a bin's bar stands, from 0 on the axis to 1 at the top of the
-/// plot, against the fullest bin drawn beside it.
+/// The share of the bins a column's scale lets past its top: of the bins
+/// holding anything inside the ends of the reference plot, the fullest
+/// fiftieth stand cut off, so that a spike or two — a flat sky, a masked
+/// sea, the surround of a scan — cannot flatten the rest into the axis.
+const CUT: f32 = 0.02;
+
+/// How thick the cap along the top of a bar cut off there is.
+const CUT_CAP: f32 = 2.0;
+
+/// The count axis a plot stands on: a bar's height is the share of its
+/// plane's pixels in its bin, and `top` is the share a bar reaching the top
+/// of a plot holds. One for every plot of the picture down the column —
+/// the Output, the Display and the Image — so that a bar of the same height
+/// is the same share of the picture in each, and the curve piling the
+/// highlights up or spreading the shadows out reads as bars growing or
+/// shrinking between the Display and the Output plots. The gain map's plot,
+/// of another image in other units, stands on one of its own.
 ///
-/// Linear is what a photograph wants and what a photo editor draws: the
-/// height of a bin is its share of the fullest one, and the shape read off
-/// the plot is the distribution itself. It is the wrong plot for measurement
-/// data, where one bin often holds most of the image — a masked sea, the
-/// surround of a scan — and flattens everything the rest of the range is
-/// doing into the axis. A value the file declares as nodata is already
-/// thrown out by [`crate::image::Stats::scan`], so the bin that does this is
-/// a background the file says nothing about. Logarithmic is that same plot
-/// with the tall bin cut down to where the short ones can be seen beside it.
-///
-/// `ln(1 + n)` rather than `ln(n)`: an empty bin stays flat on the axis,
-/// where a floored logarithm would lift it off and draw a count that is not
-/// there, and the fullest bin still reaches the top either way. What is lost
-/// is that two bars can no longer be compared by their heights — which is the
-/// switch's whole point, and why it is a switch and not the plot.
-pub(super) fn bar_fraction(count: u32, peak: u32, log: bool) -> f32 {
-    let (count, peak) = (count as f32, peak.max(1) as f32);
-    if log {
-        count.ln_1p() / peak.ln_1p()
+/// Linear, as a photo editor's is: heights compare as the counts do. A bar
+/// fuller than the top runs to it and is capped there, and its share is
+/// what the header says with the pointer on it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Counts {
+    top: f32,
+}
+
+impl Counts {
+    /// The scale `reference` sets: the fullest [`CUT`] of its bins holding
+    /// anything, across every plane and leaving out the two end bins — what
+    /// the window throws away piles up there, and the Output plot's corners
+    /// say how much — stand past the top. A plot with nothing inside its
+    /// ends — a picture of black and white alone — is scaled to its fullest
+    /// bin, and an empty one to the whole of the picture.
+    pub(super) fn of(reference: &Plot) -> Self {
+        let planes = || std::iter::once(&reference.luma).chain(reference.color.iter().flatten());
+        let shares = |inside: bool| -> Vec<f32> {
+            planes()
+                .flat_map(|counts| {
+                    let total = total(counts);
+                    let bins = if inside { 1..BINS - 1 } else { 0..BINS };
+                    counts[bins]
+                        .iter()
+                        .filter(move |&&count| count > 0)
+                        .map(move |&count| share_of(count, total))
+                })
+                .collect()
+        };
+        let mut held = shares(true);
+        if held.is_empty() {
+            held = shares(false);
+        }
+        held.sort_by(|a, b| b.total_cmp(a));
+        let top = held
+            .get((held.len() as f32 * CUT) as usize)
+            .copied()
+            .unwrap_or(1.0);
+        Self { top }
+    }
+
+    /// The scale of the two that cuts fewer bars off: the one plots on
+    /// different axes share, set by whichever of them piles its pixels up
+    /// the most.
+    pub(super) fn wider(self, other: Self) -> Self {
+        Self {
+            top: self.top.max(other.top),
+        }
+    }
+
+    /// How tall a bin holding `count` of a plane's `total` stands, from 0
+    /// on the axis to 1 at the top of the plot, and past 1 where it is cut
+    /// off there.
+    pub(super) fn up(self, count: u32, total: u64) -> f32 {
+        share_of(count, total) / self.top
+    }
+
+    /// The fullest share of a plane `planes` holds at `bin` on `plot`, where
+    /// it stands past the top: what the header says of a bar cut off.
+    pub(super) fn cut_at(
+        self,
+        plot: &Plot,
+        bin: usize,
+        planes: impl Fn(Plane) -> bool,
+    ) -> Option<f32> {
+        let luma = planes(Plane::Luma).then_some(&plot.luma);
+        let color = plot
+            .color
+            .iter()
+            .flat_map(|color| Plane::COLOR.into_iter().zip(color))
+            .filter(|(plane, _)| planes(*plane))
+            .map(|(_, counts)| counts);
+        luma.into_iter()
+            .chain(color)
+            .map(|counts| share_of(counts[bin], total(counts)))
+            .filter(|&held| held > self.top)
+            .max_by(f32::total_cmp)
+    }
+}
+
+/// Every count in a plane: the pixels it was counted from.
+pub(super) fn total(counts: &[u32; BINS]) -> u64 {
+    counts.iter().map(|&count| u64::from(count)).sum()
+}
+
+/// `count` as a share of `total`, and none of nothing.
+fn share_of(count: u32, total: u64) -> f32 {
+    if total == 0 {
+        0.0
     } else {
-        count / peak
+        (f64::from(count) / total as f64) as f32
     }
 }
 
@@ -172,15 +257,18 @@ pub(super) fn bar_fraction(count: u32, peak: u32, log: bool) -> f32 {
 /// curve over it is read against rather than a reading of its own.
 const BACKDROP: f32 = 0.55;
 
-/// The bins of `plotted` across `bars`, standing on the plot's ground, with
-/// `rules` over them, each a bin and its ink: the luminance plane under the color ones,
-/// each where the panel's toggles have it, at one column to a device pixel.
+/// The bins of `plotted` across `bars` on the column's scale `counts`,
+/// standing on the plot's ground, with `rules` over them, each a bin and its
+/// ink: the luminance plane under the color ones, each where the panel's
+/// toggles have it, at one column to a device pixel, and a cap in the accent
+/// along the top of a column cut off there.
 /// `backdrop` fades them toward the ground, for a plot whose bins are what
 /// something drawn over them is read against.
 pub(super) fn bars(
     pass: &Pass,
     ui: &egui::Ui,
     plotted: &Plot,
+    counts: Counts,
     bars: Rect,
     backdrop: bool,
     rules: &[(usize, Color32)],
@@ -202,17 +290,9 @@ pub(super) fn bars(
         _ => &[],
     };
 
-    // One peak across every plane on screen, so their heights stay
-    // comparable — and only across those, so that a plane left on its own
-    // fills the plot rather than keeping the room a hidden one wanted.
-    let peak = color
-        .iter()
-        .chain(luma)
-        .flatten()
-        .copied()
-        .max()
-        .unwrap_or(1);
-    let height_of = |count: u32| bar_fraction(count, peak, panels.log_counts) * bars.height;
+    // Each plane against its own pixels, on the column's one scale.
+    let luma_total = luma.map(total);
+    let color_totals: Vec<u64> = color.iter().map(total).collect();
 
     // Dimmed only when it is a backdrop; with the color planes off — or on
     // a gray image, which has none — it is the plot.
@@ -241,13 +321,17 @@ pub(super) fn bars(
         let (left, right) = (column.left, column.right);
         let bins = bins_under(column.index, column.count);
         let mut heights: Vec<(f32, usize)> = Vec::with_capacity(4);
-        if let Some(counts) = luma {
-            heights.push((height_of(tallest(counts, bins.clone())), 3));
+        if let (Some(plane), Some(total)) = (luma, luma_total) {
+            heights.push((counts.up(tallest(plane, bins.clone()), total), 3));
         }
-        for (plane, counts) in color.iter().enumerate() {
-            heights.push((height_of(tallest(counts, bins.clone())), plane));
+        for (index, (plane, &total)) in color.iter().zip(&color_totals).enumerate() {
+            heights.push((counts.up(tallest(plane, bins.clone()), total), index));
         }
         heights.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let cut = heights.last().is_some_and(|&(height, _)| height > 1.0);
+        let heights = heights
+            .into_iter()
+            .map(|(height, plane)| (height.min(1.0) * bars.height, plane));
         let mut cover = Cover {
             luma: luma.is_some(),
             planes: [!color.is_empty(); 3],
@@ -267,6 +351,16 @@ pub(super) fn bars(
                 3 => cover.luma = false,
                 plane => cover.planes[plane] = false,
             }
+        }
+        if cut {
+            painter.rect_filled(
+                egui::Rect::from_min_max(
+                    pos2(left, snap(bars.y)),
+                    pos2(right, snap(bars.y) + grid.line_width(CUT_CAP)),
+                ),
+                0.0,
+                pass.theme.accent,
+            );
         }
     }
 
@@ -551,46 +645,69 @@ mod tests {
     use super::*;
     use crate::ui::icon::Grid;
 
-    /// Either way of scaling the plot draws an empty bin flat on the axis and
-    /// the fullest one at the top of it: what changes is only what the bins
-    /// between them do with the room.
-    #[test]
-    fn both_count_axes_run_from_the_axis_to_the_top_of_the_plot() {
-        for log in [false, true] {
-            assert_eq!(bar_fraction(0, 1000, log), 0.0, "an empty bin is flat");
-            assert_eq!(bar_fraction(1000, 1000, log), 1.0, "the peak fills it");
-            // A plot of nothing at all, which a blank image gives: no bar is
-            // drawn off the top of it.
-            assert_eq!(bar_fraction(0, 0, log), 0.0);
+    /// A plot of luminance alone, `counts` across its bins.
+    fn plot_of(counts: [u32; BINS]) -> Plot {
+        Plot {
+            min: 0.0,
+            max: 1.0,
+            luma: counts,
+            color: None,
         }
     }
 
-    /// And the logarithm lifts the short bars towards the tall one, which is
-    /// the whole reason to reach for it: a bin holding a thousandth of what
-    /// the fullest one holds is a hair off the axis linearly, and half the
-    /// height of the plot once the axis is logarithmic.
+    /// A spike cannot set the scale: a picture spread evenly but for one
+    /// bin holding most of it stands on a scale the even bins nearly fill,
+    /// and the spike runs past the top. The pile at either end, which the
+    /// corners say, is left out of the scale too.
     #[test]
-    fn the_logarithm_lifts_the_bins_a_dominating_one_flattens() {
-        let (linear, log) = (
-            bar_fraction(1_000, 1_000_000, false),
-            bar_fraction(1_000, 1_000_000, true),
-        );
-        assert!(linear < 0.01, "{linear}");
-        assert!((0.4..0.6).contains(&log), "{log}");
+    fn a_spike_is_cut_off_rather_than_flattening_the_rest() {
+        let mut counts = [100; BINS];
+        counts[BINS / 2] = 1_000_000;
+        counts[BINS - 1] = 5_000_000;
+        let plot = plot_of(counts);
+        let scale = Counts::of(&plot);
+        let total = total(&plot.luma);
+        let even = scale.up(100, total);
+        assert!((0.9..=1.0).contains(&even), "{even}");
+        assert!(scale.up(1_000_000, total) > 1.0);
+        assert!(scale.up(5_000_000, total) > 1.0);
+        assert_eq!(scale.up(0, total), 0.0, "an empty bin is flat");
 
-        // Monotone either way: a fuller bin is never drawn shorter than an
-        // emptier one, which is what keeps the shape on the plot readable as
-        // the distribution however it is scaled.
-        for log in [false, true] {
-            let heights: Vec<f32> = [0, 1, 2, 10, 500, 999, 1000]
-                .into_iter()
-                .map(|count| bar_fraction(count, 1000, log))
-                .collect();
-            assert!(
-                heights.windows(2).all(|pair| pair[0] < pair[1]),
-                "log {log}: {heights:?}"
-            );
-        }
+        // And the header says how much a cut bar holds, where the plane is
+        // on screen, and nothing of a bar that is not cut.
+        let held = scale.cut_at(&plot, BINS / 2, |_| true).expect("cut");
+        assert!((held - 1_000_000.0 / total as f32).abs() < 1e-6, "{held}");
+        assert_eq!(scale.cut_at(&plot, 3, |_| true), None);
+        assert_eq!(scale.cut_at(&plot, BINS / 2, |_| false), None);
+    }
+
+    /// The scale is a share of the picture, not a count: the same share
+    /// stands as tall on a plot of a picture of any size, which is what lets
+    /// the gain map's plot, of a smaller picture, share the column's.
+    #[test]
+    fn the_same_share_stands_as_tall_whatever_the_count() {
+        let scale = Counts::of(&plot_of([100; BINS]));
+        let small = scale.up(1, BINS as u64);
+        let large = scale.up(1_000, 1_000 * BINS as u64);
+        assert!((small - large).abs() < 1e-6, "{small} {large}");
+        assert!((small - 1.0).abs() < 1e-6, "an even plot fills it: {small}");
+    }
+
+    /// A plot with nothing inside its ends is scaled to its fullest bin,
+    /// and one with nothing at all draws nothing rather than a bar off the
+    /// top.
+    #[test]
+    fn a_plot_with_nothing_inside_its_ends_still_has_a_scale() {
+        let mut counts = [0; BINS];
+        counts[0] = 300;
+        counts[BINS - 1] = 100;
+        let plot = plot_of(counts);
+        let scale = Counts::of(&plot);
+        assert!((scale.up(300, 400) - 1.0).abs() < 1e-6);
+        assert!(scale.up(100, 400) < 1.0);
+
+        let empty = Counts::of(&plot_of([0; BINS]));
+        assert_eq!(empty.up(0, 0), 0.0);
     }
 
     /// What the three color planes come to where they overlap, screened in
