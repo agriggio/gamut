@@ -60,7 +60,7 @@ const TOOLBAR_HEIGHT: f32 = CHIP_HEIGHT;
 /// before the toggle is alive — see [`super::PANELS_ROOM`]. The rest of the
 /// column scrolls under the row.
 pub const MIN_HEIGHT: f32 =
-    2.0 * PANEL_INSET + TOOLBAR_HEIGHT + HEADER_GAP + Section::Output.height();
+    2.0 * PANEL_INSET + TOOLBAR_HEIGHT + HEADER_GAP + Section::Output.height(false);
 
 /// Between one button of the row and the next.
 const TOOLBAR_GAP: f32 = 4.0;
@@ -84,11 +84,8 @@ const PLANE_DISC: f32 = 4.0;
 /// section's height is summed from is, so that each section starts on one.
 const LABEL_HEIGHT: f32 = CHIP_HEIGHT;
 /// How tall the plot's ground stands in the two sections whose plots are
-/// read closely — what goes out, and what the display makes of it. On an
-/// image with a row of false colors under the Display band, the row takes
-/// its room off that plot rather than off the section — see
-/// [`display::plot_area`] — so a color image's Display plot is this and the
-/// row besides.
+/// read closely — what goes out, and what the display makes of it — on
+/// every file.
 const PLOT_HEIGHT: f32 = 88.0;
 /// And in the two whose plots are context — the gain map's lift and the
 /// file as stored — which are read for their shape against the plots
@@ -456,7 +453,7 @@ fn marked(
 ) -> Traced {
     let mut traced = Traced::default();
     for &(section, rect) in layout {
-        let bars = section.plot(rect, current.image.is_gray());
+        let bars = section.plot(rect);
         if let Some(bin) = hovered_bin(bars, cursor) {
             let (mut mark, plotted) = match section {
                 Section::Output => (

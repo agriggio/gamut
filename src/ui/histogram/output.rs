@@ -214,7 +214,7 @@ pub(super) fn show(
     let binned = plots.output;
     let theme = pass.theme;
     let gray = current.image.is_gray();
-    let plot_rect = Section::Output.plot(rect, gray);
+    let plot_rect = Section::Output.plot(rect);
     bars(
         pass,
         ui,

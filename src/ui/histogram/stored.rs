@@ -106,7 +106,7 @@ pub(super) fn show(
     counts: Counts,
     mark: Option<&Mark>,
 ) {
-    let plot_rect = Section::Image.plot(rect, current.image.is_gray());
+    let plot_rect = Section::Image.plot(rect);
     let plotted = &current.stored.plot;
     // A rule for each channel whose plane is on screen, the luminance last
     // so that it stands over the colors where they meet; and the accent's

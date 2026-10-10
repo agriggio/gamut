@@ -166,7 +166,7 @@ fn every_section_is_laid_out_at_its_own_height_whatever_the_room() {
     assert_eq!(sections, Section::ALL, "in the order the data flows");
     assert_eq!(layout[0].1.y, column.y, "the first opens the column");
     for (section, rect) in &layout {
-        assert_eq!(rect.height, section.height(), "{section:?}");
+        assert_eq!(rect.height, section.height(false), "{section:?}");
         assert_eq!((rect.x, rect.width), (column.x, COLUMN_WIDTH));
     }
     for pair in layout.windows(2) {
@@ -187,7 +187,7 @@ fn every_section_is_laid_out_at_its_own_height_whatever_the_room() {
     );
     assert_eq!(
         MIN_HEIGHT,
-        2.0 * PANEL_INSET + TOOLBAR_HEIGHT + HEADER_GAP + Section::Output.height(),
+        2.0 * PANEL_INSET + TOOLBAR_HEIGHT + HEADER_GAP + Section::Output.height(false),
         "the row of buttons and the head section are the least the panel needs"
     );
 }
@@ -215,7 +215,7 @@ fn every_plot_keeps_one_pixel_to_the_bin() {
     for gray in [true, false] {
         let current = if gray { picture(true) } else { gain_mapped() };
         for (section, rect) in laid_out(&current, 600.0) {
-            let bars = section.plot(rect, gray);
+            let bars = section.plot(rect);
             assert_eq!(bars.width, BINS as f32, "{section:?}, gray {gray}");
             assert!(
                 bars.y - PLOT_INSET >= section::header_line(rect).bottom(),
@@ -231,7 +231,7 @@ fn every_plot_keeps_one_pixel_to_the_bin() {
 #[test]
 fn only_the_plot_itself_answers_the_pointer() {
     let layout = laid_out(&picture(false), 600.0);
-    let bars = Section::Output.plot(rect_of(&layout, Section::Output), false);
+    let bars = Section::Output.plot(rect_of(&layout, Section::Output));
 
     assert_eq!(hovered_bin(bars, None), None, "no pointer, no mark");
     assert_eq!(hovered_bin(bars, Some([bars.x - 1.0, bars.y + 1.0])), None);
@@ -253,7 +253,7 @@ fn only_the_plot_itself_answers_the_pointer() {
 #[test]
 fn the_pointer_marks_the_bar_it_is_over() {
     let layout = laid_out(&picture(false), 600.0);
-    let bars = Section::Image.plot(rect_of(&layout, Section::Image), false);
+    let bars = Section::Image.plot(rect_of(&layout, Section::Image));
     let at = |x: f32| hovered_bin(bars, Some([bars.x + x, bars.y + 1.0]));
 
     assert_eq!(at(0.0), Some(0), "the first pixel of the plot is bin zero");
@@ -329,22 +329,30 @@ fn a_sections_button_ends_its_header() {
     assert_eq!((button.y, button.height), (line.y, line.height));
     assert!(section::readout_end(line) < button.x);
     assert!(
-        line.bottom() <= Section::GainMap.plot(rect, false).y - PLOT_INSET,
+        line.bottom() <= Section::GainMap.plot(rect).y - PLOT_INSET,
         "the header is clear of the plot's ground"
     );
 }
 
-/// The false colors take their room off the Display section's plot rather
-/// than off the section, so that the sections below do not shift about
-/// from one file to the next; they sit under its band, and the rows under
-/// them start on the same line either way.
+/// The Display plot is as tall as the Output's on every file; the false
+/// colors a gray image has sit under its band and its row of stops, and
+/// make the section taller by their own row rather than taking it off the
+/// plot.
 #[test]
 fn the_false_colors_are_under_the_display_band_and_nowhere_else() {
     let layout = laid_out(&picture(true), 600.0);
     let rect = rect_of(&layout, Section::Display);
-    let (with, without) = (plot_area(rect, true), plot_area(rect, false));
-    assert!(with.height < without.height, "{with:?} {without:?}");
-    assert_eq!(with.y, without.y, "both start under the same header");
+    let with = plot_area(rect);
+    let color = rect_of(&laid_out(&picture(false), 600.0), Section::Display);
+    assert_eq!(with.height, PLOT_HEIGHT);
+    assert_eq!(plot_area(color).height, PLOT_HEIGHT);
+    assert_eq!(
+        Section::Output
+            .plot(rect_of(&layout, Section::Output))
+            .height,
+        PLOT_HEIGHT
+    );
+    assert_eq!(rect.height, color.height + display::SWATCH_ROW);
 
     let last = swatch_button(with, Colormap::ALL.len() - 1);
     assert!(
@@ -355,11 +363,6 @@ fn the_false_colors_are_under_the_display_band_and_nowhere_else() {
     assert!(
         swatch_button(with, 0).y >= ev_row(with, ramp(with).bottom()).bottom(),
         "the false colors are under the row of stops"
-    );
-    assert_eq!(
-        swatch_button(with, 0).bottom(),
-        ramp(without).bottom() + EV_ROW,
-        "the false colors end where the band and its stops alone would have"
     );
     assert!(swatch_button(with, 0).bottom() <= Rows::new(rect).exposure.y);
 }
@@ -372,7 +375,7 @@ fn the_rows_sit_under_the_display_band() {
     let rect = rect_of(&layout, Section::Display);
     let rows = Rows::new(rect);
     let inside = rect;
-    let band = ramp(plot_area(rect, false));
+    let band = ramp(plot_area(rect));
 
     for (widget, button) in row_buttons(rect) {
         assert!(button.y >= band.bottom(), "{widget:?} clears the band");
@@ -407,10 +410,10 @@ fn the_rows_sit_under_the_display_band() {
 /// row under it.
 #[test]
 fn a_handle_is_easier_to_take_hold_of_than_it_is_wide() {
-    let layout = laid_out(&picture(true), 600.0);
-    let rect = rect_of(&layout, Section::Display);
     for gray in [true, false] {
-        let plot = plot_area(rect, gray);
+        let layout = laid_out(&picture(gray), 600.0);
+        let rect = rect_of(&layout, Section::Display);
+        let plot = plot_area(rect);
         let band = ramp(plot);
         let at = band.x + 100.0;
         let grip = grip(band, at);
@@ -477,7 +480,7 @@ fn a_pixel_is_traced_down_every_section() {
 
     // On the Image section's plot, only it marks anything, and what it
     // says is its bin's value.
-    let bars = Section::Image.plot(rect_of(&layout, Section::Image), false);
+    let bars = Section::Image.plot(rect_of(&layout, Section::Image));
     let traced = marked(
         &current,
         &layout,
@@ -607,7 +610,7 @@ fn a_bar_cut_off_says_its_share() {
         counts: picture_counts(&current, &binned),
         lift_counts: plot::Counts::of(&current.stored.plot),
     };
-    let bars = Section::Image.plot(rect_of(&layout, Section::Image), false);
+    let bars = Section::Image.plot(rect_of(&layout, Section::Image));
     let words_at = |value: u8| {
         let bin = current
             .stored

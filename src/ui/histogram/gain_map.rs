@@ -131,7 +131,7 @@ pub(super) fn show(
     let Some(map) = current.picture_face().image.gain_map.as_deref() else {
         return;
     };
-    let plot_rect = Section::GainMap.plot(rect, current.image.is_gray());
+    let plot_rect = Section::GainMap.plot(rect);
     // The switch that shows the map in the picture's place, at the end of
     // the header: an eye, since what it changes is what is on screen, and
     // lit while the map is.

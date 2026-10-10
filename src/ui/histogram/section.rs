@@ -70,28 +70,29 @@ impl Section {
         }
     }
 
-    /// How tall the section stands, for every file: its header, its plot,
-    /// and what hangs under the plot. Fixed, so that one file's column is
+    /// How tall the section stands: its header, its plot, and what hangs
+    /// under the plot. Fixed but for the Display section's row of false
+    /// colors, which only a `gray` image has, so that one file's column is
     /// laid out where the last one's was, and a section is never shrunk to
     /// fit a short window — the column scrolls instead.
-    pub const fn height(self) -> f32 {
+    pub const fn height(self, gray: bool) -> f32 {
         let head = LABEL_HEIGHT + HEAD_GAP + PLOT_INSET;
         let band = PLOT_INSET + RAMP_GAP + RAMP_HEIGHT;
         match self {
             // The plot, the band of what each output comes out as, and the
             // row of stops under it.
             Section::Output => head + PLOT_HEIGHT + band + EV_ROW,
-            // The plot, the band, the row of stops, and the three rows of
-            // settings under them,
+            // The plot, the band, the row of stops, on a gray image the row
+            // of false colors, and the three rows of settings under them,
             // which take the inset under the plot as their own: see
             // `display::ROWS_HEIGHT`.
             Section::Display => {
+                let swatches = if gray { display::SWATCH_ROW } else { 0.0 };
                 head + PLOT_HEIGHT
-                    + RAMP_GAP
-                    + display::SWATCH_HEIGHT
                     + RAMP_GAP
                     + RAMP_HEIGHT
                     + EV_ROW
+                    + swatches
                     + display::ROWS_HEIGHT
             }
             // A shorter plot and the row of stops under it: how much of the
@@ -108,13 +109,13 @@ impl Section {
     /// The ground the bins stand on in the section laid out at `rect`: the
     /// whole width of the column, less the inset the ground is drawn out
     /// into, which leaves the bins a point each.
-    pub fn plot(self, rect: Rect, gray: bool) -> Rect {
+    pub fn plot(self, rect: Rect) -> Rect {
         let x = rect.x + PLOT_INSET;
         let y = rect.y + LABEL_HEIGHT + HEAD_GAP + PLOT_INSET;
         let width = rect.width - 2.0 * PLOT_INSET;
         match self {
             Section::Output => Rect::new(x, y, width, PLOT_HEIGHT),
-            Section::Display => display::plot_area(rect, gray),
+            Section::Display => display::plot_area(rect),
             Section::GainMap => Rect::new(x, y, width, SHORT_PLOT_HEIGHT),
             Section::Image => Rect::new(
                 x,
@@ -133,7 +134,11 @@ pub fn height(current: &Current) -> f32 {
         .into_iter()
         .filter(|section| section.applies(current))
         .collect();
-    sections.iter().map(|section| section.height()).sum::<f32>()
+    let gray = current.image.is_gray();
+    sections
+        .iter()
+        .map(|section| section.height(gray))
+        .sum::<f32>()
         + (sections.len().saturating_sub(1)) as f32 * SECTION_GAP
 }
 
@@ -142,12 +147,13 @@ pub fn height(current: &Current) -> f32 {
 /// the column's width, whatever height `column` has.
 pub fn layout(column: Rect, current: &Current) -> Vec<(Section, Rect)> {
     let mut y = column.y;
+    let gray = current.image.is_gray();
     Section::ALL
         .into_iter()
         .filter(|section| section.applies(current))
         .map(|section| {
-            let rect = Rect::new(column.x, y, column.width, section.height());
-            y += section.height() + SECTION_GAP;
+            let rect = Rect::new(column.x, y, column.width, section.height(gray));
+            y += rect.height + SECTION_GAP;
             (section, rect)
         })
         .collect()

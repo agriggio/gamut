@@ -41,8 +41,13 @@ is the gap between the two. A layout that kept every section in one place
 for every file would have to leave a hole where a picture has no gain map;
 the column closes up instead, and the sections above the gap do not move.
 
-Every section is a fixed height (`Section::height`) for every file, and the
-column is as tall as its sections, whatever the window. On a window shorter
+Every section is a fixed height (`Section::height`), and the column is as
+tall as its sections, whatever the window. The one exception is the Display
+section's row of false colors, which only a gray image has: it makes the
+section taller rather than coming out of the plot, so that the Display plot
+stands as tall as the Output's on every file — the two plots read closely,
+side by side in the eye, at one height — and on a gray file the sections
+below it move down by the row. On a window shorter
 than that the side panel scrolls — an egui `ScrollArea`, the wheel's alone:
 `DragScroll::Never`, since a drag in the column is a drag of a handle, the
 band or the exposure's slider, and must never move the column instead.

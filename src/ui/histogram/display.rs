@@ -58,32 +58,22 @@ const ROW_LABEL_GAP: f32 = 6.0;
 /// quarters falls back to.
 const STOPS_WIDTH: f32 = 36.0;
 
-/// The plot and the row of false colors under its band, together: the room
-/// the section gives them, the same for every file.
-fn full_bars(rect: Rect) -> Rect {
+/// The plot's ground in the section laid out at `rect`: as tall as the
+/// Output's on every file, so that the two plots read closely stand alike.
+/// The row of false colors a gray image has under the band makes the
+/// section taller instead — see [`Section::height`].
+pub(super) fn plot_area(rect: Rect) -> Rect {
     Rect::new(
         rect.x + PLOT_INSET,
         rect.y + LABEL_HEIGHT + HEAD_GAP + PLOT_INSET,
         rect.width - 2.0 * PLOT_INSET,
-        PLOT_HEIGHT + RAMP_GAP + SWATCH_HEIGHT,
+        PLOT_HEIGHT,
     )
 }
 
-/// The plot's ground in the section laid out at `rect`, on an image the
-/// false colors apply to or not: the row of them takes its room off the
-/// bottom of the plot, and the band moves up with it.
-///
-/// The section is one height either way, so the sections below it do not
-/// shift about from a gray file to a color one. What changes is how much
-/// of that height is plot, which nothing reads absolutely — the bars are
-/// drawn as fractions of whatever they are given.
-pub(super) fn plot_area(rect: Rect, gray: bool) -> Rect {
-    let bars = full_bars(rect);
-    if !gray {
-        return bars;
-    }
-    Rect::new(bars.x, bars.y, bars.width, PLOT_HEIGHT)
-}
+/// What the row of false colors adds to the section's height, on an image
+/// they apply to: the row and the gap above it.
+pub(super) const SWATCH_ROW: f32 = RAMP_GAP + SWATCH_HEIGHT;
 
 /// One of the false-color swatches under the band of the plot `bars`, by
 /// its place in [`Colormap::ALL`]. They divide the plot's width between
@@ -91,7 +81,7 @@ pub(super) fn plot_area(rect: Rect, gray: bool) -> Rect {
 ///
 /// Only on an image they apply to. The display ignores the false color on a
 /// three-channel image — its channels are colors already — so on one of
-/// those the row is not there at all, and the plot has the room instead.
+/// those the row is not there at all, and the section is shorter by it.
 pub(super) fn swatch_button(bars: Rect, index: usize) -> Rect {
     let row = Rect::new(
         bars.x,
@@ -109,12 +99,10 @@ pub(super) fn swatch_button(bars: Rect, index: usize) -> Rect {
 /// drawn, what the pointer finds, and what names itself — so that a button
 /// cannot be pressed anywhere but where it was drawn.
 ///
-/// It starts below whichever of the two things the band ends in: the ramp
-/// alone on a color image, and the ramp with the row of false colors under it
-/// on a gray one. Those end on the same line — the room the swatches take is
-/// taken off the plot rather than off the section, see [`plot_area`] — so
-/// this is one block either way, and the rows do not shift about from one
-/// file to the next: the three rows are every file's.
+/// It ends the section, under whichever of the two things the band ends
+/// in: the row of stops on a color image, and the row of false colors under
+/// it on a gray one, which make the section taller by their own height. The
+/// three rows are every file's.
 #[derive(Clone, Copy)]
 pub(super) struct Rows {
     /// The exposure's line, and where its word goes: the slider along it
@@ -139,7 +127,7 @@ impl Rows {
             )
         };
 
-        let mut y = ramp(full_bars(rect)).bottom() + EV_ROW + ROW_GAP;
+        let mut y = rect.bottom() - 3.0 * ROW_HEIGHT - 2.0 * ROW_GAP;
         let (exposure, exposure_label) = line(y);
         let mut next = || {
             y += ROW_HEIGHT + ROW_GAP;
@@ -294,7 +282,7 @@ pub(super) fn show(
     mark: Option<&Mark>,
 ) {
     let gray = current.image.is_gray();
-    let plot_rect = plot_area(rect, gray);
+    let plot_rect = plot_area(rect);
     let plotted = &current.stats.plot;
     bars(
         pass,
