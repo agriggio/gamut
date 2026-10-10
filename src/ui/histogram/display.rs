@@ -6,7 +6,7 @@
 
 use egui::{Align2, FontId, Stroke, pos2};
 
-use super::plot::{Counts, PLOT_BACKGROUND, Past, Scale, band, bars, corners};
+use super::plot::{Counts, PLOT_BACKGROUND, Past, Scale, band, bars};
 use super::slider::slider;
 use super::track::track;
 use super::*;
@@ -292,10 +292,6 @@ pub(super) fn show(
         plot_rect,
         &accent_rule(pass, mark),
     );
-    let dim = Color32::from(pass.theme.text_dim);
-    if let Some([low, high]) = axis_ends(current, plotted) {
-        corners(ui, plot_rect, Some((low, dim)), Some((high, dim)));
-    }
 
     let span = plotted.max - plotted.min;
     if span > 0.0 {
@@ -422,8 +418,16 @@ fn curve(pass: &Pass, ui: &egui::Ui, current: &Current, bars: Rect) {
     // top is wherever the response gets to and white is a line across it.
     let highest = responses.iter().copied().fold(0.0, f32::max);
     let scale = Scale::new(transfer.to_encoded(1.0), highest);
-    if let Some(white) = scale.white {
-        plot::white_line(pass, ui, bars, white);
+    // Where the curve reaches white, where that is not the top of the plot:
+    // the value the window puts at white, the 0 of the row of stops, a rule
+    // up from it to the curve and a dot where the two meet.
+    let reaches = scale.white.and_then(|up| {
+        let (_, white) = current.display.displayed_bounds();
+        let across = (transfer.to_encoded(white) - plotted.min) / span;
+        (across.is_finite() && (0.0..=1.0).contains(&across)).then_some((across, up))
+    });
+    if let Some((across, up)) = reaches {
+        plot::white_mark(pass, ui, bars, across, up);
     }
     let points: Vec<egui::Pos2> = responses
         .iter()
@@ -437,9 +441,8 @@ fn curve(pass: &Pass, ui: &egui::Ui, current: &Current, bars: Rect) {
         })
         .collect();
     // Over an outline in the plot's ground, so that the line stands off
-    // whatever bar it crosses — the three planes screened to a near white
-    // as much as the ground itself — and the bars under it can be drawn as
-    // every other section's are rather than dimmed to make room for it.
+    // whatever line or area it crosses, and the plot under it can be drawn
+    // as every other section's is rather than dimmed to make room for it.
     let painter = ui.painter();
     painter.add(egui::Shape::line(
         points.clone(),
@@ -449,7 +452,22 @@ fn curve(pass: &Pass, ui: &egui::Ui, current: &Current, bars: Rect) {
         points,
         Stroke::new(CURVE_WIDTH, theme.accent),
     ));
+    if let Some((across, up)) = reaches {
+        let at = pos2(
+            pass.grid.snap(bars.x + across * bars.width),
+            bars.bottom() - up * bars.height,
+        );
+        painter.circle(
+            at,
+            WHITE_DOT,
+            Color32::WHITE,
+            Stroke::new(CURVE_OUTLINE, PLOT_BACKGROUND),
+        );
+    }
 }
+
+/// How big the dot where the curve reaches white is.
+const WHITE_DOT: f32 = 2.5;
 
 /// The false colors, each showing itself, under the band of the plot
 /// `bars`, and only where the display would act on the choice. The whole

@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use super::plot::{PLOT_BACKGROUND, bars, corners};
+use super::plot::{PLOT_BACKGROUND, bars};
 use super::*;
 use crate::image::auxiliary::{Auxiliary, Showing};
 use crate::image::gain_map::GainMap;
@@ -118,7 +118,7 @@ fn summary(current: &Current, map: &GainMap) -> String {
 }
 
 /// The Gain map section, laid out at `rect`: the button that shows the map,
-/// and the histogram of its lift with the axis's two ends in its corners.
+/// and the histogram of its lift.
 /// How much of the lift is on screen is the header's to say, in words.
 pub(super) fn show(
     pass: &mut Pass,
@@ -165,14 +165,7 @@ pub(super) fn show(
         plot_rect,
         &accent_rule(pass, mark),
     );
-    let dim = Color32::from(pass.theme.text_dim);
     let (low, high) = (lift.min, lift.max);
-    corners(
-        ui,
-        plot_rect,
-        Some((stops_words(low), dim)),
-        Some((stops_words(high), dim)),
-    );
 
     // The row of stops under the plot: each whole stop of lift, evenly
     // spaced, the axis being in stops.

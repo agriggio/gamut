@@ -112,32 +112,22 @@ gets when `lighter_background` resolves back to the background it sits on.
 Two more resist being themed and are not:
 
 * **The histogram's plot is drawn on a near-black ground, in one red, one
-  green and one blue that no theme chose.** The plot is drawn by screening
-  the color planes over one another, and screening only reads on a dark
-  ground: what is under the plot is added to every plane, so a ground light
-  enough to see lifts each plane's darkest channel several times over and
-  three overlapping planes come out as three washes of the same pale color.
+  green and one blue that no theme chose.** Each plane is a thin line over a
+  faint area, and both only read on a dark ground: a ground light enough to
+  see washes out the areas, which are mostly transparent, and leaves three
+  thin lines on it to carry the plot.
   A red, green and blue that each lead in their own channel, on a
-  near-black, are the set that behaves: two planes overlapping give the
-  secondary between them and all three give a near white, which is the
-  reading a channel histogram is looked at for — and is the same reading in
-  every theme, which a plot made of a palette's own pastels is not: the
-  overlaps come out muddier the further a palette sits from the primaries,
-  and how much a histogram can be read is the wrong thing to hang on the
-  desktop's taste in reds. They are held a way short of the pure primaries,
-  which at a pixel to the bin come out as a hedge of spikes the eye cannot
-  leave alone; see [the histogram panel](histogram.md).
+  near-black, are the set that behaves: three lines crossing stay three,
+  and read the same in every theme, which a plot made of a palette's own
+  pastels does not: the further a palette sits from the primaries, the more
+  its lines run together where they cross, and how much a histogram can be
+  read is the wrong thing to hang on the desktop's taste in reds. They are
+  held a way short of the pure primaries, which at a pixel to the bin come
+  out as a hedge of spikes the eye cannot leave alone; see [the histogram
+  panel](histogram.md).
 
-  The screening itself is done on the CPU, one column of the plot at a time.
-  egui has one blend, so the planes cannot be laid over one another and left
-  to the GPU; instead each column — one to a device pixel — is
-  cut into stretches at the heights of the planes standing in it, and each
-  stretch is filled with what the planes over it come to, screened in code,
-  which on pure primaries over near-black is the same picture a GPU blend
-  would give.
-
-  The panel *around* the plot is not one of these. Nothing is screened onto
-  it, so it is the bars' own surface, with the same ink on it as the bars
+  The panel *around* the plot is not one of these. Nothing is drawn faint
+  onto it, so it is the bars' own surface, with the same ink on it as the bars
   carry — the side panel the file's information is read on as well, and the
   surface a popup's cells sit on, that last just short of opaque.
 * **The luminance plane is a neutral gray.** It stands for a pixel's value

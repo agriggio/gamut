@@ -117,10 +117,6 @@ fn a_decimal_is_written_without_the_zeros_it_does_not_need() {
     ));
     assert_eq!(axis_words(&graded, 1.0), "1");
     assert_eq!(axis_words(&graded, 0.0), "0");
-    assert!(
-        axis_ends(&graded, &graded.stats.plot).is_none(),
-        "a graded file's axis goes without saying"
-    );
 
     // Linear integer data reads back as the counts it was stored in.
     let counts = shown(DecodedImage::new(
@@ -134,10 +130,6 @@ fn a_decimal_is_written_without_the_zeros_it_does_not_need() {
         AlphaMode::Opaque,
     ));
     assert_eq!(axis_words(&counts, 4095.0 / 65535.0), "4095");
-    assert_eq!(
-        axis_ends(&counts, &counts.stats.plot),
-        Some(["0".to_string(), "4095".to_string()])
-    );
 }
 
 /// The panel is the whole of the side, and every section in it is laid out
@@ -563,7 +555,7 @@ fn the_image_section_writes_each_channel_as_the_file_keeps_it() {
 }
 
 /// On an SDR screen the output stops at white: a stop of exposure piles
-/// the top of a ramp into the last bin, which the right corner counts.
+/// the top of a ramp into the last bin.
 #[test]
 fn the_output_piles_what_the_screen_clips_at_white() {
     let mut current = picture(true);

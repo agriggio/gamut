@@ -133,22 +133,55 @@ picture's place, and its button is that switch.
 the gain map at the weight in force, in the working space's primaries — see
 [color management](color.md). It is the plot the window, the exposure and
 the curve act on, so the response curve is drawn over it always, and the
-band and the rows under it. Its bars are drawn as every other section's
-are, so that it compares with the Output's bar for bar; the curve stands
+band and the rows under it. Its planes are drawn as every other section's
+are, so that it compares with the Output's bin for bin; the curve stands
 off them on an outline in the plot's ground (`CURVE_OUTLINE`), which keeps
-it readable over the near white the three planes screen to.
+it readable where it crosses the planes' lines.
 
 **Output** is the Display plot pushed through the display's response and
 encoded on sRGB's curve, over 0 to the surface's room above white
 (`FrameInput::room`, which is `App::display_headroom`). It is rebinned, not
-scanned: `Stats::scan` counts the same pixels a second time into 4096 bins
-on the same axis (`stats::Fine`), and `Fine::rebinned` pushes each fine bin's
-value through the response and adds its count to the output bin it lands
-in, out-of-range piling into the end it went out of. A handle dragged
+scanned: `Stats::scan` counts the pixels into 4081 fine bins on the input's
+axis (`stats::Fine`), and `Fine::rebinned` pushes each fine bin's value
+through the response and spreads its count over the output bins it stands
+for, out-of-range piling into the end it went out of. A handle dragged
 changes the response on every frame, and four thousand bins through it is
-nothing where two million pixels would be a frame each. Sixteen fine bins
-to a coarse one is what keeps an 8-bit file's codes one to an output bin
-through a display that does nothing, so the plot does not comb.
+nothing where two million pixels would be a frame each. The Display and
+Image plots are the same fine bins rebinned through nothing, so all three
+are binned alike.
+
+### Why the counts are spread
+
+Dropping each fine bin's count whole into the one output bin its value
+lands in makes a comb on a plot of data with none in it: two grids beat
+against each other. Fine bins eight and a half to an output bin put eight
+and nine into neighbors by turns, a ripple of a tenth on a smooth picture;
+and an 8-bit file's codes, on the axis a wide-gamut file's color is carried
+onto — about −0.4 to 1.04 for a P3 photograph — stand 0.7 of a bin apart and
+put one and two into neighbors by turns, a ripple of a third on a plot of
+every code there is. Neither says anything about the picture.
+
+So a fine bin's count is spread evenly over the stretch it stands for once
+the response has had it. A quantized file's code (`Fine::code`, the step
+between codes) stands for the stretch from halfway to the code below to
+halfway to the code above, and codes spread so tile the axis and come out
+even. A code is never spread wider than an output bin, though: where the
+display pulls codes further apart than that — a stop or two of exposure on
+an 8-bit file — each is spread over a bin's width around where it lands and
+the bins between are left as empty as the screen leaves them. That comb is
+the posterization a histogram is looked at for, and it stays. A float file
+has no step, and each fine bin is spread over a bin's width. The counts are
+kept in sixteenths of a pixel (`stats::SHARES`), so that a pixel spread over
+two or three bins keeps a share in each; a plot is read by its bins against
+one another, which the unit leaves alone.
+
+There are 255 × 16 + 1 fine bins so that every output bin's middle is a fine
+bin's, and an 8-bit file's codes on an axis of 0..1 stand each on the middle
+of its own bin: a display that does nothing puts every one wholly back in
+it, and a spike that is one code is one bin.
+
+The step is the file's as stored. A gain map's lift pulls the codes further
+apart than that, so a lifted plot can keep a little of the comb.
 
 The color planes go through the same scalar response as the luminance, a
 channel at a time. That is exact where the display treats each channel
@@ -218,7 +251,7 @@ decimals, which is why the line is its own. They are written as the bottom
 bar's Decimal format writes a pixel (`pixel::component`): counts for 8- and
 16-bit samples, the number for floats, and the luminance put back on the
 file's curve and scale so that it reads in the same units as the channels
-beside it; the ends of the axis in the corners are written the same way.
+beside it.
 A file's channels land on its plot as its codes do, so each rule stands on
 the bar its channel was counted in.
 
@@ -241,36 +274,24 @@ white. The Display band keeps an accent rule along its top instead
 (`Past::Rule`): there the band is the levels track, its handles are drawn
 over it, and a pattern would fight them.
 
-### What is written in the corners
+### The share clipped at either end
 
 `Plot::clipped`, asked of the Output plot at black and at white, is the
 share of the samples the screen puts out at or below black and at or above
 white, per plane, the worst plane reported. Read off the output, it is what
 the screen does with the picture, rather than a share worked out again from
 the window's two ends on the input. A red flower blows its red channel long
-before its luminance goes, and the plane that has piled into the end bin is the one the eye finds
-on the plot. The panel writes the two shares in the plot's top corners, in
-the accent, over a backing of the plot's own ground so that the number stays a
-number on a bar that has climbed into the corner. Only when there is a share
-to write: an empty corner most of the time is what makes a number in it news.
+before its luminance goes, and the plane that has piled into the end bin is
+the one the eye finds on the plot. Nothing on the panel writes it yet: the
+plots carry no numbers, and the marks below say where the picture is
+clipped rather than how much of it.
 
-The right corner is only written where the surface is actually clipping —
-no curve, and an SDR surface, the same test the bottom bar's **clipped**
-makes, or a false color, which clips whatever the curve. A curve rolls the
-highlights off rather than throwing them away, and an HDR surface shows them;
-neither is a share of the picture lost.
-
-The share is exact on a quantized file under a window whose ends sit on
-codes: each code lands on a fine bin of its own, and a code pushed to black
-or past white lands in an end bin of the output, so the output's share at
-either end is the input's share at the window's — a test in `stats.rs`
-holds the two to each other. On a float axis the bins are wider than a code and the
-share is to the nearest fine bin.
-
-Where nothing is clipped at white because the surface goes past it — an
-HDR surface — the right corner says instead how far the axis runs: the
-room, which is then the one end of the output's axis that differs from one
-screen to the next.
+On a quantized file under a window whose ends sit on codes, the share is
+the input's share at the window's to within the rounding of a share of a
+pixel: a code pushed to black or past white lands wholly in an end bin of
+the output, and the codes just inside are pulled further apart than a bin
+and spread no further than one — a test in `stats.rs` holds the two to each
+other. On a float axis the share is to the nearest fine bin.
 
 ### The marks on the picture
 
@@ -299,24 +320,24 @@ Lucide's `triangle-alert` (`icon::TRIANGLE_ALERT`), the sign every editor's
 clipping warning wears.
 
 Which ends are marked follows `Display::clips_white`, the same rule the
-corner and the bottom bar's **clipped** use: white is only marked where the
+bottom bar's **clipped** uses: white is only marked where the
 surface is actually clipping it.
 
-One channel at an end is enough to mark a pixel, as it is enough for the
-corner to count it. A channel that has reached the bound has lost what it
+One channel at an end is enough to mark a pixel, as it is enough for
+`Plot::clipped` to count it. A channel that has reached the bound has lost what it
 held, and the color left over is not the file's: a raw's white balance
 lifts its red well above its green, so a sun's red burns out while its green
 is still climbing and the disc comes out pink, and on a warm sunrise the
 green may never reach white at all — a test that waited for every channel
-painted nothing on a picture whose sun was plainly gone. The paint and the
-corner then answer the same question, the corner as a share and the paint
-as a place, and a number in the corner is the share of the picture wearing
-the paint. The comparisons are exact, as the corner's are.
+painted nothing on a picture whose sun was plainly gone. The paint and
+`Plot::clipped` then answer the same question, the one as a place and the
+other as a share of the picture wearing the paint. The comparisons are
+exact, as `Plot::clipped`'s are.
 
 The test is made in the working space's channels — the color after
 `params.primaries` has carried it into BT.709, which is the color `shade`
-windows — because that is where the band's two ends are, and where the
-corner counts: `Stats::scan` measures the picture there too. A vivid Rec.
+windows — because that is where the band's two ends are, and where
+`Plot::clipped` counts: `Stats::scan` measures the picture there too. A vivid Rec.
 2020 or P3 color has a BT.709 channel above white, and one below zero, that
 the file never clipped but a surface that stops at either end will, and the
 mark says so; [color management](color.md) says why that is a highlight's
@@ -549,20 +570,18 @@ the keys and the slider cannot take the picture to two different places
 that read the same.
 ## How a plot is drawn
 
-The ends of the input's and the file's axes are written in their plots' top
-corners, in the dim ink on the plot's own ground, only where they are not 0
-and 1 decoded — a
-graded file's plot runs from black to white, which every histogram of such a
-file does and no one needs told — and, where they are written, without
-the zeros they do not need: a linear file's axis reads `0` and `3.984`, or in
-counts where the file stores them.
-
-The channel planes are drawn in a red, a green and a blue held short of the
-primaries (`theme::HISTOGRAM_PLANES`). Screened over one another on the
-plot's ground they still give a yellow, a cyan and a magenta where two overlap
-and a near white where all three do, which is the reading a channel histogram
-is looked at for; the full primaries, at a pixel to the bin, come out as a
-hedge of pure red, green and blue spikes that the eye cannot leave alone.
+Each plane is drawn as a line along its top (`plot::lines`), 1.5 device
+pixels wide, over an area laid down under it in a faint gray taken some way
+toward the line's own color (`plot::line_area`). The areas stack, so where
+the planes overlap the plot darkens to a neutral gray and where one stands
+alone it wears that plane's cast. Each plane is drawn where the panel has it
+on, the luminance plane in a neutral gray and first, so that its line runs
+under the color planes'.
+The planes' inks are a red, a green and a blue held short of the primaries
+(`plot::HISTOGRAM_PLANES`), each leading in its own channel so that three
+lines crossing stay three; the full primaries, at a pixel to the bin, come
+out as a hedge of pure red, green and blue spikes that the eye cannot leave
+alone.
 The ground is the same in every theme and so are the inks, so the reading is
 the same everywhere — see [theme](theme.md) for the two things that resist
 being themed. A bin is a point, which fixes the panel's width and is what
@@ -597,7 +616,7 @@ Each top is set the same way: of a plot's bins holding anything inside the
 two end bins, across every plane, the fullest fiftieth (`plot::CUT`) stand
 past it, and two plots sharing one take the higher (`Counts::wider`), the one
 cutting fewer bars off. The ends are left out because what the window throws
-away piles up there, and the Output's corners already say how much. A bar
+away piles up there. A bar
 past the top runs to it with a cap in the accent, and the pointer on it puts
 its share in the header ahead of the bin's value, which is all the height of
 a cut bar no longer says.

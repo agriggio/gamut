@@ -185,7 +185,7 @@ white, and would move every P3 photograph with a few pixels outside sRGB
 (see **Wide gamut** below). What the surface throws away is said instead:
 `Display::exceeds_white` — whether the window and the exposure leave
 anything past white, a question about the display rather than the file —
-is what the bottom bar's **clipped**, the histogram's corner and the marks
+is what the bottom bar's **clipped** and the marks
 are drawn from. A file keeps the curve it was left in (`app/kept.rs`), and
 the panel's reset takes it off with the rest.
 
@@ -217,8 +217,8 @@ space — `Values::to_working_space`, the lift and then the matrix, with the
 plotted channels put back on the file's own curve — so the histogram's red
 plane stands past white and its green below black; `Stats::peak` carries
 the highest channel, which is what `Display::exceeds_white` asks, since the
-luminance alone never passes white for a pure red of any gamut; the corners
-count the share; and `judge` marks the pixels after the same matrix.
+luminance alone never passes white for a pure red of any gamut; `Plot::clipped`
+counts the share; and `judge` marks the pixels after the same matrix.
 `DecodedImage::sample` carries the matrix in `Sample::linear` for the same
 reason, so that the histogram's marker lands in the bar the scan counted the
 pixel in. The file as it stores the color is measured too, with no matrix

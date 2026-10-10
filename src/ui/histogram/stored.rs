@@ -10,7 +10,7 @@
 
 use egui::{Align2, FontId};
 
-use super::plot::{Counts, bars, corners};
+use super::plot::{Counts, bars};
 use super::*;
 use crate::image::Samples;
 use crate::ui::pixel::component;
@@ -96,8 +96,7 @@ pub(super) fn pixel_mark(current: &Current, x: u32, y: u32) -> Option<Mark> {
 
 /// The Image section, laid out at `rect`: the header, the line of the
 /// pixel's values under it, and the plot of the picture as stored, with a
-/// rule in each plane's color for the pixel's channels and the ends of its
-/// axis in its corners where they are worth writing.
+/// rule in each plane's color for the pixel's channels.
 pub(super) fn show(
     pass: &mut Pass,
     ui: &mut egui::Ui,
@@ -121,13 +120,6 @@ pub(super) fn show(
         _ => accent_rule(pass, mark),
     };
     bars(pass, ui, plotted, counts, plot_rect, &rules);
-    // The ends in the same units as the values: counts, or the number.
-    let ends = axis_ends(current, plotted)
-        .map(|_| [plotted.min, plotted.max].map(|end| stored_words(current, end)));
-    if let Some([low, high]) = ends {
-        let dim = Color32::from(pass.theme.text_dim);
-        corners(ui, plot_rect, Some((low, dim)), Some((high, dim)));
-    }
     section::header(pass, ui, Section::Image, rect, None);
     if let Some(mark) = mark {
         values(pass, ui, values_line(rect), mark);

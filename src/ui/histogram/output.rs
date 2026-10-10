@@ -2,12 +2,11 @@
 //! display starts from it, every value pushed through the display's
 //! response and binned again on the curve the screen is driven with — sRGB's
 //! — from black to as far above white as the surface goes, so that what the
-//! surface clips piles into the end it is clipped at. The shares clipped at
-//! either end are written in its corners.
+//! surface clips piles into the end it is clipped at.
 
 use std::sync::Arc;
 
-use super::plot::{Past, band, bars, corners, white_line};
+use super::plot::{Past, band, bars, white_mark};
 use super::*;
 use crate::image::Transfer;
 use crate::image::display::{Display, Headroom, ToneMap};
@@ -201,8 +200,8 @@ pub(super) fn pixel_mark(
 }
 
 /// The Output section, laid out at `rect`: the plot of what goes out with
-/// white marked where white is not its top, the shares clipped at either
-/// end in its corners, and the band of what each output is.
+/// white marked where white is not its top, and the band of what each
+/// output is.
 pub(super) fn show(
     pass: &mut Pass,
     ui: &mut egui::Ui,
@@ -212,7 +211,6 @@ pub(super) fn show(
     mark: Option<&Mark>,
 ) {
     let binned = plots.output;
-    let theme = pass.theme;
     let gray = current.image.is_gray();
     let plot_rect = Section::Output.plot(rect);
     bars(
@@ -227,40 +225,8 @@ pub(super) fn show(
     let top = ENCODING.to_encoded(binned.room);
     let white = ENCODING.to_encoded(1.0) / top;
     if white < 1.0 - 1e-3 {
-        white_line(pass, ui, plot_rect, white);
+        white_mark(pass, ui, plot_rect, white, 1.0);
     }
-
-    // How much of the picture the screen is throwing away, in the corner
-    // it is being thrown out of: the share at black in the left corner, and
-    // at white or past it in the right — where the surface is actually
-    // clipping it, rather than showing it or rolling it off. Only where
-    // there is a share to write, so that a corner with a number in it is
-    // news.
-    //
-    // This is the question the panel is most often opened to answer, and a
-    // spike against the edge of the plot cannot answer it: the spike says
-    // there is clipping and the number says how much.
-    let headroom = pass.input.headroom;
-    let [below, above] = binned.plot.clipped(0.0, ENCODING.to_encoded(1.0));
-    let above = if current.display.clips_white(gray, headroom) {
-        above
-    } else {
-        0.0
-    };
-    let accent = Color32::from(theme.accent);
-    let left = share_words(below).map(|words| (words, accent));
-    // The right corner says how far the plot runs where nothing is clipped
-    // at white because the surface goes past it: the room, which is then
-    // the one end of this axis that is not the same on every screen.
-    let right = share_words(above).map(|words| (words, accent)).or_else(|| {
-        (binned.room > ABOVE_WHITE).then(|| {
-            (
-                trimmed(format!("{:.2}", binned.room)),
-                Color32::from(theme.text_dim),
-            )
-        })
-    });
-    corners(ui, plot_rect, left, right);
 
     // The row of stops under the band: 0 at white, below it how far under
     // white an output is, and on a surface with room above white how far

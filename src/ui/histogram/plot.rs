@@ -1,8 +1,6 @@
-//! The plot every section draws: the bins as columns, the pointer's rule,
-//! the words in its top corners, the band along its foot and the line that
-//! marks white — and the arithmetic under it: where a bin stands, how tall
-//! its bar is, and what a stretch of a column comes out as with the planes
-//! standing over it.
+//! The plot every section draws: each plane as a line over its area, the
+//! pointer's rule, the band along its foot and the mark at white — and the
+//! arithmetic under it: where a bin stands and how tall it is.
 
 use std::ops::Range;
 
@@ -14,70 +12,28 @@ use crate::ui::outline;
 
 /// The ground the plot is drawn on. Not quite black, so that the panel's own
 /// edge is still an edge rather than a hole in it. The one surface with a
-/// job that outranks matching the desktop: a screened plot has to have a
-/// dark ground under it or its planes stop being three colors, so it is
-/// the same near-black in every theme.
+/// job that outranks matching the desktop: the planes' lines and their
+/// faint areas need a dark ground under them to read as three colors, so it
+/// is the same near-black in every theme.
 pub(super) const PLOT_BACKGROUND: Color = Color::rgb(8, 8, 10);
-/// The luminance plane, under the color ones. Neutral, and no theme's
+/// The luminance plane. Neutral, and no theme's
 /// business: it is the one plane that stands for a pixel's value rather
 /// than for a channel, and a value with a hue on it would read as a fourth
 /// color.
 pub(super) const HISTOGRAM_LUMA: Color = Color::rgba(170, 170, 170, 200);
 /// The color planes: a red, a green and a blue, each taken some way back
 /// from its primary, in that order. Not the theme's own red, green and
-/// blue, which no theme chose for this: screened over one another on
-/// [`PLOT_BACKGROUND`] these still give a yellow, a cyan and a magenta
-/// where two overlap and a near white where all three do, which is the
-/// reading a channel histogram is looked at for — and is the same reading
-/// in every theme, the ground being the same in every theme. Held short of
-/// the primaries because the full ones, at a pixel to the bin, come out as
-/// a hedge of pure red, green and blue spikes that the eye cannot leave
-/// alone; these read as a plot.
+/// blue, which no theme chose for this: each leads in its own channel, so
+/// three lines crossing on [`PLOT_BACKGROUND`] stay three, and read the
+/// same in every theme, the ground being the same in every theme. Held
+/// short of the primaries because the full ones, at a pixel to the bin,
+/// come out as a hedge of pure red, green and blue spikes that the eye
+/// cannot leave alone; these read as a plot.
 pub(super) const HISTOGRAM_PLANES: [Color; COLOR] = [
     Color::rgb(232, 76, 70),
     Color::rgb(92, 200, 108),
     Color::rgb(84, 132, 236),
 ];
-
-/// The planes a column of the plot is drawn from: which of them stand this
-/// high, as a set. What the color of a stretch of the column is a function of.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) struct Cover {
-    pub luma: bool,
-    pub planes: [bool; 3],
-}
-
-/// What a stretch of a column comes out as, with `cover` standing over it:
-/// the plot's ground, the luminance plane laid over that, and the color
-/// planes screened over the lot.
-///
-/// egui has one blend, so the screening is done here, per stretch of
-/// column: the planes are the primaries on a near-black ground, so two of
-/// them give the secondary between and all three give white, which is the
-/// reading a channel histogram is looked at for.
-pub(super) fn screened(luma_ink: Color, cover: Cover) -> Color32 {
-    let over = |ground: [f32; 3], ink: Color| -> [f32; 3] {
-        let alpha = ink.a as f32 / 255.0;
-        let ink = [ink.r, ink.g, ink.b].map(|channel| channel as f32 / 255.0);
-        [0, 1, 2].map(|c| ground[c] * (1.0 - alpha) + ink[c] * alpha)
-    };
-    let screen = |ground: [f32; 3], ink: Color| -> [f32; 3] {
-        let ink = [ink.r, ink.g, ink.b].map(|channel| channel as f32 / 255.0);
-        [0, 1, 2].map(|c| 1.0 - (1.0 - ground[c]) * (1.0 - ink[c]))
-    };
-    let ground = PLOT_BACKGROUND;
-    let mut color = [ground.r, ground.g, ground.b].map(|channel| channel as f32 / 255.0);
-    if cover.luma {
-        color = over(color, luma_ink);
-    }
-    for (plane, ink) in cover.planes.into_iter().zip(HISTOGRAM_PLANES) {
-        if plane {
-            color = screen(color, ink);
-        }
-    }
-    let [r, g, b] = color.map(|channel| (channel.clamp(0.0, 1.0) * 255.0).round() as u8);
-    Color32::from_rgb(r, g, b)
-}
 
 /// How the response curve is scaled up the plot: in the file's own encoding,
 /// as the bins across are, from 0 at the axis to `ceiling` at the top.
@@ -171,8 +127,7 @@ pub(super) struct Counts {
 impl Counts {
     /// The scale `reference` sets: the fullest [`CUT`] of its bins holding
     /// anything, across every plane and leaving out the two end bins — what
-    /// the window throws away piles up there, and the Output plot's corners
-    /// say how much — stand past the top. A plot with nothing inside its
+    /// the window throws away piles up there — stand past the top. A plot with nothing inside its
     /// ends — a picture of black and white alone — is scaled to its fullest
     /// bin, and an empty one to the whole of the picture.
     pub(super) fn of(reference: &Plot) -> Self {
@@ -254,11 +209,27 @@ fn share_of(count: u32, total: u64) -> f32 {
     }
 }
 
-/// The bins of `plotted` across `bars` on the column's scale `counts`,
-/// standing on the plot's ground, with `rules` over them, each a bin and its
-/// ink: the luminance plane under the color ones, each where the panel's
-/// toggles have it, at one column to a device pixel, and a cap in the accent
-/// along the top of a column cut off there. Drawn alike in every section, so
+/// How thick a plane's line is, in device pixels; the
+/// gray its area is laid down in, each plane's over the others'; how far
+/// that gray is taken toward the plane's own ink, so that each area wears a
+/// cast of its line's color; and how opaque it is.
+const LINE_PIXELS: f32 = 1.5;
+const LINE_AREA: [u8; 3] = [150, 150, 150];
+const LINE_CAST: f32 = 0.3;
+const LINE_ALPHA: u8 = 40;
+
+/// The area under a plane's line: [`LINE_AREA`] taken
+/// [`LINE_CAST`] of the way toward `ink`.
+fn line_area(ink: Color32) -> Color32 {
+    let [r, g, b] = [(0, ink.r()), (1, ink.g()), (2, ink.b())].map(|(at, to)| {
+        (LINE_AREA[at] as f32 + (to as f32 - LINE_AREA[at] as f32) * LINE_CAST).round() as u8
+    });
+    Color32::from_rgba_unmultiplied(r, g, b, LINE_ALPHA)
+}
+
+/// The bins of `plotted` across `bars` on the column's scale `counts`, on
+/// the plot's ground, as [`lines`] draws them, with `rules` over them, each
+/// a bin and its ink. Drawn alike in every section, so
 /// that a bar reads the same down the column.
 pub(super) fn bars(
     pass: &Pass,
@@ -276,82 +247,20 @@ pub(super) fn bars(
         PLOT_BACKGROUND,
     );
 
-    // Luminance always goes down first, underneath the color planes: it
-    // runs as tall as the tallest of them about as often as not, and painting
-    // it on top swamps the color the panel exists to show.
     let luma: Option<&[u32; BINS]> = panels.show_luma.then_some(&plotted.luma);
     let color: &[[u32; BINS]] = match plotted.color.as_ref() {
         Some(planes) if panels.show_planes => planes,
         _ => &[],
     };
 
-    // Each plane against its own pixels, on the column's one scale.
-    let luma_total = luma.map(total);
-    let color_totals: Vec<u64> = color.iter().map(total).collect();
+    lines(pass, ui, luma, color, counts, bars);
+    rule_over(pass, ui, bars, rules);
+}
 
-    // Held back under the color planes; with them off — or on a gray
-    // image, which has none — it is the plot.
-    let luma_ink = if color.is_empty() {
-        HISTOGRAM_LUMA
-    } else {
-        HISTOGRAM_LUMA.with_alpha(HISTOGRAM_LUMA_UNDER)
-    };
-
-    // One column to a device pixel — the bins are a point each, which is
-    // what the panel's width was fixed for, and a point is a device pixel
-    // only at one to one — standing as tall as the fullest bin under it, cut
-    // into stretches by the heights of the planes standing in it, each
-    // stretch filled with what the planes over it come to. On the device's
-    // grid, like every other mark here.
+/// The pointer's rule across `bars`, each a bin and its ink.
+fn rule_over(pass: &Pass, ui: &egui::Ui, bars: Rect, rules: &[(usize, Color32)]) {
     let grid = pass.grid;
-    let snap = |value: f32| grid.snap(value);
-    for column in grid.columns(bars.x, bars.width) {
-        let (left, right) = (column.left, column.right);
-        let bins = bins_under(column.index, column.count);
-        let mut heights: Vec<(f32, usize)> = Vec::with_capacity(4);
-        if let (Some(plane), Some(total)) = (luma, luma_total) {
-            heights.push((counts.up(tallest(plane, bins.clone()), total), 3));
-        }
-        for (index, (plane, &total)) in color.iter().zip(&color_totals).enumerate() {
-            heights.push((counts.up(tallest(plane, bins.clone()), total), index));
-        }
-        heights.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let cut = heights.last().is_some_and(|&(height, _)| height > 1.0);
-        let heights = heights
-            .into_iter()
-            .map(|(height, plane)| (height.min(1.0) * bars.height, plane));
-        let mut cover = Cover {
-            luma: luma.is_some(),
-            planes: [!color.is_empty(); 3],
-        };
-        let mut from = 0.0;
-        for (height, plane) in heights {
-            let (bottom, top) = (snap(bars.bottom() - from), snap(bars.bottom() - height));
-            if top < bottom {
-                painter.rect_filled(
-                    egui::Rect::from_min_max(pos2(left, top), pos2(right, bottom)),
-                    0.0,
-                    screened(luma_ink, cover),
-                );
-            }
-            from = height;
-            match plane {
-                3 => cover.luma = false,
-                plane => cover.planes[plane] = false,
-            }
-        }
-        if cut {
-            painter.rect_filled(
-                egui::Rect::from_min_max(
-                    pos2(left, snap(bars.y)),
-                    pos2(right, snap(bars.y) + grid.line_width(CUT_CAP)),
-                ),
-                0.0,
-                pass.theme.accent,
-            );
-        }
-    }
-
+    let painter = ui.painter();
     // The pointer's rule: over the bins it is picking one of, and under
     // anything drawn over them, which is half of what the readout says
     // where there is a curve and the line must not cover it.
@@ -375,44 +284,92 @@ pub(super) fn bars(
     }
 }
 
-/// Words in the two top corners of the plot `bars`, each in its own ink:
-/// the shares the screen clips at either end, or the ends of the axis.
-/// Backed with the plot's own ground, laid over whatever bar has climbed
-/// into the corner, so that the number stays a number on a picture that has
-/// piled up at one end. Pinned to the ends of the axis they name rather
-/// than set together in one corner: each is about the edge of the plot it
-/// stands at.
-pub(super) fn corners(
+/// The planes the panel's toggles have on, at one column to a device pixel
+/// and as tall as the fullest bin under it, so that a spike is not averaged
+/// away by its neighbors: each plane's area laid down in [`line_area`], each
+/// over the others', then each plane's top as a line in its own ink, the
+/// luminance plane's under the color planes'; and a cap in the accent along
+/// the top of a column cut off there.
+fn lines(
+    pass: &Pass,
     ui: &egui::Ui,
+    luma: Option<&[u32; BINS]>,
+    color: &[[u32; BINS]],
+    counts: Counts,
     bars: Rect,
-    left: Option<(String, Color32)>,
-    right: Option<(String, Color32)>,
 ) {
-    let painter = ui.painter();
-    let font = FontId::proportional(CLIP_TEXT);
-    for (words, at_right) in [(left, false), (right, true)] {
-        let Some((words, ink)) = words else {
-            continue;
-        };
-        let width = width_of(ui, &words, CLIP_TEXT);
-        let x = if at_right {
-            bars.right() - CLIP_INSET - width
-        } else {
-            bars.x + CLIP_INSET
-        };
-        let text = Rect::new(x, bars.y + CLIP_INSET, width, CLIP_TEXT);
-        painter.rect_filled(
-            egui::Rect::from(text.inset(-CLIP_PAD, -CLIP_PAD)),
-            CLIP_PAD,
-            PLOT_BACKGROUND.with_alpha(CLIP_BACKING_ALPHA),
-        );
-        painter.text(
-            pos2(text.x, text.y),
-            Align2::LEFT_TOP,
-            words,
-            font.clone(),
-            ink,
-        );
+    let grid = pass.grid;
+    let painter = ui
+        .painter()
+        .with_clip_rect(egui::Rect::from(bars.inset(-PLOT_INSET, -PLOT_INSET)));
+    // Luminance first, so that its line runs under the color planes'.
+    let planes: Vec<(&[u32; BINS], Color32)> = luma
+        .map(|luma| (luma, Color32::from(HISTOGRAM_LUMA.with_alpha(255))))
+        .into_iter()
+        .chain(
+            color
+                .iter()
+                .zip(HISTOGRAM_PLANES)
+                .map(|(plane, ink)| (plane, Color32::from(ink))),
+        )
+        .collect();
+    let columns: Vec<_> = grid.columns(bars.x, bars.width).collect();
+    let heights: Vec<Vec<f32>> = planes
+        .iter()
+        .map(|(plane, _)| {
+            let total = total(plane);
+            columns
+                .iter()
+                .map(|column| {
+                    counts.up(
+                        tallest(plane, bins_under(column.index, column.count)),
+                        total,
+                    )
+                })
+                .collect()
+        })
+        .collect();
+    for (plane, (_, ink)) in heights.iter().zip(&planes) {
+        let area = line_area(*ink);
+        for (column, &height) in columns.iter().zip(plane) {
+            let top = grid.snap(bars.bottom() - height.min(1.0) * bars.height);
+            if top < bars.bottom() {
+                painter.rect_filled(
+                    egui::Rect::from_min_max(
+                        pos2(column.left, top),
+                        pos2(column.right, bars.bottom()),
+                    ),
+                    0.0,
+                    area,
+                );
+            }
+        }
+    }
+    let width = grid.device_pixels(LINE_PIXELS);
+    for (plane, (_, ink)) in heights.iter().zip(&planes) {
+        let points: Vec<_> = columns
+            .iter()
+            .zip(plane)
+            .map(|(column, &height)| {
+                pos2(
+                    (column.left + column.right) / 2.0,
+                    bars.bottom() - height.min(1.0) * bars.height,
+                )
+            })
+            .collect();
+        painter.line(points, egui::Stroke::new(width, *ink));
+    }
+    for (index, column) in columns.iter().enumerate() {
+        if heights.iter().any(|plane| plane[index] > 1.0) {
+            painter.rect_filled(
+                egui::Rect::from_min_max(
+                    pos2(column.left, grid.snap(bars.y)),
+                    pos2(column.right, grid.snap(bars.y) + grid.line_width(CUT_CAP)),
+                ),
+                0.0,
+                pass.theme.accent,
+            );
+        }
     }
 }
 
@@ -604,24 +561,41 @@ pub(super) fn ev_scale(
     walk(start - 1, low, -1, &mut taken);
 }
 
-/// The line across the plot `bars` that marks white, `white` of the way up
-/// it, where white is not the top of the plot: on a surface with room above
-/// white, the room above it can then be seen as the room it is rather than
-/// as a clip that is not happening.
-pub(super) fn white_line(pass: &Pass, ui: &egui::Ui, bars: Rect, white: f32) {
+/// The rule that marks white on the plot `bars`, where white is not the top
+/// of the plot: `across` of the way along the axis, standing from the axis
+/// `up` of the way to the top, and named at its head. On a surface with
+/// room above white, the room past it can then be seen as the room it is
+/// rather than as a clip that is not happening. Upright, as the axis's own
+/// marks are: a rule across the plot would cross the bins as though it
+/// measured them.
+pub(super) fn white_mark(pass: &Pass, ui: &egui::Ui, bars: Rect, across: f32, up: f32) {
     let theme = pass.theme;
     let grid = pass.grid;
     let painter = ui.painter();
-    let y = grid.snap(bars.bottom() - white * bars.height);
+    let hair = grid.device_pixels(1.0);
+    let x = grid.snap(bars.x + across * bars.width);
+    let top = grid.snap(bars.bottom() - up * bars.height);
     painter.rect_filled(
-        egui::Rect::from(grid.rect(Rect::new(bars.x, y, bars.width, grid.device_pixels(1.0)))),
+        egui::Rect::from(grid.rect(Rect::new(x - hair / 2.0, top, hair, bars.bottom() - top))),
         0.0,
         theme.text_dim,
     );
+    // Named at its head. A rule that runs the plot's height is named beside
+    // its top, after it where the word fits and before it where it does
+    // not; one that stops at a curve is named above its head and before it,
+    // which is the side a curve rising to the right leaves clear.
     let size = TEXT_SIZE * 0.75;
+    let width = width_of(ui, WHITE_LABEL, size);
+    let (at, align) = if up < 1.0 {
+        (pos2(x - 3.0, top - 3.0), Align2::RIGHT_BOTTOM)
+    } else if x + 3.0 + width <= bars.right() - CLIP_INSET {
+        (pos2(x + 3.0, bars.y + CLIP_INSET), Align2::LEFT_TOP)
+    } else {
+        (pos2(x - 3.0, bars.y + CLIP_INSET), Align2::RIGHT_TOP)
+    };
     painter.text(
-        pos2(bars.right() - 2.0, y - size * 0.3),
-        Align2::RIGHT_BOTTOM,
+        at,
+        align,
         WHITE_LABEL,
         FontId::proportional(size),
         theme.text_dim.into(),
@@ -645,8 +619,8 @@ mod tests {
 
     /// A spike cannot set the scale: a picture spread evenly but for one
     /// bin holding most of it stands on a scale the even bins nearly fill,
-    /// and the spike runs past the top. The pile at either end, which the
-    /// corners say, is left out of the scale too.
+    /// and the spike runs past the top. The pile at either end is left out of
+    /// the scale too.
     #[test]
     fn a_spike_is_cut_off_rather_than_flattening_the_rest() {
         let mut counts = [100; BINS];
@@ -698,29 +672,11 @@ mod tests {
         assert_eq!(empty.up(0, 0), 0.0);
     }
 
-    /// What the three color planes come to where they overlap, screened in
-    /// the encoded values as [`screened`] screens them, the panel's painter
-    /// having one blend and that one on encoded colors.
-    fn overlapped(planes: [Color; COLOR]) -> [f32; 3] {
-        let mut out = [0.0f32; 3];
-        for (channel, value) in out.iter_mut().enumerate() {
-            *value = 1.0
-                - planes
-                    .iter()
-                    .map(|plane| 1.0 - [plane.r, plane.g, plane.b][channel] as f32 / 255.0)
-                    .product::<f32>();
-        }
-        out
-    }
-
-    /// Each plane leads in its own channel by a wide margin, so two
-    /// overlapping give a secondary and all three give a near white — and
-    /// none of them is the primary itself, which at a pixel to the bin is
-    /// a spike the eye cannot leave alone.
+    /// Each plane leads in its own channel by a wide margin, so three lines
+    /// crossing stay three — and none of them is the primary itself, which
+    /// at a pixel to the bin is a spike the eye cannot leave alone.
     #[test]
     fn the_color_planes_are_one_channel_each() {
-        let white = overlapped(HISTOGRAM_PLANES);
-        assert!(white.iter().all(|channel| *channel > 0.9), "{white:?}");
         for (channel, plane) in HISTOGRAM_PLANES.iter().enumerate() {
             let levels = [plane.r, plane.g, plane.b];
             for (other, level) in levels.iter().enumerate() {
@@ -734,9 +690,9 @@ mod tests {
         }
     }
 
-    /// The plane under them stands for a pixel's value, not for one of its
-    /// channels, so it carries no hue; and the ground they are screened on
-    /// is near black, or screening would not read.
+    /// The luminance plane stands for a pixel's value, not for one of its
+    /// channels, so it carries no hue; and the ground the planes are drawn
+    /// on is near black, or their faint areas would not read.
     #[test]
     fn the_luminance_plane_is_neutral_and_the_ground_is_dark() {
         let luma = HISTOGRAM_LUMA;

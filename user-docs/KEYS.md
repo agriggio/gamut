@@ -631,11 +631,7 @@ linear data — the band is which part of the range you are looking at. The
 handles are the window on every file, and the exposure is a separate thing
 on top of it: bringing the white handle in and raising the exposure make
 the same picture, but the window is found again when a file changes on disk
-or a *Window* rule is pressed, and the exposure survives that. The share
-of the picture the screen is throwing away is written in the top corners of
-the Output plot at the head of the panel — how much is at or below black on
-the left, how much is at or above white on the right — and only when there
-is any, so a number there is news. A row of stops under
+or a *Window* rule is pressed, and the exposure survives that. A row of stops under
 the Output and Display plots counts from white — 0 is what comes out white,
 `-2` is two stops under it, and on an HDR screen `+1` is a stop over — and
 the one under the gain map's plot counts how far the map lifts the picture.
@@ -651,9 +647,7 @@ blue where any has reached black. One channel is enough, because one is
 enough to lose the color: a sun whose red has burned out is painted red
 though its green never reached white, and the pink it shows is not what
 the scene held. The marks stay on until pressed off again, from one file
-to the next, and no reset of the display touches them. The paint and the
-corners of the plot count the same thing, a channel at a time, so the
-share in a corner is the share of the picture wearing the paint. A color
+to the next, and no reset of the display touches them. A color
 from a wide-gamut file — Display P3, Adobe RGB, a raw — that an ordinary
 monitor cannot show is painted too, since the screen loses it the same
 way. Neither marks white where nothing is being clipped: on

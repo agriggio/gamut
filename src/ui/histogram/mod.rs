@@ -99,9 +99,6 @@ const PLOT_RADIUS: f32 = 3.0;
 /// rather than as a hole cut in it.
 const PLOT_INSET: f32 = 4.0;
 
-/// What the luminance plane drops to once color planes are drawn over it.
-const HISTOGRAM_LUMA_UNDER: u8 = 110;
-
 /// The response curve's stroke, in logical pixels.
 const CURVE_WIDTH: f32 = 1.5;
 /// How far the outline the response curve is drawn over stands out on
@@ -117,16 +114,10 @@ const CURVE_OUTLINE: f32 = 1.0;
 const CURSOR_ALPHA: u8 = 190;
 const CURSOR_WIDTH: f32 = 1.0;
 
-/// What is written in the two top corners of a plot — the share of the
-/// picture clipped at either end, or the ends of the axis — what it is set
-/// at, how far in from the corner, and what is left around it inside the
-/// ground it is backed with: the plot's own, laid over whatever bar has
-/// climbed into the corner, so the number stays a number on a picture that
-/// has piled up at one end.
+/// The small words on a plot — the row of stops under it, the white mark's
+/// label — what they are set at, and how far in from the plot's edge.
 const CLIP_TEXT: f32 = TEXT_SIZE * 0.75;
 const CLIP_INSET: f32 = 3.0;
-const CLIP_PAD: f32 = 2.0;
-const CLIP_BACKING_ALPHA: u8 = 215;
 
 /// The band under a plot: how deep the color is, and how far it stands off
 /// the plot's ground. Deep enough to read a color off and to take hold of,
@@ -528,19 +519,6 @@ fn axis_words(current: &Current, encoded: f32) -> String {
     trimmed(format!("{value:.3}"))
 }
 
-/// The two ends of a plot of the image as stored or shown, as
-/// [`axis_words`] writes them, where they are worth writing: not on the
-/// axis a graded file always has. A graded file's plot runs from black to
-/// white, which every histogram of such a file does and no one needs told;
-/// a linear file's runs over whatever was measured, and what that was is
-/// the first thing to know about it.
-fn axis_ends(current: &Current, plot: &Plot) -> Option<[String; 2]> {
-    let transfer = current.image.color.transfer;
-    let nominal = plot.min == 0.0 && (transfer.to_linear(plot.max) - 1.0).abs() < 1e-6;
-    (!nominal && plot.max > plot.min)
-        .then(|| [plot.min, plot.max].map(|end| axis_words(current, end)))
-}
-
 /// A decimal with the zeros it does not need taken off the end: `0.500` is
 /// `0.5`, and `1.000` is `1`.
 fn trimmed(decimal: String) -> String {
@@ -551,10 +529,8 @@ fn trimmed(decimal: String) -> String {
     if trimmed == "-0" { "0" } else { trimmed }.to_string()
 }
 
-/// A share of the picture as the corner of the plot writes it, or `None`
-/// for none at all: the corner is empty where nothing is clipped, which is
-/// most of the time, and an empty corner is what makes a number in it
-/// something to look at.
+/// A share of the picture as the pointer's words write it — the share a
+/// bar cut off at the top holds — or `None` for none at all.
 ///
 /// A tenth of a percent where the share is small enough for the tenths to
 /// mean something, whole percents where they no longer do, and a floor

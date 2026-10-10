@@ -484,7 +484,7 @@ mod tests {
             assert!(theme.menu_background.a < 255);
         }
 
-        // Including on a light theme, where it is light: nothing is screened
+        // Including on a light theme, where it is light: nothing is drawn faint
         // onto it, so it has no reason to be dark.
         let light = Theme::from_palette(&palette(SPARSE));
         assert_eq!(light.mode, Mode::Light);
