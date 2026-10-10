@@ -104,6 +104,9 @@ const HISTOGRAM_LUMA_UNDER: u8 = 110;
 
 /// The response curve's stroke, in logical pixels.
 const CURVE_WIDTH: f32 = 1.5;
+/// How far the outline the response curve is drawn over stands out on
+/// either side of it.
+const CURVE_OUTLINE: f32 = 1.0;
 
 /// The rule that marks a value, and how wide it is. The accent, like the
 /// curve and the handles on the band: everything the panel draws over the

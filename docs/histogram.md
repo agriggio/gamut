@@ -132,8 +132,11 @@ picture's place, and its button is that switch.
 **Display** is `Face::stats`, what the display starts from: lifted through
 the gain map at the weight in force, in the working space's primaries — see
 [color management](color.md). It is the plot the window, the exposure and
-the curve act on, so it is drawn faded to a backdrop, with the response
-curve over it always, and the band and the rows under it.
+the curve act on, so the response curve is drawn over it always, and the
+band and the rows under it. Its bars are drawn as every other section's
+are, so that it compares with the Output's bar for bar; the curve stands
+off them on an outline in the plot's ground (`CURVE_OUTLINE`), which keeps
+it readable over the near white the three planes screen to.
 
 **Output** is the Display plot pushed through the display's response and
 encoded on sRGB's curve, over 0 to the surface's room above white

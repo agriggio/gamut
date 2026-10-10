@@ -163,7 +163,6 @@ pub(super) fn show(
         lift,
         plots.lift_counts,
         plot_rect,
-        false,
         &accent_rule(pass, mark),
     );
     let dim = Color32::from(pass.theme.text_dim);

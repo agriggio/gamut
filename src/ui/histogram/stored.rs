@@ -120,7 +120,7 @@ pub(super) fn show(
             .collect(),
         _ => accent_rule(pass, mark),
     };
-    bars(pass, ui, plotted, counts, plot_rect, false, &rules);
+    bars(pass, ui, plotted, counts, plot_rect, &rules);
     // The ends in the same units as the values: counts, or the number.
     let ends = axis_ends(current, plotted)
         .map(|_| [plotted.min, plotted.max].map(|end| stored_words(current, end)));

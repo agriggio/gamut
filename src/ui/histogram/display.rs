@@ -6,7 +6,7 @@
 
 use egui::{Align2, FontId, Stroke, pos2};
 
-use super::plot::{Counts, Past, Scale, band, bars, corners};
+use super::plot::{Counts, PLOT_BACKGROUND, Past, Scale, band, bars, corners};
 use super::slider::slider;
 use super::track::track;
 use super::*;
@@ -270,7 +270,7 @@ pub(super) fn pixel_mark(current: &Current, headroom: Headroom, x: u32, y: u32) 
 }
 
 /// The Display section, laid out at `rect`: the picture as the display
-/// starts from it, faded to a backdrop for the response curve over it; the
+/// starts from it, with the response curve over it on a dark outline; the
 /// band of what each value comes out as, with the window's two handles on
 /// it; the row of false colors on a gray image; and the rows under them.
 pub(super) fn show(
@@ -290,7 +290,6 @@ pub(super) fn show(
         plotted,
         counts,
         plot_rect,
-        true,
         &accent_rule(pass, mark),
     );
     let dim = Color32::from(pass.theme.text_dim);
@@ -437,7 +436,16 @@ fn curve(pass: &Pass, ui: &egui::Ui, current: &Current, bars: Rect) {
             )
         })
         .collect();
-    ui.painter().add(egui::Shape::line(
+    // Over an outline in the plot's ground, so that the line stands off
+    // whatever bar it crosses — the three planes screened to a near white
+    // as much as the ground itself — and the bars under it can be drawn as
+    // every other section's are rather than dimmed to make room for it.
+    let painter = ui.painter();
+    painter.add(egui::Shape::line(
+        points.clone(),
+        Stroke::new(CURVE_WIDTH + 2.0 * CURVE_OUTLINE, PLOT_BACKGROUND),
+    ));
+    painter.add(egui::Shape::line(
         points,
         Stroke::new(CURVE_WIDTH, theme.accent),
     ));

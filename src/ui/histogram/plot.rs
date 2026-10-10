@@ -252,25 +252,18 @@ fn share_of(count: u32, total: u64) -> f32 {
     }
 }
 
-/// What a backdrop's bins are faded to, as a share of the way from the
-/// plot's ground to their own color: the display's plot, which is what the
-/// curve over it is read against rather than a reading of its own.
-const BACKDROP: f32 = 0.55;
-
 /// The bins of `plotted` across `bars` on the column's scale `counts`,
 /// standing on the plot's ground, with `rules` over them, each a bin and its
 /// ink: the luminance plane under the color ones, each where the panel's
 /// toggles have it, at one column to a device pixel, and a cap in the accent
-/// along the top of a column cut off there.
-/// `backdrop` fades them toward the ground, for a plot whose bins are what
-/// something drawn over them is read against.
+/// along the top of a column cut off there. Drawn alike in every section, so
+/// that a bar reads the same down the column.
 pub(super) fn bars(
     pass: &Pass,
     ui: &egui::Ui,
     plotted: &Plot,
     counts: Counts,
     bars: Rect,
-    backdrop: bool,
     rules: &[(usize, Color32)],
 ) {
     let panels = pass.panels;
@@ -294,19 +287,12 @@ pub(super) fn bars(
     let luma_total = luma.map(total);
     let color_totals: Vec<u64> = color.iter().map(total).collect();
 
-    // Dimmed only when it is a backdrop; with the color planes off — or on
-    // a gray image, which has none — it is the plot.
+    // Held back under the color planes; with them off — or on a gray
+    // image, which has none — it is the plot.
     let luma_ink = if color.is_empty() {
         HISTOGRAM_LUMA
     } else {
         HISTOGRAM_LUMA.with_alpha(HISTOGRAM_LUMA_UNDER)
-    };
-    let faded = |ink: Color32| {
-        if !backdrop {
-            return ink;
-        }
-        let ground = Color32::from(PLOT_BACKGROUND);
-        ground.lerp_to_gamma(ink, BACKDROP)
     };
 
     // One column to a device pixel — the bins are a point each, which is
@@ -343,7 +329,7 @@ pub(super) fn bars(
                 painter.rect_filled(
                     egui::Rect::from_min_max(pos2(left, top), pos2(right, bottom)),
                     0.0,
-                    faded(screened(luma_ink, cover)),
+                    screened(luma_ink, cover),
                 );
             }
             from = height;

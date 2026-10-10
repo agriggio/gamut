@@ -221,7 +221,6 @@ pub(super) fn show(
         &binned.plot,
         plots.counts,
         plot_rect,
-        false,
         &accent_rule(pass, mark),
     );
 
