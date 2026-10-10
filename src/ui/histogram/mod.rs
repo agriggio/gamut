@@ -425,9 +425,11 @@ impl Traced {
 struct Plots<'a> {
     pub output: &'a output::Binned,
     pub lift: Option<&'a Plot>,
-    /// The count axis the picture's plots stand on, and the one the gain
-    /// map's does.
+    /// The count axis the input's two plots — the Display's and the
+    /// Image's — share, and the ones the Output's and the gain map's each
+    /// stand on alone.
     pub counts: plot::Counts,
+    pub output_counts: plot::Counts,
     pub lift_counts: plot::Counts,
 }
 
@@ -473,8 +475,9 @@ fn marked(
             // A bar cut off at the top says how much it holds, which its
             // height no longer can.
             let counts = match section {
+                Section::Output => plots.output_counts,
                 Section::GainMap => plots.lift_counts,
-                _ => plots.counts,
+                Section::Display | Section::Image => plots.counts,
             };
             let cut = plotted.and_then(|plotted| counts.cut_at(plotted, bin, &shown));
             if let Some(words) = cut.and_then(share_words) {
@@ -641,7 +644,8 @@ fn column(pass: &mut Pass, ui: &mut egui::Ui, current: &Current) {
     let plots = Plots {
         output: &binned,
         lift: lift.as_deref(),
-        counts: picture_counts(current, &binned),
+        counts: input_counts(current),
+        output_counts: plot::Counts::of(&binned.plot),
         lift_counts: lift
             .as_deref()
             .map_or(plot::Counts::of(&current.stored.plot), plot::Counts::of),
@@ -679,14 +683,12 @@ fn column(pass: &mut Pass, ui: &mut egui::Ui, current: &Current) {
     }
 }
 
-/// The count axis the picture's plots share down the column: the one that
-/// cuts off no more than a spike or two on any of them — on the Output's,
-/// which an HDR surface's room squeezes into less of its width, as on the
-/// file's own. Worked out again each pass, from the plots on screen.
-fn picture_counts(current: &Current, binned: &output::Binned) -> plot::Counts {
-    plot::Counts::of(&current.stored.plot)
-        .wider(plot::Counts::of(&current.stats.plot))
-        .wider(plot::Counts::of(&binned.plot))
+/// The count axis the Display and Image plots share: the one that cuts off
+/// no more than a spike or two on either. Both are the input, which nothing
+/// set on the panel changes, so it holds still while the window, the
+/// exposure and the curve are dragged about.
+fn input_counts(current: &Current) -> plot::Counts {
+    plot::Counts::of(&current.stored.plot).wider(plot::Counts::of(&current.stats.plot))
 }
 
 /// A button on the panel at `rect`: its ground and ink by whether it is

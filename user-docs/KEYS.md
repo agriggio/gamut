@@ -763,10 +763,10 @@ bring them back: `` ` `` and `Esc`. It appears once — after that you know — 
 the message is still up puts them on screen rather than only taking the message
 off.
 
-The histogram's bars are linear, and all of the picture's plots share one
-scale, so a bar of the same height holds the same share of the picture in
-every section: where the curve crowds the highlights together, their bars
-stand taller on Output than on Display. A spike that holds far more than
+The histogram's bars are linear. Display and Image share one scale, so a
+bar of the same height holds the same share of the picture in both, and the
+scale stays put while you change the display. Output is scaled to fill its
+plot whatever the display does to the picture. A spike that holds far more than
 the rest — a flat sky, the black surround of a scan — runs off the top
 rather than flattening everything else. It is capped in the accent color,
 and with the pointer on it the section's heading says what share of the

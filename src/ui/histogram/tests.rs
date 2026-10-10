@@ -443,7 +443,8 @@ fn a_pixel_is_traced_down_every_section() {
     let plots = Plots {
         output: &binned,
         lift: lift.as_ref(),
-        counts: picture_counts(&current, &binned),
+        counts: input_counts(&current),
+        output_counts: plot::Counts::of(&binned.plot),
         lift_counts: plot::Counts::of(lift.as_ref().unwrap()),
     };
 
@@ -607,7 +608,8 @@ fn a_bar_cut_off_says_its_share() {
     let plots = Plots {
         output: &binned,
         lift: None,
-        counts: picture_counts(&current, &binned),
+        counts: input_counts(&current),
+        output_counts: plot::Counts::of(&binned.plot),
         lift_counts: plot::Counts::of(&current.stored.plot),
     };
     let bars = Section::Image.plot(rect_of(&layout, Section::Image));
@@ -633,4 +635,40 @@ fn a_bar_cut_off_says_its_share() {
     };
     assert_eq!(words_at(200), "50% · 200");
     assert_eq!(words_at(100), "100");
+}
+
+/// The input's scale holds still while the display is set, and the
+/// Output's follows what goes out: a stop of exposure up spreads the
+/// picture over more of the Output's axis, and its scale comes down with it
+/// rather than leaving the bars short of the top.
+#[test]
+fn the_output_scale_follows_the_display_and_the_inputs_holds_still() {
+    // A ramp of many values to a bin, as a photograph's are, rather than a
+    // code to one, which a stretch would only spread into a comb.
+    let data: Vec<u16> = (0..4096u32)
+        .map(|x| (x * 16) as u16)
+        .flat_map(|value| [value; 3])
+        .collect();
+    let mut current = shown(DecodedImage::new(
+        4096,
+        1,
+        Samples::U16 {
+            channels: Channels::Rgb,
+            data,
+        },
+        ColorSpace::SRGB,
+        AlphaMode::Opaque,
+    ));
+    let top = |counts: plot::Counts| 1.0 / counts.up(1, 1);
+    let input = input_counts(&current);
+    let output = top(plot::Counts::of(
+        &output::binned_for(&current, Headroom::None, 1.0).plot,
+    ));
+
+    current.shown.display.set_exposure(1.0);
+    assert_eq!(input_counts(&current), input);
+    let brighter = top(plot::Counts::of(
+        &output::binned_for(&current, Headroom::None, 1.0).plot,
+    ));
+    assert!(brighter < output, "{brighter} against {output}");
 }

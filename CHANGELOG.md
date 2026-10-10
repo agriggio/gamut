@@ -40,9 +40,10 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
   screen — and for the gain map in stops of lift. On an HDR screen, the
   part of the Output band past white, which the panel can only draw at
   white, is overlaid with right-pointing chevrons to show it is lifted.
-- The histogram's plots of the picture share one linear scale, so a bar of
-  the same height is the same share of the picture in every section. A
-  spike far fuller than the rest runs off the top of the plot, capped in the
+- The histogram's bars are linear. The Display and Image plots share one
+  scale, so a bar of the same height is the same share of the picture in
+  both, and it stays put while the display is changed; Output is scaled to
+  fill its plot whatever the display does. A spike far fuller than the rest runs off the top of the plot, capped in the
   accent color, rather than flattening the rest, and with the pointer on it
   the section's heading gives the share it holds.
 

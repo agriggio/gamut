@@ -572,30 +572,35 @@ each as tall as the fullest bin under it (`plot::bins_under`,
 fractional scale, and the feathering shows as a comb, where a column to the
 pixel is even at any scale; and taking the fullest bin rather than the mean
 keeps a spike from being averaged away where a column is wider than a bin.
-At one device pixel to the point the two are the same picture.
+At one device pixel to the point the two are the same picture. The bands
+under the plots and a ramp's swatch are cut the same way, which is why
+nothing here smooths the plot.
 
-### One count axis down the column
+### The count axes
 
-A bar's height is the share of its plane's pixels in its bin, against a
-top that the picture's three plots share (`plot::Counts`,
-`histogram::picture_counts`): the Image, the Display and the Output plots
-stand on one scale, so a bar of one height is the same share of the picture
-in each. That is what makes the column read as a pipeline — a curve that
-piles the highlights up makes the Output's bars there taller than the
-Display's, and one that spreads the shadows makes them shorter — where a plot
-scaled to its own fullest bin hides it, each filling its height whatever the
-stage did.
+A bar's height is the share of its plane's pixels in its bin, against a top
+(`plot::Counts`). The input's two plots, the Display's and the Image's,
+share one (`histogram::input_counts`), so a bar of one height is the same
+share of the picture in each, and what the gain map's lift and the working
+space do to the file read as bars growing or shrinking between them. Both
+are the input, which nothing set on the panel changes, so their scale holds
+still while the window, the exposure and the curve are dragged about.
 
-Each plot proposes a top: of its bins holding anything inside the two end
-bins, across every plane, the fullest fiftieth (`plot::CUT`) stand past it.
-The ends are left out because what the window throws away piles up there,
-and the Output's corners already say how much. The column takes the highest
-of the three, the one cutting the fewest bars off: on an HDR surface the
-Output's axis runs up to the room, its picture squeezed into part of the
-width and its bars taller, and a top set by the file alone would cut a third
-of them. A bar past the top runs to it with a cap in the accent, and the
-pointer on it puts its share in the header ahead of the bin's value, which
-is all the height of a cut bar no longer says.
+The Output's top is its own, worked out again from what goes out. A scale
+held to the input's is the wrong one for it: a display that stretches the
+picture — a stop of exposure up, a narrowed window — spreads it over more of
+the Output's axis, and its bars would fall to a tenth of the plot, on the
+section that answers the panel's main question, while it is being set. The comparison it gave up, Display against Output
+bar for bar, is what the curve over the Display plot already draws.
+
+Each top is set the same way: of a plot's bins holding anything inside the
+two end bins, across every plane, the fullest fiftieth (`plot::CUT`) stand
+past it, and two plots sharing one take the higher (`Counts::wider`), the one
+cutting fewer bars off. The ends are left out because what the window throws
+away piles up there, and the Output's corners already say how much. A bar
+past the top runs to it with a cap in the accent, and the pointer on it puts
+its share in the header ahead of the bin's value, which is all the height of
+a cut bar no longer says.
 
 Linear, because heights only compare linearly. A logarithmic switch was the
 plot's answer to one bin flattening the rest — a masked sea, a scan's
@@ -604,7 +609,5 @@ distribution, and the spike says what it holds when asked.
 
 The gain map's plot has a top of its own, worked out the same way: it is of
 another image, the map, in stops of lift, and no height on it compares with
-one on the picture's. The bands
-under the plots and a ramp's swatch are cut the same way, which is why
-nothing here smooths the plot.
+one on the picture's.
 

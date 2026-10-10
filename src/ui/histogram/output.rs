@@ -219,7 +219,7 @@ pub(super) fn show(
         pass,
         ui,
         &binned.plot,
-        plots.counts,
+        plots.output_counts,
         plot_rect,
         &accent_rule(pass, mark),
     );

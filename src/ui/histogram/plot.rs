@@ -151,12 +151,14 @@ const CUT_CAP: f32 = 2.0;
 
 /// The count axis a plot stands on: a bar's height is the share of its
 /// plane's pixels in its bin, and `top` is the share a bar reaching the top
-/// of a plot holds. One for every plot of the picture down the column —
-/// the Output, the Display and the Image — so that a bar of the same height
-/// is the same share of the picture in each, and the curve piling the
-/// highlights up or spreading the shadows out reads as bars growing or
-/// shrinking between the Display and the Output plots. The gain map's plot,
-/// of another image in other units, stands on one of its own.
+/// of a plot holds. The input's two plots — the Display's and the Image's —
+/// share one, so that a bar of the same height is the same share of the
+/// picture in each, and what the gain map's lift and the working space do
+/// to the file read as bars growing or shrinking between them. The Output's
+/// stands on its own, set afresh from what goes out: the display spreads
+/// and piles the picture up as it is set, and a scale held to the input's
+/// would leave a stretched Output a sliver along the axis. The gain map's,
+/// of another image in other units, stands on its own too.
 ///
 /// Linear, as a photo editor's is: heights compare as the counts do. A bar
 /// fuller than the top runs to it and is capped there, and its share is
@@ -199,7 +201,7 @@ impl Counts {
         Self { top }
     }
 
-    /// The scale of the two that cuts fewer bars off: the one plots on
+    /// The scale of the two that cuts fewer bars off: the one two plots on
     /// different axes share, set by whichever of them piles its pixels up
     /// the most.
     pub(super) fn wider(self, other: Self) -> Self {
