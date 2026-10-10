@@ -141,7 +141,7 @@ pub(super) fn show(
             .collect(),
         _ => accent_rule(pass, mark),
     };
-    bars(pass, ui, plotted, counts, plot_rect, &rules);
+    bars(pass, ui, Section::Image, plotted, counts, plot_rect, &rules);
     plot::value_scale(
         pass,
         ui,

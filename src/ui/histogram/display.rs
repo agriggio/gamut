@@ -287,6 +287,7 @@ pub(super) fn show(
     bars(
         pass,
         ui,
+        Section::Display,
         plotted,
         counts,
         plot_rect,

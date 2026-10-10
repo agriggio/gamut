@@ -229,11 +229,13 @@ fn line_area(ink: Color32) -> Color32 {
 
 /// The bins of `plotted` across `bars` on the column's scale `counts`, on
 /// the plot's ground, as [`lines`] draws them, with `rules` over them, each
-/// a bin and its ink. Drawn alike in every section, so
-/// that a bar reads the same down the column.
+/// a bin and its ink, gliding to it as [`glided`] has them in `section`.
+/// Drawn alike in every section, so that a bar reads the same down the
+/// column.
 pub(super) fn bars(
     pass: &Pass,
     ui: &egui::Ui,
+    section: Section,
     plotted: &Plot,
     counts: Counts,
     bars: Rect,
@@ -254,11 +256,69 @@ pub(super) fn bars(
     };
 
     lines(pass, ui, luma, color, counts, bars);
-    rule_over(pass, ui, bars, rules);
+    rule_over(pass, ui, section, bars, rules);
 }
 
-/// The pointer's rule across `bars`, each a bin and its ink.
-fn rule_over(pass: &Pass, ui: &egui::Ui, bars: Rect, rules: &[(usize, Color32)]) {
+/// How long a rule takes to follow the pointer to its next bin, in seconds:
+/// long enough to be seen moving rather than jumping, short enough never to
+/// trail the hand.
+const RULE_GLIDE: f64 = 0.1;
+
+/// A rule on its way from one place on the axis to another, as fractions of
+/// the way along it: where it set off from, where it is going, when it set
+/// off, and the last frame it was drawn on.
+#[derive(Clone, Copy)]
+struct Glide {
+    from: f32,
+    to: f32,
+    start: f64,
+    frame: u64,
+}
+
+impl Glide {
+    /// Where the rule is at `now`: easing out, quick to leave and slow to
+    /// arrive, so that it settles rather than stops.
+    fn at(self, now: f64) -> f32 {
+        let t = ((now - self.start) / RULE_GLIDE).clamp(0.0, 1.0) as f32;
+        let eased = 1.0 - (1.0 - t).powi(3);
+        self.from + (self.to - self.from) * eased
+    }
+}
+
+/// Where the rule `id` is drawn on its way to `target`, a fraction of the
+/// way along the axis, with another frame asked for while it is still
+/// moving. A rule that was not drawn on the frame before — the pointer
+/// arriving on the picture or the plot, or coming back to it — stands at
+/// once where it is going rather than gliding in from where it was last.
+fn glided(ui: &egui::Ui, id: egui::Id, target: f32) -> f32 {
+    let ctx = ui.ctx();
+    let now = ui.input(|input| input.time);
+    let frame = ctx.cumulative_frame_nr();
+    let glide = match ctx.data(|data| data.get_temp::<Glide>(id)) {
+        Some(held) if held.frame + 1 >= frame && held.to == target => Glide { frame, ..held },
+        Some(held) if held.frame + 1 >= frame => Glide {
+            from: held.at(now),
+            to: target,
+            start: now,
+            frame,
+        },
+        _ => Glide {
+            from: target,
+            to: target,
+            start: now,
+            frame,
+        },
+    };
+    ctx.data_mut(|data| data.insert_temp(id, glide));
+    let shown = glide.at(now);
+    if shown != glide.to {
+        ctx.request_repaint();
+    }
+    shown
+}
+
+/// The pointer's rule across `bars` in `section`, each a bin and its ink.
+fn rule_over(pass: &Pass, ui: &egui::Ui, section: Section, bars: Rect, rules: &[(usize, Color32)]) {
     let grid = pass.grid;
     let painter = ui.painter();
     // The pointer's rule: over the bins it is picking one of, and under
@@ -269,8 +329,17 @@ fn rule_over(pass: &Pass, ui: &egui::Ui, bars: Rect, rules: &[(usize, Color32)])
     // rule standing through the plot is what a pointer wants and what a
     // permanent annotation does not: this one is only there while it is
     // being aimed, and it has to be followed up from the axis to the curve.
+    //
+    // Each glides to its bin rather than jumping, so that a pointer swept
+    // across the picture is followed by rules moving down the column rather
+    // than by rules flickering from place to place. A rule is known by its
+    // section and its ink, which is its plane, or the accent.
     for &(bin, ink) in rules {
-        let across = bin_across(bin);
+        let across = glided(
+            ui,
+            egui::Id::new(("histogram rule", section, ink)),
+            bin_across(bin),
+        );
         painter.rect_filled(
             egui::Rect::from(grid.rect(Rect::new(
                 bars.x + across * bars.width - CURSOR_WIDTH / 2.0,
@@ -824,5 +893,33 @@ mod tests {
                 "{bin}"
             );
         }
+    }
+
+    /// A rule stands at once where it first appears and where it comes back
+    /// after a frame without it, and glides between bins otherwise, easing
+    /// out and arriving on time.
+    #[test]
+    fn rules_glide_between_bins_and_stand_where_they_appear() {
+        let ctx = egui::Context::default();
+        let id = egui::Id::new("rule");
+        let shown = |time: f64, target: Option<f32>| {
+            let input = egui::RawInput {
+                time: Some(time),
+                ..Default::default()
+            };
+            let mut at = None;
+            let mut output = ctx.run_ui(input, |ui| {
+                at = target.map(|target| glided(ui, id, target));
+            });
+            output.textures_delta.clear();
+            at
+        };
+        assert_eq!(shown(0.0, Some(0.2)), Some(0.2), "appears in place");
+        assert_eq!(shown(0.01, Some(0.6)), Some(0.2), "sets off from there");
+        let early = shown(0.01 + RULE_GLIDE / 4.0, Some(0.6)).unwrap();
+        assert!(early > 0.2 + 0.4 / 4.0 && early < 0.6, "{early}");
+        assert_eq!(shown(0.01 + RULE_GLIDE, Some(0.6)), Some(0.6), "arrives");
+        assert_eq!(shown(0.1, None), None);
+        assert_eq!(shown(0.11, Some(0.9)), Some(0.9), "comes back in place");
     }
 }

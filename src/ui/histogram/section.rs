@@ -15,7 +15,7 @@ use super::*;
 /// on a picture with none — and one a later change adds goes in where it
 /// stands in the flow, between the display and the file, at a height of its
 /// own.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Section {
     /// What goes out to the screen: the display's response to every value,
     /// clipped where the surface stops.

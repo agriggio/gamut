@@ -216,6 +216,7 @@ pub(super) fn show(
     bars(
         pass,
         ui,
+        Section::Output,
         &binned.plot,
         plots.output_counts,
         plot_rect,

@@ -160,6 +160,7 @@ pub(super) fn show(
     bars(
         pass,
         ui,
+        Section::GainMap,
         lift,
         plots.lift_counts,
         plot_rect,
