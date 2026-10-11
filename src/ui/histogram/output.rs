@@ -232,14 +232,18 @@ pub(super) fn show(
     // The row of stops under the band: 0 at white, below it how far under
     // white an output is, and on a surface with room above white how far
     // past it the screen goes, up to the room. Exact, the output's values
-    // being ratios to white already.
-    plot::ev_scale(
-        pass,
-        ui,
-        ev_row(plot_rect, ramp(plot_rect).bottom()),
-        -24..=binned.room.log2().ceil() as i32,
-        |stop| Some(ENCODING.to_encoded((stop as f32).exp2()) / top),
-    );
+    // being ratios to white already. Left off a measurement, as the
+    // Display section's row is: its values are quantities rather than
+    // light, and stops of the screen's light would read as stops of them.
+    if current.image.referred != crate::image::Referred::Measured {
+        plot::ev_scale(
+            pass,
+            ui,
+            ev_row(plot_rect, ramp(plot_rect).bottom()),
+            -24..=binned.room.log2().ceil() as i32,
+            |stop| Some(ENCODING.to_encoded((stop as f32).exp2()) / top),
+        );
+    }
 
     // What each output comes out as, along the foot: gray from black to
     // white, chevrons in the accent over the stretch past white where the
