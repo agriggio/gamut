@@ -591,24 +591,38 @@ fn a_toggle_with_no_room_for_its_panel_is_dead() {
 /// The band under the histogram is the levels track. A handle dragged
 /// along it asks for a window whose end is where the hand is; the band
 /// between the handles slides both ends by what the hand moved; and the
-/// exposure's slider asks for the exposure under the hand. Every file has
-/// the three rows under the band, an 8-bit sRGB one included, and a press
-/// on a window's button reaches the application.
+/// exposure's slider asks for the exposure under the hand. A photo has the
+/// exposure and the curve under the band and no row of windows — its
+/// window is as stored and the handles' — and a press on a curve's button
+/// reaches the application; the pair at the head of the panel says the
+/// file is read as a photo, and a press on the other reading reaches it.
 #[test]
 fn the_histogram_panel_hands_back_the_hand_on_its_band() {
     use crate::image::Transfer;
+    use crate::image::decode::Reading;
 
     let mut with_histogram = panels();
     with_histogram.side = Some(super::side::Side::Histogram);
     let mut harness = open(WINDOW, 1, with_histogram);
     assert!(
-        harness.query_by_label("Window 0").is_some(),
-        "every file has the window row"
+        harness.query_by_label("Window 0").is_none(),
+        "a photo has no window row"
     );
     assert!(harness.query_by_label("Curve 0").is_some());
     assert_eq!(
-        click(&mut harness, "Window 0"),
-        [Command::Press(Control::Window(0))]
+        click(&mut harness, "Curve 0"),
+        [Command::Press(Control::Curve(0))]
+    );
+    let lit = |harness: &Harness<'static, State>, label: &str| {
+        matches!(
+            harness.get_by_label(label).accesskit_node().toggled(),
+            Some(egui::accesskit::Toggled::True)
+        )
+    };
+    assert!(lit(&harness, "Read as photo") && !lit(&harness, "Read as data"));
+    assert_eq!(
+        click(&mut harness, "Read as data"),
+        [Command::Press(Control::Reading(Reading::Data))]
     );
 
     // The file is 8-bit sRGB, so the axis is 0..1 in sRGB and the two
@@ -836,7 +850,7 @@ fn the_side_panel_waits_for_the_file_coming_in() {
         .expect("the side panel is up")
         .outer_rect;
     assert_eq!(full.max.y, side.max.y, "down the whole of the side");
-    assert!(harness.query_by_label("Window 0").is_some());
+    assert!(harness.query_by_label("Curve 0").is_some());
     assert!(
         harness.query_by_label("Copy All").is_none(),
         "one at a time"
@@ -864,7 +878,9 @@ fn the_side_panel_waits_for_the_file_coming_in() {
 }
 
 /// And on a gray measurement, which the gray ramp clips the same way; the
-/// false colors stay live on both.
+/// false colors stay live on both. A measurement is read as data, which
+/// the pair at the head of the panel says, and has the row of windows,
+/// which a photo has not.
 #[test]
 fn the_curves_are_dead_under_a_false_color() {
     use crate::image::Referred;
@@ -901,6 +917,21 @@ fn the_curves_are_dead_under_a_false_color() {
     }
     assert_eq!(click(&mut harness, "Curve 1"), []);
     assert!(!dead(&harness, "False color 0"));
+    let lit = |harness: &Harness<'static, State>, label: &str| {
+        matches!(
+            harness.get_by_label(label).accesskit_node().toggled(),
+            Some(egui::accesskit::Toggled::True)
+        )
+    };
+    assert!(lit(&harness, "Read as data") && !lit(&harness, "Read as photo"));
+    assert!(
+        harness.query_by_label("Window 0").is_some(),
+        "data has the row of windows"
+    );
+    assert_eq!(
+        click(&mut harness, "Window 0"),
+        [Command::Press(Control::Window(0))]
+    );
     // And so is the exposure's slider, a measurement having no light to
     // push: a drag along it asks for nothing.
     assert!(dead(&harness, "Exposure"));
@@ -922,6 +953,8 @@ fn the_curves_are_dead_under_a_false_color() {
     harness.run();
     assert!(!dead(&harness, "Curve 1"));
     assert!(!dead(&harness, "Exposure"));
+    assert!(lit(&harness, "Read as photo") && !lit(&harness, "Read as data"));
+    assert!(harness.query_by_label("Window 0").is_none());
     assert_eq!(
         click(&mut harness, "Curve 1"),
         [Command::Press(Control::Curve(1))]

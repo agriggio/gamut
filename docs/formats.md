@@ -283,10 +283,16 @@ a measurement carries none, and a picture out of Lightroom or Photoshop
 carries the one it was graded in, so `tiff_rs::color_space` reads it through
 `icc::color_space` with sRGB assumed for whatever it does not state, at any
 depth — `tiff-icc-p3-16.tif` is the 16-bit file that would otherwise be
-taken for linear counts. Without a profile, depth is the best signal there
-is: 8-bit files are overwhelmingly pictures and deeper ones overwhelmingly
-measurements, and `--transfer` is the override for the 16-bit scan saved
-without one.
+taken for linear counts. Without a profile, the layout is the best signal
+there is: 8-bit files are overwhelmingly pictures, and so are 16-bit files
+of three colors, which is what a scan or an editor's export saved without
+its profile looks like, where a measurement is nearly always one channel or
+floats; a file that carries GeoTIFF's key directory (34735) or GDAL's
+no-data value is data whatever its layout, a three-band satellite composite
+being the 16-bit RGB file that is counts after all. The *Photo* / *Data*
+switch and `--transfer` are the overrides for the 16-bit gray scan, or the
+RGB file of counts with no georeference, that the guess gets wrong; see
+[color](color.md#display-referred-scene-referred-and-measured).
 
 A TIFF is a chain of directories, and where there is more than one they are
 pages: `sequence` walks the chain reading directories only, and

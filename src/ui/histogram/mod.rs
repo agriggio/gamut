@@ -27,6 +27,8 @@ use plot::{HISTOGRAM_LUMA, HISTOGRAM_PLANES, bin_across};
 
 use egui::{Color32, FontId, Sense, WidgetInfo, WidgetType, pos2};
 
+use crate::image::auxiliary::Showing;
+use crate::image::decode::Reading;
 use crate::image::display::{AutoWindow, EV_STEP};
 use crate::image::stats::{BINS, Plot};
 use crate::render::Color;
@@ -60,7 +62,7 @@ const TOOLBAR_HEIGHT: f32 = CHIP_HEIGHT;
 /// before the toggle is alive — see [`super::PANELS_ROOM`]. The rest of the
 /// column scrolls under the row.
 pub const MIN_HEIGHT: f32 =
-    2.0 * PANEL_INSET + TOOLBAR_HEIGHT + HEADER_GAP + Section::Output.height(false);
+    2.0 * PANEL_INSET + TOOLBAR_HEIGHT + HEADER_GAP + Section::Output.height(false, false);
 
 /// The line a section opens with: its mark and name, what the pointer is
 /// reading at its stage, and the section's own button where it has one. As
@@ -215,19 +217,37 @@ pub fn panel(side: Rect) -> Rect {
 }
 
 /// The buttons at the head of the panel, each with where it goes in the row
-/// `row`: the marks on the picture at the start, and at the far end the
-/// reset, which does something rather than being something.
+/// `row`: the pair that reads the file as a photo or as data at the start,
+/// upstream of everything under it, and at the far end the reset, which
+/// does something rather than being something, with the marks on the
+/// picture just before it.
 ///
 /// They act on every plot down the column, or on the picture, and on no
 /// one section, so they stand above all of them, where they stay in view
 /// however far the column is scrolled.
-fn toolbar(row: Rect) -> [(Control, Rect); 2] {
+fn toolbar(row: Rect) -> [(Control, Rect); 4] {
     let square = |x: f32| Rect::new(x, row.y, TOOLBAR_HEIGHT, TOOLBAR_HEIGHT);
+    let cell = |index: f32| {
+        Rect::new(
+            row.x + index * (READING_CELL + CELL_GAP),
+            row.y,
+            READING_CELL,
+            TOOLBAR_HEIGHT,
+        )
+    };
+    let reset = square(row.right() - TOOLBAR_HEIGHT);
     [
-        (Control::Marks, square(row.x)),
-        (Control::Reset, square(row.right() - TOOLBAR_HEIGHT)),
+        (Control::Reading(Reading::Photo), cell(0.0)),
+        (Control::Reading(Reading::Data), cell(1.0)),
+        (Control::Marks, square(reset.x - CELL_GAP - TOOLBAR_HEIGHT)),
+        (Control::Reset, reset),
     ]
 }
+
+/// How wide each cell of the pair at the head of the row is: room for
+/// either word at [`ROW_TEXT`], and the same for both so the pair reads as
+/// one switch.
+const READING_CELL: f32 = 48.0;
 
 /// One of `count` cells dividing `row` between them, with [`CELL_GAP`]
 /// between neighbors. What every row of buttons on this panel is set out
@@ -550,7 +570,7 @@ pub(super) fn show(pass: &mut Pass, ui: &mut egui::Ui, current: &Current, side: 
         // information panel's header is, so that the reset ends where its
         // copy button does.
         let row = Rect::new(row.min.x, row.min.y, row.width(), TOOLBAR_HEIGHT);
-        toolbar_buttons(pass, ui, row);
+        toolbar_buttons(pass, ui, current, row);
         // The hairline under the row, as under the information panel's
         // header: the column runs on under it rather than stopping short.
         ui.add_space((HEADER_GAP - RULE_WIDTH) / 2.0);
@@ -674,9 +694,30 @@ fn button(
 ///
 /// Drawn here rather than with the chrome's toggles because these belong to
 /// the panel.
-fn toolbar_buttons(pass: &mut Pass, ui: &mut egui::Ui, row: Rect) {
+fn toolbar_buttons(pass: &mut Pass, ui: &mut egui::Ui, current: &Current, row: Rect) {
     let panels = pass.panels;
+    let reading = Reading::of(&current.image);
     for (widget, rect) in toolbar(row) {
+        // The pair at the head: the reading in force lit, the words on
+        // them, and both dead while a map is shown in the picture's place,
+        // which is data whatever the picture is read as.
+        if let Control::Reading(choice) = widget {
+            let enabled = current.showing == Showing::Picture;
+            let active = reading == choice;
+            let (_, _, ink) = button(pass, ui, rect, widget, active, enabled, TOGGLE_RADIUS);
+            let word = match choice {
+                Reading::Photo => "Photo",
+                Reading::Data => "Data",
+            };
+            ui.painter().text(
+                egui::Rect::from(rect).center(),
+                egui::Align2::CENTER_CENTER,
+                word,
+                FontId::proportional(ROW_TEXT),
+                ink,
+            );
+            continue;
+        }
         // The reset is never lit, where the toggle is: it does something
         // rather than being something, and a momentary button holding a
         // state is a button that has to explain itself.

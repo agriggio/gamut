@@ -4,6 +4,7 @@
 use egui::{Align2, FontId, pos2};
 
 use super::*;
+use crate::image::Referred;
 use crate::image::auxiliary::{Auxiliary, Showing};
 
 /// One stage of the picture's way from the file to the screen, as a
@@ -92,10 +93,11 @@ impl Section {
 
     /// How tall the section stands: its header, its plot, and what hangs
     /// under the plot. Fixed but for the Display section's row of false
-    /// colors, which only a `gray` image has, so that one file's column is
-    /// laid out where the last one's was, and a section is never shrunk to
-    /// fit a short window — the column scrolls instead.
-    pub const fn height(self, gray: bool) -> f32 {
+    /// colors, which only a `gray` image has, and its row of windows, which
+    /// only an image read as `data` has, so that one file's column is laid
+    /// out where the last one's was, and a section is never shrunk to fit a
+    /// short window — the column scrolls instead.
+    pub const fn height(self, gray: bool, data: bool) -> f32 {
         let head = LABEL_HEIGHT + HEAD_GAP + PLOT_INSET;
         let band = PLOT_INSET + RAMP_GAP + RAMP_HEIGHT;
         match self {
@@ -103,9 +105,9 @@ impl Section {
             // row of stops under it.
             Section::Output => head + PLOT_HEIGHT + band + EV_ROW,
             // The plot, the band, the row of stops, on a gray image the row
-            // of false colors, and the three rows of settings under them,
-            // which take the inset under the plot as their own: see
-            // `display::ROWS_HEIGHT`.
+            // of false colors, and the rows of settings under them, which
+            // take the inset under the plot as their own: see
+            // `display::rows_height`.
             Section::Display => {
                 let swatches = if gray { display::SWATCH_ROW } else { 0.0 };
                 head + PLOT_HEIGHT
@@ -113,7 +115,7 @@ impl Section {
                     + RAMP_HEIGHT
                     + EV_ROW
                     + swatches
-                    + display::ROWS_HEIGHT
+                    + display::rows_height(data)
             }
             // A shorter plot and the row of stops under it: how much of the
             // lift is applied is the header's to say.
@@ -145,10 +147,10 @@ pub fn height(current: &Current) -> f32 {
         .into_iter()
         .filter(|section| section.applies(current))
         .collect();
-    let gray = current.image.is_gray();
+    let (gray, data) = (current.image.is_gray(), is_data(current));
     sections
         .iter()
-        .map(|section| section.height(gray))
+        .map(|section| section.height(gray, data))
         .sum::<f32>()
         + (sections.len().saturating_sub(1)) as f32 * SECTION_GAP
 }
@@ -158,16 +160,23 @@ pub fn height(current: &Current) -> f32 {
 /// the column's width, whatever height `column` has.
 pub fn layout(column: Rect, current: &Current) -> Vec<(Section, Rect)> {
     let mut y = column.y;
-    let gray = current.image.is_gray();
+    let (gray, data) = (current.image.is_gray(), is_data(current));
     Section::ALL
         .into_iter()
         .filter(|section| section.applies(current))
         .map(|section| {
-            let rect = Rect::new(column.x, y, column.width, section.height(gray));
+            let rect = Rect::new(column.x, y, column.width, section.height(gray, data));
             y += rect.height + SECTION_GAP;
             (section, rect)
         })
         .collect()
+}
+
+/// Whether the image on screen is read as data — a measurement, windowed
+/// to what it holds — which is what gives the Display section its row of
+/// windows; a photo's window is as stored and the handles'.
+pub fn is_data(current: &Current) -> bool {
+    current.image.referred == Referred::Measured
 }
 
 /// The section's header line, in the section laid out at `rect`.
@@ -190,18 +199,8 @@ pub fn button(rect: Rect) -> Rect {
 /// The line a section opens with, as the information panel's sections
 /// open: the section's mark and name in the accent, the one thing on the
 /// panel picked out in it; and on the right what the pointer is reading at
-/// its stage — `readout` — ending where [`readout_end`] says. While nothing
-/// is being read, `standing` goes in its place in the dim ink: what holds at
-/// the stage whatever the pointer does, which the Display section uses for
-/// the reading the file is under.
-pub fn header(
-    pass: &Pass,
-    ui: &egui::Ui,
-    section: Section,
-    rect: Rect,
-    readout: Option<&str>,
-    standing: Option<&str>,
-) {
+/// its stage — `readout` — ending where [`readout_end`] says.
+pub fn header(pass: &Pass, ui: &egui::Ui, section: Section, rect: Rect, readout: Option<&str>) {
     let theme = pass.theme;
     let grid = pass.grid;
     let painter = ui.painter();
@@ -222,18 +221,15 @@ pub fn header(
         FontId::proportional(TEXT_SIZE),
         theme.accent.into(),
     );
-    let (words, ink) = match (readout, standing) {
-        (Some(readout), _) => (readout, theme.text_primary),
-        (None, Some(standing)) => (standing, theme.text_dim),
-        (None, None) => return,
-    };
-    painter.text(
-        pos2(grid.snap(readout_end(section, line)), middle),
-        Align2::RIGHT_CENTER,
-        words,
-        FontId::proportional(ROW_TEXT),
-        ink.into(),
-    );
+    if let Some(readout) = readout {
+        painter.text(
+            pos2(grid.snap(readout_end(section, line)), middle),
+            Align2::RIGHT_CENTER,
+            readout,
+            FontId::proportional(ROW_TEXT),
+            theme.text_primary.into(),
+        );
+    }
 }
 
 /// Where a header's readout ends: short of the square at the end of the

@@ -8,6 +8,7 @@
 //! thing earns a tooltip by becoming a [`Tip`] the application has something
 //! to say about.
 
+use crate::image::decode::Reading;
 use crate::image::display::{AutoWindow, Colormap, ToneMap};
 use crate::theme::Theme;
 
@@ -174,6 +175,14 @@ pub const NO_GAIN_MAP: &str = "This image has no gain map.";
 /// copy: exiftool is not there, is reading the file, or could not.
 pub const NO_TAGS: &str = "No tags to copy.";
 
+/// What the switch between the readings says while a map is shown in the
+/// picture's place: a map is a measurement whatever the picture is.
+pub const MAP_IS_DATA: &str = "Maps are forced to data.";
+
+/// What a window rule says on a photo, where the row is not drawn: the
+/// window is as stored, and the handles are the way into the shadows.
+pub const PHOTO_AS_STORED: &str = "Window rule unavailable for photos.";
+
 /// What the camera's switch says: which of a raw's two pictures is up, and
 /// under it the other, which a press switches to. The size is left out; the
 /// top bar says it.
@@ -263,6 +272,12 @@ pub struct Conditions {
     /// gray ramp — which holds the curve off as a false color does — and
     /// with no exposure.
     pub measured_gray: bool,
+    /// Whether the image on screen is read as data, which is what the
+    /// window rules are for: a photo's window is as stored and the handles'.
+    pub data: bool,
+    /// Whether one of the picture's maps is on screen in its place, which
+    /// is data by nature: the switch between the readings is the picture's.
+    pub map_shown: bool,
     /// Whether the desktop's file dialog is up.
     pub picking: bool,
     /// Whether there is no picture at all.
@@ -304,6 +319,8 @@ impl Default for Conditions {
             openable: false,
             false_colored: false,
             measured_gray: false,
+            data: false,
+            map_shown: false,
             picking: false,
             nothing_open: true,
             arriving: false,
@@ -346,6 +363,8 @@ impl Conditions {
         openable: true,
         false_colored: false,
         measured_gray: false,
+        data: true,
+        map_shown: false,
         picking: false,
         nothing_open: false,
         arriving: false,
@@ -385,6 +404,8 @@ pub fn disabled(tip: Tip, conditions: Conditions) -> Option<Refused> {
         openable,
         false_colored,
         measured_gray,
+        data,
+        map_shown,
         picking,
         picture_on_clipboard: clipboard,
         nothing_open,
@@ -423,6 +444,12 @@ pub fn disabled(tip: Tip, conditions: Conditions) -> Option<Refused> {
     if tip == Tip::Control(Control::Paste) && !clipboard {
         return said(NOTHING_TO_PASTE);
     }
+    if matches!(tip, Tip::Control(Control::Reading(_))) && map_shown {
+        return said(MAP_IS_DATA);
+    }
+    if matches!(tip, Tip::Control(Control::Window(_))) && !data {
+        return said(PHOTO_AS_STORED);
+    }
     if matches!(
         tip,
         Tip::Control(Control::TagsCopyMenu | Control::TagsCopy(_))
@@ -438,6 +465,7 @@ pub fn disabled(tip: Tip, conditions: Conditions) -> Option<Refused> {
                 | Control::TurnLeft
                 | Control::TurnRight
                 | Control::Export
+                | Control::Reading(_)
         )
     ) && nothing_open
     {
@@ -468,6 +496,7 @@ pub fn disabled(tip: Tip, conditions: Conditions) -> Option<Refused> {
                 | Control::StepBack
                 | Control::StepForward
                 | Control::Seek(_)
+                | Control::Reading(_)
         )
     ) && arriving
     {
@@ -647,6 +676,11 @@ pub fn words(tip: Tip) -> Option<String> {
         Tip::WhitePoint => "White point",
         Tip::Window => "Black to white, drag to slide",
         Tip::Exposure => "Exposure",
+        // The two readings a file can be given, at the head of the
+        // histogram panel and in the information panel's Image section;
+        // what follows from each is `reading_means`, set under it.
+        Tip::Control(Control::Reading(Reading::Photo)) => "Read as a photo",
+        Tip::Control(Control::Reading(Reading::Data)) => "Read as data",
         // And what becomes of the highlights under each, the curve named
         // where there is one.
         Tip::Control(Control::Curve(index)) => match ToneMap::ALL.get(index)? {
@@ -695,6 +729,15 @@ pub fn words(tip: Tip) -> Option<String> {
         | Tip::State => return None,
     };
     Some(words.to_string())
+}
+
+/// What follows from reading a file as `reading`, set under the switch's
+/// name: what the picture is shown as, and what the panel's rows do.
+pub fn reading_means(reading: Reading) -> &'static str {
+    match reading {
+        Reading::Photo => "Shown as described by file; use exposure and curve to adjust",
+        Reading::Data => "Shown auto-leveled; use windowing to adjust",
+    }
 }
 
 /// Draws `tooltip` into the popup egui has opened for it: the thing itself

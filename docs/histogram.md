@@ -55,11 +55,13 @@ map's own samples. The switch to the gain map is still in the bar and on its
 key, so leaving the section out strands nothing.
 
 Every section is a fixed height (`Section::height`), and the column is as
-tall as its sections, whatever the window. The one exception is the Display
-section's row of false colors, which only a gray image has: it makes the
-section taller rather than coming out of the plot, so that the Display plot
-stands as tall as the Output's on every file — the two plots read closely,
-side by side in the eye, at one height — and on a gray file the sections
+tall as its sections, whatever the window. The two exceptions are both the
+Display section's: its row of false colors, which only a gray image has, and
+its row of windows, which only an image read as data has
+(`section::is_data`, `display::rows_height`). Each makes the section taller
+rather than coming out of the plot, so that the Display plot stands as tall
+as the Output's on every file — the two plots read closely, side by side in
+the eye, at one height — and on a gray file, or a measurement, the sections
 below it move down by the row. On a window shorter
 than that the side panel scrolls — an egui `ScrollArea`, the wheel's alone:
 `DragScroll::Never`, since a drag in the column is a drag of a handle, the
@@ -73,7 +75,11 @@ rest is a scroll away. The width is the [side panel's](interface.md#the-side-pan
 The panel is laid out as the [information panel](interface.md#the-side-panel)
 is, so that the two read as two tabs of one panel: a row of buttons at its
 head, as tall as the information's header (`info::CHIP_HEIGHT`), so the
-hairline under it (`info::HEADER_GAP`) stays put as the tabs are switched;
+hairline under it (`info::HEADER_GAP`) stays put as the tabs are switched —
+the pair that reads the file as a photo or as data first (`Control::Reading`,
+see [color](color.md#display-referred-scene-referred-and-measured)), since
+it is upstream of everything in the column, and at the far end the reset,
+with the clipped pixels' toggle just before it;
 then the column, in a scroll area with its bar down the inner edge and the
 gutter kept clear for it; and the sections parted by hairlines through the
 gap between them (`info::SECTION_GAP`). Each section opens with a header
@@ -81,13 +87,7 @@ as the information's sections do: its mark and name in the accent
 (`Section::mark`) — a monitor for Output, sliders for Display, the sun for
 the gain map, as it wears everywhere else in the window, and a picture for
 Image, as the information's Image section wears — and on the right what the pointer is reading at its
-stage. The Display section's header, while nothing is being read, says in
-the dim ink how the file is being read (`display::mode`): *graded*,
-*metered* or *measurement*, one word per `Referred`, since that is the one
-fact the section's rows all follow from — the window it opened on, whether
-the exposure and the curves are live, whether a gray file is spread along
-the gray ramp — and was otherwise only to be inferred from which of them
-is lit. The header's last square (`section::button`) is the section's own
+stage. The header's last square (`section::button`) is the section's own
 button where it has one: the Gain map section's eye, which shows the map
 in the picture's place, lit while it is. A section's readout ends short of
 that square where the section has a button, and at the line's end where it
@@ -500,7 +500,7 @@ where a measurement is windowed to what it holds. Scene light — a Radiance
 picture, an EXR — keeps 0..1 too, in the file's own units, and opens with
 the exposure already turned: `Display::for_image_with` meters it, putting
 the key of the scene at middle gray, and the slider shows the reading in
-stops. The rows do not follow that split, because the black handle moves
+stops. The handles do not follow that split, because the black handle moves
 the window on every file: a graded file's window leaves 0..1 at the bottom
 the moment the black handle is touched, so a white handle that meant the
 exposure on a graded file and the window's top on a measured one would be a
@@ -509,9 +509,22 @@ are honestly two. The window is in the file's own units — both handles,
 both pairs of keys, the *Window* row — and the exposure is in stops — the
 slider, `d`/`f`, `--exposure` — a push on top of whatever the window is,
 which is exactly what a meter's reading is, and why a metered file arrives
-with the exposure dial turned rather than a fourth kind of window. On a
-graded file the *Window* row is where a hand-moved window is put back, *As
-stored* being 0..1, as much as where a rule is chosen.
+with the exposure dial turned rather than a fourth kind of window.
+
+The *Window* row of rules does follow the split: it is drawn only on an
+image read as data, and the rules are refused on a photo, the button
+(`tooltip::PHOTO_AS_STORED`) and `e` (`When::Data`) alike. A rule is an
+answer to the question a measurement raises — where, in numbers with no
+white, is the range worth looking at — and a photo does not raise it: its
+window is 0..1 by rights, *Full range* on it is the handles put at the
+darkest and brightest pixel, which a finished picture nearly always spans
+already, and *Trimmed* is an auto-levels that makes it look wrong rather
+than show anything a drag on the handles does not. Dragging the handles is
+how a photo's shadows and highlights are looked into, and the reset is what
+puts a hand-moved window back there, as it puts everything back. The
+interface treats the file's three readings as two, photo and data, for the
+same reason: scene light and graded light differ in how they open — the
+meter — and in nothing a control on the panel does.
 
 The curve row is every file's because the exposure is: a stop up puts the
 top of any file above white and the bar says **clipped**, and the curve is

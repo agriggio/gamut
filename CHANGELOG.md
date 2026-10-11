@@ -6,7 +6,29 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
 
 ## Unreleased
 
+### Added
+
+- A *Photo* / *Data* switch, at the head of the histogram panel and under
+  the Image heading of the information panel, that reads the file on
+  screen the other way: *Data* as linear numbers windowed to what they
+  hold, *Photo* as a picture — through the sRGB curve where the program
+  had taken integer samples for linear data. The choice stays with the
+  file for the session, and the file is read again under it with the view
+  kept. The Mac's Image menu has it as *Read As*.
+
 ### Changed
+
+- The histogram's row of window rules — *As stored*, *Full range*,
+  *Trimmed* — is drawn only for a file read as data, and `e` does nothing
+  on a photo. A photo's window is as stored and the handles move it; the
+  reset puts it back.
+- A 16-bit TIFF of three colors with no profile is read as an sRGB
+  photograph rather than as linear data, unless it carries GeoTIFF keys or
+  a no-data value. 16-bit grayscale and floating-point TIFFs are read as
+  data, as before.
+- `--transfer` now changes how the file opens as well as how it is
+  decoded: a 16-bit TIFF read with `--transfer srgb` opens as stored, as a
+  photo, rather than on a trimmed window.
 
 - The histogram always plots both the luminance and the color planes. The
   two buttons at the head of its panel that turned each off, their keys

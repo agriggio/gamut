@@ -9,6 +9,7 @@
 use std::ops::Range;
 
 use crate::gestures::{Button, Kind};
+use crate::image::decode::Reading;
 use crate::image::region::{Grip, Region};
 
 use super::chooser::Step;
@@ -96,6 +97,10 @@ controls! {
     /// The button that puts the rendering back, at the head of the
     /// histogram panel.
     Reset,
+    /// The pair at the head of that panel, and in the information panel's
+    /// Image section, that reads the file as a photo or as data: the one
+    /// in force lit. Dead while a map is shown in the picture's place.
+    Reading(Reading) = Reading::Photo,
     /// The toggle beside the band at the foot of that strip, which paints
     /// the clipped pixels on the picture in the two colors the plot's
     /// corners count.
@@ -285,6 +290,8 @@ impl Control {
             Control::Maximize => "Maximize".to_string(),
             Control::Marks => "Clipped pixels".to_string(),
             Control::Reset => "Reset".to_string(),
+            Control::Reading(Reading::Photo) => "Read as photo".to_string(),
+            Control::Reading(Reading::Data) => "Read as data".to_string(),
             Control::Ramp(index) => format!("False color {index}"),
             Control::Window(index) => format!("Window {index}"),
             Control::Curve(index) => format!("Curve {index}"),

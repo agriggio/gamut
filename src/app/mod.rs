@@ -38,7 +38,7 @@ use crate::exiftool;
 use crate::gestures::{Gestures, Surface};
 use crate::image::DecodedImage;
 use crate::image::auxiliary::{Auxiliary, Showing};
-use crate::image::decode::{self, CameraJpeg, Rendering};
+use crate::image::decode::{self, CameraJpeg, Reading, Rendering};
 use crate::image::display::{Display, Headroom, Startup};
 use crate::image::orient::Turn;
 use crate::image::sequence::Sequence;
@@ -2579,6 +2579,7 @@ impl App {
     /// the frame owed, for a request that goes somewhere else.
     fn send(&mut self, asked: Asked) -> Effect {
         let mut request = asked.request(self.overrides, self.rendering);
+        request.overrides = self.overrides_for(&request.path);
         let elsewhere = request.mode == Reload::Fresh
             && (self.current.is_none() || self.files.shown_path() != Some(request.path.as_path()));
         // A paged file comes back to the page it was left on, which has to
@@ -2603,6 +2604,39 @@ impl App {
         self.filmstrip.reveal();
         self.refresh_title();
         Effect::Redraw
+    }
+
+    /// The decode overrides for the file at `path`: the command line's, and
+    /// over them the reading the file was asked for by hand, if it was —
+    /// see [`App::read_as`].
+    pub(super) fn overrides_for(&self, path: &Path) -> decode::Overrides {
+        let mut overrides = self.overrides;
+        overrides.reading = self.kept.reading(path);
+        overrides
+    }
+
+    /// Reads the file on screen as `reading` from now on — as a photo, or
+    /// as data — and reads it again under it where it is the other. The
+    /// choice is the file's and stays with it, as what it was left in does:
+    /// a step away and back finds it read the same way. Nothing to draw
+    /// yet: the picture stays until it arrives, as on a step.
+    pub(super) fn read_as(&mut self, reading: Reading) -> Effect {
+        let Some(path) = self.files.shown_path() else {
+            return Effect::Nothing;
+        };
+        let shown = self
+            .current
+            .as_ref()
+            .map(|current| Reading::of(current.picture().0));
+        if shown == Some(reading) {
+            return Effect::Nothing;
+        }
+        let path = path.to_path_buf();
+        self.kept.read_as(&path, reading);
+        if let Some(request) = self.files.reread_as() {
+            let _ = self.send(request);
+        }
+        Effect::Nothing
     }
 
     /// Puts [`App::title`] on the window, which names the file last asked
@@ -2937,7 +2971,7 @@ impl App {
         self.players += 1;
         self.animation = Some(Animation::start(
             path,
-            self.overrides,
+            self.overrides_for(path),
             count,
             loops,
             left,
@@ -3354,8 +3388,9 @@ enum Arrival {
     /// Another file of another size, or a file into an empty window: put
     /// back as it was left, or fitted afresh.
     Anew,
-    /// The file on screen in its other rendering: the view is rescaled so the
-    /// same detail stays where it was, the display starts over.
+    /// The file on screen in its other rendering, or under its other
+    /// reading: the view is rescaled so the same detail stays where it was,
+    /// the display starts over.
     Rerendered,
 }
 
@@ -3374,7 +3409,7 @@ fn arrival(
     let same_file = mode != Reload::Fresh;
     let stepping = shown.is_some_and(|(shown, _)| shown != path);
     let arrival = match (same_file, same_size) {
-        _ if mode == Reload::Rendering => Arrival::Rerendered,
+        _ if matches!(mode, Reload::Rendering | Reload::Reading) => Arrival::Rerendered,
         (true, true) => Arrival::Reread,
         (true, false) => Arrival::Reshaped,
         (false, true) => Arrival::Beside,

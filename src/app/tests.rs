@@ -238,7 +238,8 @@ fn answer(app: &mut App, mode: Reload) {
     // Asked for in the rendering the application prefers, as `App::send`
     // fills every request in with.
     let asked_rendering = app.rendering;
-    let decoded = crate::loader::decode_rendering(&path, app.overrides, asked, asked_rendering);
+    let overrides = app.overrides_for(&path);
+    let decoded = crate::loader::decode_rendering(&path, overrides, asked, asked_rendering);
     let format = decode::reader(&path).unwrap_or_default();
     let outcome = decoded.map(|(image, _, rendering, camera_jpeg)| Ready {
         stats: Stats::scan(&image),
@@ -1000,24 +1001,61 @@ fn the_window_keys_step_the_handles_within_the_plot() {
     std::fs::remove_dir_all(dir).expect("we just wrote it");
 }
 
-/// The window row is every file's: on a graded file, whose window opens
-/// at 0..1, *As stored* is what puts a hand-moved window back. It sets
-/// the rule and nothing else, so an exposure on top of the window stays.
+/// The window rules are data's: on a photo, whose window opens at 0..1
+/// and is the handles' to move, the row is not drawn, and both a press on
+/// a rule and the key that cycles them are refused — the reset is what
+/// puts a hand-moved window back there, as it puts everything back.
 #[test]
-fn as_stored_puts_a_hand_moved_window_back_on_a_graded_file() {
+fn the_window_rules_are_refused_on_a_photo() {
     use crate::image::display::AutoWindow;
-    use crate::ui::{Command, Control};
+    use crate::ui::Control;
     use input::{Action, Effect};
 
     let (mut app, dir) = app_over("stored", &[("a.png", 8, 8)]);
     fn display(app: &App) -> &crate::image::display::Display {
         &app.current.as_ref().expect("a picture is up").display
     }
+    assert!(!app.conditions().data);
+    assert!(app.refuses(Control::Window(0)));
     assert_eq!(app.perform(Action::StepBlack(0.05)), Effect::Redraw);
     assert_eq!(app.perform(Action::StepWhite(-0.05)), Effect::Redraw);
-    assert_eq!(app.perform(Action::Exposure(0.5)), Effect::Redraw);
     assert_eq!(display(&app).auto(), AutoWindow::Manual);
     assert_ne!(display(&app).displayed_bounds(), (0.0, 1.0));
+
+    assert_eq!(app.press(Control::Window(0)), Effect::Nothing);
+    assert_eq!(app.perform(Action::CycleAutoWindow), Effect::Nothing);
+    assert_eq!(display(&app).auto(), AutoWindow::Manual, "refused");
+
+    assert_eq!(app.perform(Action::ResetDisplay), Effect::Redraw);
+    assert_eq!(display(&app).auto(), AutoWindow::Off);
+    assert_eq!(
+        (display(&app).window_low(), display(&app).window_high()),
+        (0.0, 1.0)
+    );
+
+    std::fs::remove_dir_all(dir).expect("we just wrote it");
+}
+
+/// On a file read as data the rules are live: *As stored* puts a
+/// hand-moved window back at 0..1, setting the rule and nothing else, so
+/// an exposure on top of the window stays; and `e` cycles on from it.
+#[test]
+fn as_stored_puts_a_hand_moved_window_back_on_data() {
+    use crate::image::display::AutoWindow;
+    use crate::ui::{Command, Control};
+    use input::{Action, Effect};
+
+    let path = fixture("tiff-float32.tif");
+    let mut app = open(vec![path.clone()], vec![path]);
+    answer(&mut app, Reload::Fresh);
+    fn display(app: &App) -> &crate::image::display::Display {
+        &app.current.as_ref().expect("a picture is up").display
+    }
+    assert!(app.conditions().data);
+    assert_eq!(display(&app).auto(), AutoWindow::Percentile);
+    assert_eq!(app.perform(Action::StepBlack(0.05)), Effect::Redraw);
+    assert_eq!(app.perform(Action::Exposure(0.5)), Effect::Redraw);
+    assert_eq!(display(&app).auto(), AutoWindow::Manual);
 
     let _ = app.act(Command::Press(Control::Window(0)));
     assert_eq!(display(&app).auto(), AutoWindow::Off);
@@ -1030,8 +1068,107 @@ fn as_stored_puts_a_hand_moved_window_back_on_a_graded_file() {
         0.5,
         "the rule, not the exposure"
     );
+    assert_eq!(app.perform(Action::CycleAutoWindow), Effect::Redraw);
+    assert_eq!(display(&app).auto(), AutoWindow::MinMax);
+}
 
-    std::fs::remove_dir_all(dir).expect("we just wrote it");
+/// The switch between the readings reads the file again the other way,
+/// and the choice stays with the file: a 16-bit gray TIFF, taken for a
+/// measurement, read as a photo is sRGB with its window as stored, and
+/// comes back that way after a step away; read as data again it is a
+/// measurement once more. The switch is dead while a map is shown in the
+/// picture's place, and refused on the reading already in force.
+#[test]
+fn the_reading_switch_reads_the_file_again_and_stays_with_it() {
+    use crate::image::decode::Reading;
+    use crate::image::{Referred, Transfer};
+    use crate::ui::Control;
+    use input::Effect;
+
+    let scan = fixture("tiff-gray16.tif");
+    let photo = fixture("png-rgb8.png");
+    let mut app = open(vec![scan.clone(), photo.clone()], vec![scan.clone()]);
+    answer(&mut app, Reload::Fresh);
+    fn image(app: &App) -> &crate::image::DecodedImage {
+        &app.current.as_ref().expect("a picture is up").image
+    }
+    assert_eq!(image(&app).referred, Referred::Measured);
+    assert!(app.conditions().data);
+    assert!(!app.refuses(Control::Reading(Reading::Photo)));
+
+    // The reading in force asks for nothing.
+    assert_eq!(app.press(Control::Reading(Reading::Data)), Effect::Nothing);
+    assert!(app.files.is_idle(), "nothing asked for");
+
+    assert_eq!(app.press(Control::Reading(Reading::Photo)), Effect::Nothing);
+    assert_eq!(app.kept.reading(&scan), Some(Reading::Photo));
+    answer(&mut app, Reload::Reading);
+    assert_eq!(image(&app).referred, Referred::Display);
+    assert_eq!(image(&app).color.transfer, Transfer::Srgb);
+    assert!(!app.conditions().data);
+    assert_eq!(
+        (
+            image_display(&app).window_low(),
+            image_display(&app).window_high()
+        ),
+        (0.0, 1.0),
+        "a photo opens as stored"
+    );
+    fn image_display(app: &App) -> &crate::image::display::Display {
+        &app.current.as_ref().expect("a picture is up").display
+    }
+
+    // Away and back: still a photo, with nothing pressed.
+    let _ = app.step(true);
+    answer(&mut app, Reload::Fresh);
+    assert_eq!(app.files.shown_path(), Some(photo.as_path()));
+    assert_eq!(image(&app).referred, Referred::Display, "the photo's own");
+    let _ = app.step(false);
+    answer(&mut app, Reload::Fresh);
+    assert_eq!(app.files.shown_path(), Some(scan.as_path()));
+    assert_eq!(image(&app).referred, Referred::Display);
+
+    // And back to data by hand.
+    assert_eq!(app.press(Control::Reading(Reading::Data)), Effect::Nothing);
+    answer(&mut app, Reload::Reading);
+    assert_eq!(image(&app).referred, Referred::Measured);
+    assert_eq!(image(&app).color.transfer, Transfer::Linear);
+    assert!(app.conditions().data);
+}
+
+/// `--transfer` carries the reading with it where the decoder's followed
+/// the curve: the deep gray TIFF taken for a measurement is a photo under
+/// `--transfer srgb`, and a raw's linear counts stay graded under
+/// `--transfer linear`.
+#[test]
+fn a_transfer_given_on_the_command_line_carries_the_reading() {
+    use crate::image::{Referred, Transfer};
+
+    let srgb = decode::Overrides {
+        transfer: Some(Transfer::Srgb),
+        ..decode::Overrides::default()
+    };
+    let scan = decode::load(&fixture("tiff-gray16.tif"), srgb).expect("it decodes");
+    assert_eq!(scan.referred, Referred::Display);
+    assert_eq!(scan.color.transfer, Transfer::Srgb);
+
+    let linear = decode::Overrides {
+        transfer: Some(Transfer::Linear),
+        ..decode::Overrides::default()
+    };
+    let raw = decode::load(&fixture("dng-cfa.dng"), linear).expect("it decodes");
+    assert_eq!(
+        raw.referred,
+        Referred::Display,
+        "a raw's reading is its own"
+    );
+    let scan = decode::load(&fixture("tiff-gray16.tif"), decode::Overrides::default())
+        .expect("it decodes");
+    assert_eq!(
+        scan.referred,
+        Referred::Measured,
+        "left alone, left as it was"
+    );
 }
 
 /// Escape is what brings the interface back, and it does that before it

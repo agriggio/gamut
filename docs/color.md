@@ -90,8 +90,10 @@ transfer function decides it unless a decoder knows better:
   of 1 — and is display-referred, opening as stored. `EXPOSURE=1`, which
   Blender's own writer put on every picture it saved, says nothing was
   done, and the picture is metered like one that says nothing.
-- **Measured** (every other linear file: 16-bit and float TIFF, a
-  linear-declared PNG or JPEG XL, sensor counts) may not be light at all —
+- **Measured** (every other linear file: a 16-bit gray or a float TIFF
+  with no profile, a 16-bit TIFF placed on the ground or carrying a no-data
+  value, a linear-declared PNG or JPEG XL, sensor counts) may not be light
+  at all —
   an elevation model, a mask, a temperature grid — so neither a white nor a
   middle gray means anything for it. It gets the trimmed window
   (`AutoWindow::Percentile`, the central 99.8%), because 12-bit data in a
@@ -113,9 +115,32 @@ transfer function decides it unless a decoder knows better:
 
 `--transfer linear|srgb|pq|hlg|gamma:N` overrides the guess, which matters
 most for TIFF: the same container carries scanned photographs and frames of
-sensor counts, and the header does not distinguish them. Window bounds are
+sensor counts, and the header does not distinguish them. The reading goes
+with it (`Overrides::finish`): where the decoder's reading followed the
+curve — the deep TIFF taken for a measurement — `--transfer srgb` makes it
+a photo; where the decoder chose against its curve — a raw's graded counts,
+an EXR's scene — the reading is left as the decoder said. Window bounds are
 reported in source units for linear integer data, so a 12-bit scan reads
 `0–4096` rather than `0.000–0.063`.
+
+The interface puts the same correction in a photographer's terms, per file:
+the *Photo* / *Data* pair at the head of the histogram panel and under the
+information panel's Image head (`Control::Reading`, `decode::Reading`).
+*Data* reads the file as linear numbers, `Referred::Measured`; *Photo*
+reads a file taken for a measurement as graded, through the sRGB curve
+where its samples are integers — which were almost certainly encoded — and
+as linear light where they are floats, which almost never are, and leaves
+every other file as its decoder read it, so an EXR stays scene light. The
+three readings are two to the interface because scene and graded light
+differ only in how they open — the meter is on the exposure — and in
+nothing a control does; see [the histogram](histogram.md). The choice is
+carried on `Overrides::reading` by `App::overrides_for`, kept per path in
+`app::kept::Kept` so a step away and back finds the file read the same way,
+and the file is read again under it as a `Reload::Reading`, which arrives
+as `Arrival::Rerendered`: the view stays and the display starts over, a
+window set under one reading meaning nothing under the other. The pair is
+dead while a gain or depth map is shown in the picture's place, which is a
+measurement by construction.
 
 ## Above white: the surface, and the tone map
 

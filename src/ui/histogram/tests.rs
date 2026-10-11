@@ -15,6 +15,13 @@ fn shown(image: DecodedImage) -> Current {
     Current::of(image, "file")
 }
 
+/// The same ramp read as data: a measurement, windowed to what it holds.
+fn measured(gray: bool) -> Current {
+    let mut image = picture(gray).image.as_ref().clone();
+    image.referred = Referred::Measured;
+    shown(image)
+}
+
 /// An 8-bit sRGB picture, color or gray, with a ramp across it.
 fn picture(gray: bool) -> Current {
     let channels = if gray { Channels::Gray } else { Channels::Rgb };
@@ -184,7 +191,7 @@ fn every_section_is_laid_out_at_its_own_height_whatever_the_room() {
     assert_eq!(sections, Section::ALL, "in the order the data flows");
     assert_eq!(layout[0].1.y, column.y, "the first opens the column");
     for (section, rect) in &layout {
-        assert_eq!(rect.height, section.height(false), "{section:?}");
+        assert_eq!(rect.height, section.height(false, false), "{section:?}");
         assert_eq!((rect.x, rect.width), (column.x, COLUMN_WIDTH));
     }
     for pair in layout.windows(2) {
@@ -205,7 +212,7 @@ fn every_section_is_laid_out_at_its_own_height_whatever_the_room() {
     );
     assert_eq!(
         MIN_HEIGHT,
-        2.0 * PANEL_INSET + TOOLBAR_HEIGHT + HEADER_GAP + Section::Output.height(false),
+        2.0 * PANEL_INSET + TOOLBAR_HEIGHT + HEADER_GAP + Section::Output.height(false, false),
         "the row of buttons and the head section are the least the panel needs"
     );
 }
@@ -356,16 +363,36 @@ fn the_pointer_marks_the_bar_it_is_over() {
     assert_eq!(bin_across(BINS - 1), 1.0);
 }
 
-/// The row of buttons at the head of the panel: the clipped pixels' toggle
-/// at the start and the reset at the far end, both inside the row.
+/// The row of buttons at the head of the panel: the pair that reads the
+/// file as a photo or as data at the start, and at the far end the reset
+/// with the clipped pixels' toggle just before it, all inside the row and
+/// none over another.
 #[test]
 fn the_row_of_buttons_heads_the_panel() {
     let row = Rect::new(10.0, 10.0, COLUMN_WIDTH, TOOLBAR_HEIGHT);
-    let [(marks, at_start), (reset, at_end)] = toolbar(row);
-    assert_eq!((marks, reset), (Control::Marks, Control::Reset));
-    assert_eq!(at_start.x, row.x, "the marks at the start");
+    let [
+        (photo, first),
+        (data, second),
+        (marks, third),
+        (reset, at_end),
+    ] = toolbar(row);
+    assert_eq!(
+        (photo, data, marks, reset),
+        (
+            Control::Reading(Reading::Photo),
+            Control::Reading(Reading::Data),
+            Control::Marks,
+            Control::Reset
+        )
+    );
+    assert_eq!(first.x, row.x, "the reading at the start");
     assert_eq!(at_end.right(), row.right(), "the reset at the far end");
-    for rect in [at_start, at_end] {
+    assert_eq!(third.right() + CELL_GAP, at_end.x, "the marks beside it");
+    assert_eq!(first.width, second.width, "the pair reads as one switch");
+    for pair in [(first, second), (second, third), (third, at_end)] {
+        assert!(pair.0.right() < pair.1.x, "{pair:?}");
+    }
+    for rect in [first, second, third, at_end] {
         assert_eq!((rect.y, rect.height), (row.y, row.height), "{rect:?}");
     }
 }
@@ -430,44 +457,69 @@ fn the_false_colors_are_under_the_display_band_and_nowhere_else() {
         swatch_button(with, 0).y >= ev_row(with, ramp(with).bottom()).bottom(),
         "the false colors are under the row of stops"
     );
-    assert!(swatch_button(with, 0).bottom() <= Rows::new(rect).exposure.y);
+    assert!(swatch_button(with, 0).bottom() <= Rows::new(rect, false).exposure.y);
 }
 
 /// The rows sit under the Display section's band, inside the section, and
-/// the last of them ends it.
+/// the last of them ends it. A photo has the exposure and the curve; an
+/// image read as data has the row of windows between them, and its
+/// section is taller by that row — so the column moves only between the
+/// two kinds of file, never between two photos.
 #[test]
 fn the_rows_sit_under_the_display_band() {
-    let layout = laid_out(&picture(false), 600.0);
-    let rect = rect_of(&layout, Section::Display);
-    let rows = Rows::new(rect);
-    let inside = rect;
-    let band = ramp(plot_area(rect));
+    let photo = picture(false);
+    let data = measured(false);
+    assert!(!section::is_data(&photo) && section::is_data(&data));
+    let photo_rect = rect_of(&laid_out(&photo, 600.0), Section::Display);
+    let data_rect = rect_of(&laid_out(&data, 600.0), Section::Display);
+    assert_eq!(
+        data_rect.height - photo_rect.height,
+        display::rows_height(true) - display::rows_height(false),
+        "taller by the row of windows"
+    );
 
-    for (widget, button) in row_buttons(rect) {
-        assert!(button.y >= band.bottom(), "{widget:?} clears the band");
-        assert!(button.x >= inside.x + 56.0, "{widget:?} clears its word");
+    for (current, rect) in [(&photo, photo_rect), (&data, data_rect)] {
+        let is_data = section::is_data(current);
+        let rows = Rows::new(rect, is_data);
+        let inside = rect;
+        let band = ramp(plot_area(rect));
+
+        for (widget, button) in row_buttons(rect, is_data) {
+            assert!(button.y >= band.bottom(), "{widget:?} clears the band");
+            assert!(button.x >= inside.x + 56.0, "{widget:?} clears its word");
+            assert!(
+                button.right() <= inside.right() + 0.01,
+                "{widget:?} {button:?}"
+            );
+        }
+        assert_eq!(
+            rows.bottom(),
+            rect.bottom(),
+            "the last row ends the section"
+        );
+        let labels: Vec<&str> = rows.labels().map(|(word, _)| word).collect();
+        let widgets: Vec<Control> = row_buttons(rect, is_data)
+            .map(|(widget, _)| widget)
+            .collect();
+        if is_data {
+            assert_eq!(labels, ["Exposure", "Window", "Curve"]);
+            assert_eq!(widgets.len(), WINDOWS.len() + ToneMap::ALL.len());
+        } else {
+            assert_eq!(labels, ["Exposure", "Curve"]);
+            assert_eq!(widgets.len(), ToneMap::ALL.len());
+            assert!(
+                !widgets.iter().any(|w| matches!(w, Control::Window(_))),
+                "a photo's window is as stored and the handles'"
+            );
+        }
+        assert_eq!(rows.slider().x, rows.exposure.x);
+        assert!(rows.slider().right() < rows.stops().x);
+        assert_eq!(rows.stops().right(), inside.right());
         assert!(
-            button.right() <= inside.right() + 0.01,
-            "{widget:?} {button:?}"
+            rows.slider().width - HANDLE_GRIP > 3.0 * 2.0 * SLIDER_STOPS / EV_STEP,
+            "a quarter stop is wider than a few pixels"
         );
     }
-    assert_eq!(
-        rows.bottom(),
-        rect.bottom(),
-        "the last row ends the section"
-    );
-    let labels: Vec<&str> = rows.labels().map(|(word, _)| word).collect();
-    assert_eq!(labels, ["Exposure", "Window", "Curve"]);
-
-    let widgets: Vec<Control> = row_buttons(rect).map(|(widget, _)| widget).collect();
-    assert_eq!(widgets.len(), WINDOWS.len() + ToneMap::ALL.len());
-    assert_eq!(rows.slider().x, rows.exposure.x);
-    assert!(rows.slider().right() < rows.stops().x);
-    assert_eq!(rows.stops().right(), inside.right());
-    assert!(
-        rows.slider().width - HANDLE_GRIP > 3.0 * 2.0 * SLIDER_STOPS / EV_STEP,
-        "a quarter stop is wider than a few pixels"
-    );
 }
 
 /// The handles stand on the band and reach past it, and the room that
@@ -490,7 +542,7 @@ fn a_handle_is_easier_to_take_hold_of_than_it_is_wide() {
             grip.y >= plot.bottom() + PLOT_INSET,
             "{grip:?} over {plot:?}"
         );
-        assert!(grip.bottom() <= Rows::new(rect).exposure.y);
+        assert!(grip.bottom() <= Rows::new(rect, false).exposure.y);
         if gray {
             assert!(grip.bottom() <= swatch_button(plot, 0).y);
         }
@@ -850,18 +902,6 @@ fn scene_light_is_plotted_in_stops() {
     current.display.set_exposure(1.0);
     let pushed = output::binned_for(&current, Headroom::None, 1.0);
     assert!(pushed.plot.luma[BINS - 1] > plain.plot.luma[BINS - 1]);
-}
-
-/// The Display section stands under the word for how the file is read,
-/// one per reading, so that what its rows do is said rather than inferred.
-#[test]
-fn the_display_section_names_the_reading_the_file_is_under() {
-    use crate::image::Referred;
-    let words: Vec<_> = [Referred::Display, Referred::Scene, Referred::Measured]
-        .map(display::mode)
-        .to_vec();
-    assert_eq!(words, ["graded", "metered", "measurement"]);
-    assert_eq!(display::mode(picture(true).image.referred), "graded");
 }
 
 /// Integer samples are plotted on the whole range they can hold, a raw's

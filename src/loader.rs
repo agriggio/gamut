@@ -50,6 +50,11 @@ pub enum Reload {
     /// picture is displayed starts over, since an exposure set for linear
     /// sensor counts means nothing to a JPEG.
     Rendering,
+    /// The file already on screen, read as a photo or as data where it was
+    /// the other: the same picture under another reading, so where the
+    /// viewer is looking stays and the display starts over, a window and an
+    /// exposure set under one reading meaning nothing under the other.
+    Reading,
 }
 
 /// Where a read's bytes come from.

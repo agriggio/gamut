@@ -19,7 +19,7 @@ use super::input::{Action, Conditions, Effect, When, action_of};
 use super::keymap::{Chord, KeyName, Keymap};
 use crate::PROGRAM;
 use crate::image::auxiliary::{Auxiliary, Showing};
-use crate::image::decode::Rendering;
+use crate::image::decode::{Reading, Rendering};
 use crate::image::display::{Colormap, EV_STEP, ToneMap};
 use crate::menubar::{
     Bar, Chosen, Deliver, Equivalent, Identity, Menu, Modifiers, Node, Role, Shown, Snapshot,
@@ -401,6 +401,14 @@ fn image(b: &mut Builder) -> Vec<Node> {
         b.submenu("Window", Some(Control::Window(0)), windows),
         b.submenu("Highlights", Some(Control::Curve(0)), curves),
         b.submenu("False Color", Some(Control::Ramp(0)), ramps),
+        b.submenu(
+            "Read As",
+            Some(Control::Reading(Reading::Photo)),
+            vec![
+                b.control("Photo", Control::Reading(Reading::Photo), None),
+                b.control("Data", Control::Reading(Reading::Data), None),
+            ],
+        ),
         b.button("Mark Clipped Pixels", Control::Marks),
         b.button("Reset Display", Control::Reset),
         Node::Separator,
@@ -709,6 +717,9 @@ impl App {
                     (current.is_some() || matches!(choice, ZoomChoice::Filter(_)))
                         && choice.active(self.view.fit(), zoom, self.view.upscale())
                 }
+                Control::Reading(reading) => {
+                    current.is_some_and(|current| Reading::of(&current.image) == reading)
+                }
                 Control::Window(index) => current.is_some_and(|current| {
                     WINDOWS
                         .get(index)
@@ -778,6 +789,7 @@ fn about_picture(does: Does) -> bool {
                 | Control::Curve(_)
                 | Control::Ramp(_)
                 | Control::Reset
+                | Control::Reading(_)
         )
     )
 }

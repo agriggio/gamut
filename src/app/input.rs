@@ -19,8 +19,8 @@ use super::folder::Then;
 use super::keymap::{Bound, Chord, KeyName, Keymap, Keys, Row};
 use crate::clipboard;
 use crate::gestures::{self, Button, Gestures, Surface, WheelAction};
-use crate::image::auxiliary::Auxiliary;
-use crate::image::decode::{CameraJpeg, Rendering};
+use crate::image::auxiliary::{Auxiliary, Showing};
+use crate::image::decode::{CameraJpeg, Reading, Rendering};
 use crate::image::display::{Colormap, EV_STEP, Startup, ToneMap};
 use crate::image::encode;
 use crate::image::region::{Region, Side};
@@ -464,7 +464,8 @@ pub(super) fn action_of(tip: Tip) -> Option<Action> {
             | Control::ExportAs(_)
             | Control::ExportTo
             | Control::CancelExport
-            | Control::OpenLastFolder,
+            | Control::OpenLastFolder
+            | Control::Reading(_),
         ) => return None,
         // The words at the end of the bottom bar are about four settings at
         // once, so no one key does what they do; what a press on them opens
@@ -605,13 +606,16 @@ pub enum When {
     Georeferenced,
     /// And can say it in latitude and longitude.
     Geographic,
+    /// The image on screen is read as data rather than as a photo: numbers
+    /// windowed to what they hold, which is what the window rules are for.
+    Data,
 }
 
 impl When {
     /// Every condition, for a test to hold them all up against the
     /// application.
     #[cfg(test)]
-    pub const ALL: [When; 16] = [
+    pub const ALL: [When; 17] = [
         When::RegionSelected,
         When::SeveralFiles,
         When::Animation,
@@ -628,6 +632,7 @@ impl When {
         When::VisitedAfter,
         When::Georeferenced,
         When::Geographic,
+        When::Data,
     ];
 
     /// The condition in a few words, as the popup's column reads it: a
@@ -650,6 +655,7 @@ impl When {
             When::VisitedAfter => "a file shown after this one",
             When::Georeferenced => "a georeferenced file",
             When::Geographic => "a file placed in lat/long",
+            When::Data => "an image read as data",
         }
     }
 
@@ -684,6 +690,7 @@ impl Conditions {
             When::VisitedAfter => self.visited_after,
             When::Georeferenced => self.georeferenced,
             When::Geographic => self.geographic,
+            When::Data => self.data,
         }
     }
 }
@@ -1316,7 +1323,7 @@ pub static ROWS: &[Row] = &[
     },
     Row {
         section: Section::Display,
-        when: None,
+        when: Some(When::Data),
         help: "Cycle the window rule: stored, full, trimmed",
         keys: one!("display.window", CycleAutoWindow, [key('e')]),
     },
@@ -1695,6 +1702,12 @@ impl Naming for Namer {
             Tip::Exposure => (
                 vec![names(keys, at)?],
                 Vec::from_iter(hint(keys, Exposure(-EV_STEP))),
+            ),
+            // The switch between the two readings: what each is, and under
+            // it what follows from it, which no key sets.
+            Tip::Control(Control::Reading(reading)) => (
+                vec![names(keys, at)?],
+                vec![ui::tooltip::reading_means(reading).to_string()],
             ),
             // The two handles: what each is, and under it the pair of keys
             // that step it. The band between them slides the window, which
@@ -2174,7 +2187,13 @@ impl App {
             Exposure(stops) => {
                 return self.adjust(|current, _| current.display.adjust_exposure(stops));
             }
+            // Refused on a photo, whose window is as stored and the
+            // handles': the row the key cycles is not on the panel for one
+            // — see `When::Data`.
             CycleAutoWindow => {
+                if !self.conditions().data {
+                    return Effect::Nothing;
+                }
                 return self.adjust(|current, _| {
                     current.shown.display.cycle_auto(&current.shown.stats);
                     true
@@ -2504,6 +2523,8 @@ impl App {
             false_colored: current
                 .is_some_and(|current| current.display.false_colored(current.image.is_gray())),
             measured_gray: current.is_some_and(|current| current.display.gray_measurement()),
+            data: current.is_some_and(|current| Reading::of(&current.image) == Reading::Data),
+            map_shown: current.is_some_and(|current| current.showing != Showing::Picture),
             picking: self.picking,
             nothing_open: current.is_none(),
             arriving: self.arriving().is_some(),
@@ -3386,6 +3407,8 @@ impl App {
             Control::Output => self.toggle_hdr(),
             Control::CameraJpeg => self.toggle_camera_jpeg(),
             Control::Depth => self.toggle_beside(Auxiliary::Depth),
+            // The file read the other way, which is a read like a step.
+            Control::Reading(reading) => self.read_as(reading),
             Control::GainMap | Control::ShowGainMap => self.toggle_beside(Auxiliary::GainMap),
             // The cross on the message at the foot of the window. The frame
             // after re-tests the pointer, which is what takes the highlight

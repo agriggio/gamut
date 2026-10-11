@@ -24,7 +24,7 @@ use egui::{
 use crate::clock;
 use crate::image::AlphaMode;
 use crate::image::auxiliary::{Auxiliary, Showing};
-use crate::image::decode::Rendering;
+use crate::image::decode::{Reading, Rendering};
 use crate::image::depth::{Accuracy, Quantity};
 use crate::image::exif::{self, Group, ShownRegion};
 use crate::image::gain_map::{GainMap, Lift};
@@ -180,6 +180,10 @@ enum Face {
         /// A button after the head, with the mark it wears: the map of
         /// where the picture was taken, beside the coordinates.
         button: Option<(&'static [icon::Mark], Control)>,
+        /// Whether the row under the head switches how the file is read,
+        /// as a photo or as data: the Image section's, beside the facts
+        /// the switch corrects — see [`reading_row`].
+        reading: bool,
     },
     /// The regions the metadata marks out on the picture, as a table of who
     /// or what each is and where, each drawn on the picture while the
@@ -511,9 +515,14 @@ fn column(pass: &mut Pass, ui: &mut egui::Ui, current: &Current, picture: &egui:
                 }
                 match section.face {
                     Face::File => file_section(pass, ui, current, section, index, width),
-                    Face::Headed { mark, head, button } => {
-                        headed_section(pass, ui, place, section, index, width, mark, head, button)
-                    }
+                    Face::Headed {
+                        mark,
+                        head,
+                        button,
+                        reading,
+                    } => headed_section(
+                        pass, ui, place, section, index, width, mark, head, button, reading,
+                    ),
                     Face::Regions => {
                         regions_section(pass, ui, current, picture, place, section, index, width)
                     }
@@ -624,6 +633,7 @@ fn headed_section(
     mark: &[icon::Mark],
     head: &[&str],
     button: Option<(&[icon::Mark], Control)>,
+    reading: bool,
 ) {
     let theme = pass.theme;
     let pieces: Vec<Piece> = head
@@ -664,6 +674,10 @@ fn headed_section(
             paint_showing(ui, rect, theme, pass.grid);
         }
     }
+    if reading {
+        ui.add_space(HEAD_GAP);
+        reading_row(pass, ui, width);
+    }
     let rows = (first..)
         .zip(&section.facts)
         .filter(|(_, fact)| !head.contains(&fact.name.as_str()));
@@ -672,6 +686,59 @@ fn headed_section(
         table(pass, ui, rows, width);
     }
 }
+
+/// The row under the Image section's head that reads the file as a photo
+/// or as data: its name, dim, where a field's name goes, and the pair of
+/// cells beside it with the reading in force lit — the same pair as at the
+/// head of the histogram panel, going through the same control. Dead
+/// while a map is shown in the picture's place, which is data by nature.
+fn reading_row(pass: &mut Pass, ui: &mut egui::Ui, width: f32) {
+    let Some(current) = pass.current else {
+        return;
+    };
+    let theme = pass.theme;
+    let reading = Reading::of(&current.image);
+    let enabled = current.showing == Showing::Picture;
+    let font = egui::FontId::proportional(LABEL_SIZE);
+    ui.horizontal(|ui| {
+        ui.set_width(width);
+        ui.spacing_mut().item_spacing.x = COLUMN_GAP;
+        let (name, _) = ui.allocate_exact_size(vec2(READING_LABEL, CHIP_HEIGHT), Sense::HOVER);
+        ui.painter().text(
+            pos2(name.min.x, name.center().y),
+            egui::Align2::LEFT_CENTER,
+            "Read as",
+            font.clone(),
+            theme.text_dim.into(),
+        );
+        for (choice, word) in [(Reading::Photo, "Photo"), (Reading::Data, "Data")] {
+            let control = Control::Reading(choice);
+            let (rect, response) =
+                ui.allocate_exact_size(vec2(READING_CELL, CHIP_HEIGHT), Sense::CLICK);
+            let active = reading == choice;
+            let (background, ink) = pass.button_ink(active, &response, enabled);
+            ui.painter().rect_filled(rect, TOGGLE_RADIUS, background);
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                word,
+                font.clone(),
+                ink,
+            );
+            response.widget_info(|| {
+                WidgetInfo::selected(WidgetType::Button, enabled, active, control.label())
+            });
+            let response = pass.tooltip(response, Tip::Control(control));
+            if enabled && response.clicked() {
+                pass.press(control);
+            }
+        }
+    });
+}
+
+/// The width of the reading row's name, and of each of its two cells.
+const READING_LABEL: f32 = 52.0;
+const READING_CELL: f32 = 48.0;
 
 /// `section`'s name after `mark`, in the headings' ink, copying the section.
 /// Whether the pointer is on it.
@@ -1296,6 +1363,7 @@ fn contents(current: &Current) -> Contents {
                 mark: icon::IMAGE,
                 head: &[RESOLUTION, READ_BY],
                 button: None,
+                reading: true,
             },
             fields(image_facts(current)),
         )
@@ -1308,6 +1376,7 @@ fn contents(current: &Current) -> Contents {
                 mark: icon::SUN,
                 head: &[],
                 button: None,
+                reading: false,
             },
             fields(gain_map_facts(current)),
         )
@@ -1320,6 +1389,7 @@ fn contents(current: &Current) -> Contents {
                 mark: icon::AXIS_3D,
                 head: &[],
                 button: None,
+                reading: false,
             },
             fields(depth_facts(current)),
         )
@@ -1438,7 +1508,12 @@ fn metadata_section(exif: &exif::Exif, section: &exif::Section) -> Section {
     };
     Section::new(
         section.group.name(),
-        Face::Headed { mark, head, button },
+        Face::Headed {
+            mark,
+            head,
+            button,
+            reading: false,
+        },
         fields(entries),
     )
 }

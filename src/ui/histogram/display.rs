@@ -29,20 +29,28 @@ const SWATCH_INSET: f32 = 3.0;
 const ROW_HEIGHT: f32 = 20.0;
 const ROW_GAP: f32 = 8.0;
 
-/// What the three rows of settings under the band take off the section's
-/// height: each row and the gap above it, under the plot's own inset —
-/// which the band hangs below rather than inside, so it is what is left
-/// over between the two and belongs to whatever comes next.
+/// What the rows of settings under the band take off the section's height:
+/// each row and the gap above it, under the plot's own inset — which the
+/// band hangs below rather than inside, so it is what is left over between
+/// the two and belongs to whatever comes next.
 ///
-/// Three rows, and every file's. The exposure: pushing a picture two stops
-/// up is how you find out whether a shadow is empty or merely dark,
-/// whatever the file. The window: a graded file's is 0..1 by rights, and
-/// the handles move it off that on any file, so the row is where it is put
-/// back as much as where a rule is chosen. The curve, because the exposure
+/// Two rows on a photo, three on an image read as `data`. The exposure:
+/// pushing a picture two stops up is how you find out whether a shadow is
+/// empty or merely dark, whatever the file. The curve, because the exposure
 /// is: a stop up puts the top of any file above white, and the curve is
-/// what fits it back into a surface that stops there. One height for every
-/// file, so the column never jumps from one file to the next.
-pub(super) const ROWS_HEIGHT: f32 = PLOT_INSET + 3.0 * (ROW_GAP + ROW_HEIGHT);
+/// what fits it back into a surface that stops there. The window only on
+/// data: a photo's window is 0..1 by rights, and a rule that stretched what
+/// it holds to black and white would make it look wrong rather than show
+/// anything the handles do not — a drag on them is the way into a photo's
+/// shadows. A measurement has no white, so finding its window in its
+/// values is the whole question, and the rules are its answers; the reset
+/// puts a hand-moved window back on either. So the section is one height
+/// for every photo and another for every measurement, and the column moves
+/// only between the two kinds.
+pub(super) const fn rows_height(data: bool) -> f32 {
+    let rows = if data { 3.0 } else { 2.0 };
+    PLOT_INSET + rows * (ROW_GAP + ROW_HEIGHT)
+}
 
 /// The column of words down the left of those rows, and the gap between one
 /// of them and what it names.
@@ -104,22 +112,24 @@ pub(super) fn swatch_button(bars: Rect, index: usize) -> Rect {
 /// It ends the section, under whichever of the two things the band ends
 /// in: the row of stops on a color image, and the row of false colors under
 /// it on a gray one, which make the section taller by their own height. The
-/// three rows are every file's.
+/// exposure and the curve are every file's; the windows are data's — see
+/// [`rows_height`].
 #[derive(Clone, Copy)]
 pub(super) struct Rows {
     /// The exposure's line, and where its word goes: the slider along it
     /// and its reading at the end.
     pub exposure: Rect,
     exposure_label: Rect,
-    /// The three windows.
-    pub window: (Rect, Rect),
+    /// The three windows, on an image read as data; none on a photo.
+    pub window: Option<(Rect, Rect)>,
     /// And the two choices for the curve.
     pub curve: (Rect, Rect),
 }
 
 impl Rows {
-    /// The rows of the section laid out at `rect`.
-    pub fn new(rect: Rect) -> Self {
+    /// The rows of the section laid out at `rect`, with the row of windows
+    /// where the image is read as `data`.
+    pub fn new(rect: Rect, data: bool) -> Self {
         let inside = rect;
         let left = inside.x + ROW_LABEL + ROW_LABEL_GAP;
         let line = |y: f32| {
@@ -129,13 +139,14 @@ impl Rows {
             )
         };
 
-        let mut y = rect.bottom() - 3.0 * ROW_HEIGHT - 2.0 * ROW_GAP;
+        let count = if data { 3.0 } else { 2.0 };
+        let mut y = rect.bottom() - count * ROW_HEIGHT - (count - 1.0) * ROW_GAP;
         let (exposure, exposure_label) = line(y);
         let mut next = || {
             y += ROW_HEIGHT + ROW_GAP;
             line(y)
         };
-        let window = next();
+        let window = data.then(&mut next);
         let curve = next();
         Self {
             exposure,
@@ -171,20 +182,26 @@ impl Rows {
     /// Each row's word and where it goes, in the order they are stacked.
     pub fn labels(&self) -> impl Iterator<Item = (&'static str, Rect)> {
         [
-            ("Exposure", self.exposure_label),
-            ("Window", self.window.1),
-            ("Curve", self.curve.1),
+            Some(("Exposure", self.exposure_label)),
+            self.window.map(|(_, label)| ("Window", label)),
+            Some(("Curve", self.curve.1)),
         ]
         .into_iter()
+        .flatten()
     }
 
     /// The bottom of the lowest row: where the block, and the section, end.
     #[cfg(test)]
     pub fn bottom(&self) -> f32 {
-        [self.exposure, self.window.0, self.curve.0]
-            .into_iter()
-            .map(|row| row.bottom())
-            .fold(0.0, f32::max)
+        [
+            Some(self.exposure),
+            self.window.map(|(row, _)| row),
+            Some(self.curve.0),
+        ]
+        .into_iter()
+        .flatten()
+        .map(|row| row.bottom())
+        .fold(0.0, f32::max)
     }
 }
 
@@ -212,11 +229,12 @@ fn row_label(widget: Control, display: &Display) -> Option<(String, bool)> {
 
 /// Every button in that block, with where it goes. The one list the drawing,
 /// the pointer and the tooltips all work from.
-pub(super) fn row_buttons(rect: Rect) -> impl Iterator<Item = (Control, Rect)> {
-    let rows = Rows::new(rect);
-    let (row, _) = rows.window;
-    let windows = (0..WINDOWS.len())
-        .map(move |index| (Control::Window(index), share(row, WINDOWS.len(), index)));
+pub(super) fn row_buttons(rect: Rect, data: bool) -> impl Iterator<Item = (Control, Rect)> {
+    let rows = Rows::new(rect, data);
+    let windows = rows.window.into_iter().flat_map(|(row, _)| {
+        (0..WINDOWS.len())
+            .map(move |index| (Control::Window(index), share(row, WINDOWS.len(), index)))
+    });
     let (row, _) = rows.curve;
     let curves = (0..ToneMap::ALL.len())
         .map(move |index| (Control::Curve(index), share(row, ToneMap::ALL.len(), index)));
@@ -333,28 +351,7 @@ pub(super) fn show(
     }
     rows(pass, ui, current, rect);
     let readout = held.or_else(|| mark.map(|mark| mark.words.clone()));
-    section::header(
-        pass,
-        ui,
-        Section::Display,
-        rect,
-        readout.as_deref(),
-        Some(mode(current.image.referred)),
-    );
-}
-
-/// The word the section stands under while nothing is being read: how the
-/// file is being read, which is what decides everything in the section —
-/// the window it opened on, whether the exposure and the curves are live,
-/// whether a gray file is spread along the gray ramp — and is otherwise
-/// only to be inferred from which of them is lit and which dim. One word
-/// per [`Referred`], since that is the one fact they all follow from.
-pub(super) fn mode(referred: Referred) -> &'static str {
-    match referred {
-        Referred::Display => "graded",
-        Referred::Scene => "metered",
-        Referred::Measured => "measurement",
-    }
+    section::header(pass, ui, Section::Display, rect, readout.as_deref());
 }
 
 /// The row of stops under the band: 0 at the value the window puts at
@@ -551,7 +548,8 @@ fn swatches(pass: &mut Pass, ui: &mut egui::Ui, current: &Current, bars: Rect) {
 /// true. The handles are what say where the window is.
 fn rows(pass: &mut Pass, ui: &mut egui::Ui, current: &Current, rect: Rect) {
     let theme = pass.theme;
-    let rows = Rows::new(rect);
+    let data = section::is_data(current);
+    let rows = Rows::new(rect, data);
     let display = &current.display;
     let font = FontId::proportional(ROW_TEXT);
     let grid = pass.grid;
@@ -593,7 +591,7 @@ fn rows(pass: &mut Pass, ui: &mut egui::Ui, current: &Current, rect: Rect) {
     // gray — which clips at its top whatever curve is on; the row stays,
     // since the section's height is the file's, and says why when rested on.
     let ramped = display.ramp(current.image.is_gray()).is_some();
-    for (widget, rect) in row_buttons(rect) {
+    for (widget, rect) in row_buttons(rect, data) {
         let Some((label, active)) = row_label(widget, display) else {
             continue;
         };

@@ -290,6 +290,5 @@ pub(super) fn show(
         Section::Output,
         rect,
         mark.map(|mark| mark.words.as_str()),
-        None,
     );
 }

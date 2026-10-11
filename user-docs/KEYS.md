@@ -614,10 +614,11 @@ Each press moves its end by a twentieth of the window's width as the
 histogram draws it, and no further than the histogram's axis goes.
 
 Moving either end by hand takes the window out of whichever rule it was
-on; `e` cycles back into them, and the *As stored* button on the histogram
-panel puts a graded file's window back at 0 to 1. The exposure is a push on
-top of whatever the window is, and neither handle touches it. Exposure
-stops at ±16 stops.
+on. On a file read as data, `e` cycles back into the rules and the *As
+stored* button on the histogram panel puts the window back at 0 to 1; on a
+photo the rules are not offered, and the reset button puts the window back
+with everything else. The exposure is a push on top of whatever the window
+is, and neither handle touches it. Exposure stops at ±16 stops.
 
 The histogram panel (`h`) is where all of this is seen and set. The band of
 gray under the plot is what the display makes of each value along the axis,
@@ -638,11 +639,21 @@ the one under the gain map's plot counts how far the map lifts the picture.
 Pointing at a plot names the value under
 the pointer at that stage; pointing at the picture marks the pixel on every
 plot and writes its value at each stage, from the file at the foot of the
-panel to what the screen shows at the top. While nothing is being read, the
-Display section's header says how the file is being read — *graded*, light
-with a white of its own; *metered*, scene light exposed by the meter; or
-*measurement*, numbers windowed to what they hold — which is what decides
-the window it opened on and which of the rows under it are live.
+panel to what the screen shows at the top.
+
+The pair of buttons at the head of the panel, *Photo* and *Data*, says how
+the file is being read, and switches it. A photo is shown as it was made to
+look, with 1.0 as white; data is numbers windowed to what they hold, a
+single channel spread along a ramp with no exposure to push. The program
+guesses from the file, and guesses wrong on some: a 16-bit grayscale scan
+saved without its profile opens as data, auto-leveled, and pressing *Photo*
+reads it again as the photograph it is; an elevation model saved as an
+ordinary 8-bit image opens as a picture, and *Data* reads it as the
+measurement it is. The choice stays with the file for the rest of the
+session, so stepping away and back finds it read the same way, and the
+same pair is under the Image heading of the information panel. While the
+gain map or the depth map is shown in the picture's place the pair is off:
+a map is data whatever the picture is.
 
 `w`, or the warning sign in the row of buttons at the top of the panel,
 paints the clipped
@@ -664,15 +675,18 @@ is not light and has no exposure to push — the handles set what comes out
 black and white there, and `d` and `f` do nothing. It snaps to the quarter stops `d`
 and `f` take, and a press anywhere along it puts the exposure there. The
 keys go on past the slider's ends, to ±16 stops, where the handle stands
-hollow at the end and the reading says where it is. Under that is the row
-of windows the `e` key cycles, named for what they do: *As stored* shows
-the values as they are, 0 to 1, which is what a graded file opens with;
-*Full range* stretches everything the file holds to black and white; and
-*Trimmed* leaves the outermost 0.2% out before stretching, which is what a
-file of linear data — sensor counts, a float TIFF, an EXR — opens with.
-Under that, the *Curve* row — *Clip* or *Roll off* — that `t` toggles,
-since a stop or two of exposure puts the top of any file above white. The
-three rows are the same for every file, so the panel is one height.
+hollow at the end and the reading says where it is. On a file read as data
+there is a row of windows under that, which the `e` key cycles, named for
+what they do: *As stored* shows the values as they are, 0 to 1; *Full
+range* stretches everything the file holds to black and white; and
+*Trimmed* leaves the outermost 0.2% out before stretching, which is what
+data — sensor counts, a float TIFF, an elevation model — opens with. A
+photo has no such row: it opens as stored, stretching it would only make
+it look wrong, and the handles are the way into its shadows and
+highlights. Last, the *Curve* row — *Clip* or *Roll off* — that `t`
+toggles, since a stop or two of exposure puts the top of any file above
+white. The rows are the same for every photo, and the same for every file
+of data, so the panel changes height only between the two.
 
 The curve is added to bring values brighter than white back down into a
 surface that cannot show them. *Clip* is not a second curve but the absence

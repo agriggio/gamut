@@ -50,6 +50,8 @@ use crate::image::{AlphaMode, Channels, ColorSpace, DecodedImage, Samples};
 
 /// GDAL writes the no-data value here, as an ASCII string.
 const GDAL_NODATA: u16 = 42113;
+/// GeoTIFF's key directory, which a raster placed on the ground carries.
+const GEO_KEY_DIRECTORY: u16 = 34735;
 
 /// The bit of `NewSubfileType` that marks a directory as a transparency
 /// mask of another. The other two bits, a reduced-resolution copy and a
@@ -177,6 +179,10 @@ impl super::Decoder for TiffRs {
             .and_then(|value| value.trim().parse::<f32>().ok());
         let orientation = orientation(&mut decoder)?;
         let profile = decoder.find_tag(Tag::IccProfile)?;
+        // A GeoTIFF's key directory, or a value standing for no data: either
+        // says the file is a measurement — see `color_space`.
+        let georeferenced =
+            nodata.is_some() || decoder.find_tag(Tag::Unknown(GEO_KEY_DIRECTORY))?.is_some();
 
         // Chunk by chunk, across threads, wherever the layout is the plain
         // one. A planar file keeps each channel's chunks apart, which is
@@ -223,7 +229,7 @@ impl super::Decoder for TiffRs {
             ));
         }
 
-        let color = color_space(&samples, profile);
+        let color = color_space(&samples, profile, georeferenced);
         let mut image = DecodedImage::new(
             width,
             height,
@@ -611,16 +617,30 @@ fn orientation<R: io::Read + Seek>(decoder: &mut Decoder<R>) -> Result<Orientati
 /// has none, and a picture out of Lightroom or Photoshop has the one it was
 /// graded in, which is Adobe RGB or ProPhoto far more often than sRGB — and
 /// is read through the same reader every other format's goes through, with
-/// sRGB assumed for whatever it does not state. Without one, bit depth is
-/// the best signal available — 8-bit TIFFs are overwhelmingly pictures,
-/// deeper ones overwhelmingly measurements — and `--transfer` overrides it
-/// when the guess is wrong.
-fn color_space(samples: &Samples, profile: Option<tiff::decoder::ifd::Value>) -> ColorSpace {
+/// sRGB assumed for whatever it does not state. Without one, the layout is
+/// the best signal available: 8-bit files are overwhelmingly pictures; so
+/// are 16-bit files of three colors, which is what a scan or an editor's
+/// export saved without its profile looks like, where a measurement is
+/// nearly always one channel — an elevation, a mask, a frame of counts — or
+/// floats, which nothing encodes a curve into. A file that says where its
+/// pixels are on the ground, or which value means no data, is data whatever
+/// its layout. The *Photo* / *Data* switch and `--transfer` override the
+/// guess when it is wrong.
+fn color_space(
+    samples: &Samples,
+    profile: Option<tiff::decoder::ifd::Value>,
+    georeferenced: bool,
+) -> ColorSpace {
     if let Some(profile) = profile.and_then(|value| value.into_u8_vec().ok()) {
         return ColorSpace::stated(None, Some(&profile));
     }
     match samples {
         Samples::U8 { .. } => ColorSpace::SRGB,
+        Samples::U16 { channels, .. }
+            if matches!(channels, Channels::Rgb | Channels::Rgba) && !georeferenced =>
+        {
+            ColorSpace::SRGB
+        }
         _ => ColorSpace::LINEAR_BT709,
     }
 }

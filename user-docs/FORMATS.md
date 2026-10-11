@@ -97,7 +97,9 @@ non-RGB space, leaves the file shown as sRGB rather than approximated.
 **You can override the assumption.** `--transfer linear|srgb|pq|hlg|gamma:N`
 and `--primaries bt709|p3|bt2020|adobe|prophoto` replace whatever the file said or was
 assumed to mean, for every file opened in that run. This matters most for
-TIFF, which says nothing at all.
+TIFF, which says nothing at all. For one file at a time, the *Photo* /
+*Data* pair at the head of the histogram panel does the same job in plainer
+terms — see [KEYS.md](KEYS.md).
 
 **Depth and channels survive.** A 16-bit scan stays 16-bit, floating-point
 data stays floating point, and a grayscale image stays single-channel rather
@@ -112,8 +114,10 @@ render, a light probe, a merge of exposures — opens metered, the way a
 camera would expose it: the exposure is set so that the bulk of the light
 lands at middle gray, and the exposure slider on the histogram panel shows
 the setting in stops, ready to be pushed either way with `d` and `f`.
-Measurement data — a 16-bit or floating-point TIFF, and any other linear
-file — opens on a trimmed window, the central 99.8% of what it holds,
+Measurement data — a 16-bit grayscale or a floating-point TIFF without a
+profile, a 16-bit TIFF that says where its pixels are on the ground, and
+any other linear file — opens on a trimmed window, the central 99.8% of
+what it holds,
 because values occupying a fraction of the nominal range otherwise show as a
 black rectangle. A single-channel measurement is spread straight across the
 grays, the middle of the window coming out middle gray, as an elevation
