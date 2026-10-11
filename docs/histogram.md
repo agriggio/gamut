@@ -89,9 +89,10 @@ the exposure and the curves are live, whether a gray file is spread along
 the gray ramp — and was otherwise only to be inferred from which of them
 is lit. The header's last square (`section::button`) is the section's own
 button where it has one: the Gain map section's eye, which shows the map
-in the picture's place, lit while it is. It is kept clear in every other
-section, so the readouts end on one line down the column, and it is where
-the switch that passes a stage by will go.
+in the picture's place, lit while it is. A section's readout ends short of
+that square where the section has a button, and at the line's end where it
+does not; a section given one later — the switch that passes a stage by —
+takes the square the same way.
 A stage added later — the development stages a ProRAW file describes, a
 baseline exposure, a profile's tone curve, a gain table — is a `Section`
 variant placed between Display and Image at a height of its own: a 1D stage

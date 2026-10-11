@@ -408,11 +408,24 @@ fn a_sections_button_ends_its_header() {
     let button = section::button(rect);
     assert_eq!(button.right(), line.right());
     assert_eq!((button.y, button.height), (line.y, line.height));
-    assert!(section::readout_end(line) < button.x);
+    assert!(section::readout_end(Section::GainMap, line) < button.x);
     assert!(
         line.bottom() <= Section::GainMap.plot(rect).y - PLOT_INSET,
         "the header is clear of the plot's ground"
     );
+}
+
+/// A section with no button of its own sets its readout flush with the
+/// end of its header.
+#[test]
+fn a_buttonless_sections_readout_ends_its_header() {
+    let layout = laid_out(&gain_mapped(), 600.0);
+    for (section, rect) in layout {
+        if !section.has_button() {
+            let line = section::header_line(rect);
+            assert_eq!(section::readout_end(section, line), line.right());
+        }
+    }
 }
 
 /// The Display plot is as tall as the Output's on every file; the false

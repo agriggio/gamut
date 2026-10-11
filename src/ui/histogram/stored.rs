@@ -251,7 +251,7 @@ fn values(pass: &Pass, ui: &egui::Ui, current: &Current, rect: Rect, mark: &Mark
             .x
     };
     let cell = width_of(widest);
-    let mut end = section::readout_end(line);
+    let mut end = section::readout_end(Section::Image, line);
     for channel in mark.channels.iter().rev() {
         let galley =
             painter.layout_no_wrap(channel.words.clone(), font.clone(), Color32::PLACEHOLDER);

@@ -63,6 +63,12 @@ impl Section {
         }
     }
 
+    /// Whether the section has a button of its own at the end of its
+    /// header: the Gain map section's, which shows the map.
+    pub fn has_button(self) -> bool {
+        matches!(self, Section::GainMap)
+    }
+
     /// Whether `current` passes through this stage. The Gain map section is
     /// there while the picture or its map is on screen, and left out while
     /// another of the file's images is, which nothing lifts. The Image
@@ -170,8 +176,7 @@ pub fn header_line(rect: Rect) -> Rect {
 }
 
 /// The square at the end of a section's header that its own button takes,
-/// where it has one: the gain map's, which shows the map. Kept clear in
-/// every section, so that the readouts end on one line down the column.
+/// where it has one: the gain map's, which shows the map.
 pub fn button(rect: Rect) -> Rect {
     let line = header_line(rect);
     Rect::new(
@@ -185,10 +190,10 @@ pub fn button(rect: Rect) -> Rect {
 /// The line a section opens with, as the information panel's sections
 /// open: the section's mark and name in the accent, the one thing on the
 /// panel picked out in it; and on the right what the pointer is reading at
-/// its stage — `readout` — set short of the square the section's own button
-/// takes, [`button`]. While nothing is being read, `standing` goes in its
-/// place in the dim ink: what holds at the stage whatever the pointer does,
-/// which the Display section uses for the reading the file is under.
+/// its stage — `readout` — ending where [`readout_end`] says. While nothing
+/// is being read, `standing` goes in its place in the dim ink: what holds at
+/// the stage whatever the pointer does, which the Display section uses for
+/// the reading the file is under.
 pub fn header(
     pass: &Pass,
     ui: &egui::Ui,
@@ -223,7 +228,7 @@ pub fn header(
         (None, None) => return,
     };
     painter.text(
-        pos2(grid.snap(readout_end(line)), middle),
+        pos2(grid.snap(readout_end(section, line)), middle),
         Align2::RIGHT_CENTER,
         words,
         FontId::proportional(ROW_TEXT),
@@ -232,7 +237,12 @@ pub fn header(
 }
 
 /// Where a header's readout ends: short of the square at the end of the
-/// line that a section's own button takes.
-pub fn readout_end(line: Rect) -> f32 {
-    line.right() - LABEL_HEIGHT - CELL_GAP
+/// line where the section has a button of its own, [`button`], and at the
+/// line's end where it does not.
+pub fn readout_end(section: Section, line: Rect) -> f32 {
+    if section.has_button() {
+        line.right() - LABEL_HEIGHT - CELL_GAP
+    } else {
+        line.right()
+    }
 }
