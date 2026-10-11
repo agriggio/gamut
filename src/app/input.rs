@@ -2190,11 +2190,10 @@ impl App {
             ScaleUp => return self.rescale(ui::scale::step(self.ui_scale, true)),
             ScaleDown => return self.rescale(ui::scale::step(self.ui_scale, false)),
             ScaleReset => return self.rescale(ui::scale::DEFAULT),
+            // Refused by the display on a file with no exposure, so that
+            // the keys and the slider cannot drift.
             Exposure(stops) => {
-                return self.adjust(|current, _| {
-                    current.display.adjust_exposure(stops);
-                    true
-                });
+                return self.adjust(|current, _| current.display.adjust_exposure(stops));
             }
             CycleAutoWindow => {
                 return self.adjust(|current, _| {
@@ -2527,6 +2526,7 @@ impl App {
             openable: !self.openers.is_empty(),
             false_colored: current
                 .is_some_and(|current| current.display.false_colored(current.image.is_gray())),
+            measured_gray: current.is_some_and(|current| current.display.gray_measurement()),
             picking: self.picking,
             nothing_open: current.is_none(),
             arriving: self.arriving().is_some(),

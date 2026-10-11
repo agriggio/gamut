@@ -8,6 +8,28 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
 
 ### Changed
 
+- A single-channel measurement — a linear 16-bit or floating-point TIFF, an
+  elevation model, a depth map — is spread straight across the grays: the
+  middle of its window comes out middle gray, and each value the gray code
+  at its place in the window, as every viewer of such data draws it and as
+  the false colors here already placed a value along their ramps. It used to
+  be shown as light, the middle of the window at half of white's light,
+  which put the lower quarter of the window across half the grays and
+  moved every value when the false color was switched on or off. The
+  window's ends are hard ends on an HDR monitor too, and the histogram's
+  row of curves is dim on such a file, saying why when rested on, as it is
+  under a false color. Its exposure slider is dim there too, and `d`, `f`
+  and `--exposure` do nothing: a stop is a doubling of light, and what a
+  stop would do on such a file the white handle does, in the file's own
+  units. A color measurement is shown as light, as before.
+  The histogram's Output section plots a gray file read through a ramp —
+  a false color, or a measurement's gray — along the ramp, end to end,
+  with the ramp itself as the band under it, and no row of stops; it used
+  to be spaced as light, a value's bar where the light of its color would
+  fall. The Display section's header says how the file is being read —
+  *graded*, *metered* or *measurement* — while the pointer is reading
+  nothing, since that is what decides which of the section's rows are
+  live and what the file opened on.
 - The histogram and the file information no longer float over the picture.
   They are shown one at a time in a panel down the right, beside the
   picture rather than over it, which is fitted into what the panel leaves.

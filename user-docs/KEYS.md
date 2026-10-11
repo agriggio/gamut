@@ -638,7 +638,11 @@ the one under the gain map's plot counts how far the map lifts the picture.
 Pointing at a plot names the value under
 the pointer at that stage; pointing at the picture marks the pixel on every
 plot and writes its value at each stage, from the file at the foot of the
-panel to what the screen shows at the top.
+panel to what the screen shows at the top. While nothing is being read, the
+Display section's header says how the file is being read — *graded*, light
+with a white of its own; *metered*, scene light exposed by the meter; or
+*measurement*, numbers windowed to what they hold — which is what decides
+the window it opened on and which of the rows under it are live.
 
 `w`, or the warning sign in the row of buttons at the top of the panel,
 paints the clipped
@@ -654,8 +658,10 @@ way. Neither marks white where nothing is being clipped: on
 an HDR surface with no curve, or under a curve, the highlights are shown
 or rolled off rather than lost.
 
-Under the band, every file gets the exposure: a slider over six stops each
-way, its reading at the end of the row. It snaps to the quarter stops `d`
+Under the band, the exposure: a slider over six stops each way, its
+reading at the end of the row, dim on a single-channel measurement, which
+is not light and has no exposure to push — the handles set what comes out
+black and white there, and `d` and `f` do nothing. It snaps to the quarter stops `d`
 and `f` take, and a press anywhere along it puts the exposure there. The
 keys go on past the slider's ends, to ±16 stops, where the handle stands
 hollow at the end and the reading says where it is. Under that is the row
@@ -702,7 +708,9 @@ False color applies to single-channel images only, and `r` does nothing on a
 color one. While a colormap is active, tone mapping is suspended — a curve on
 top of a colormap would distort the values you are reading off it — so the
 histogram's row of curves goes dim, `t` does nothing, and both come back
-with the gray ramp.
+with the gray ramp. On a single-channel measurement — a linear TIFF, an
+elevation model — the gray ramp is read the same way, straight across the
+grays, so the curves stay dim there too.
 
 Everything on this page shows up in one line at the right of the bottom bar,
 in front of the buttons there: the window by name, the exposure in the quarter

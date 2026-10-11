@@ -197,7 +197,7 @@ pub(super) fn show(
     );
     match mark {
         Some(mark) if !mark.channels.is_empty() => {
-            section::header(pass, ui, Section::Image, rect, None);
+            section::header(pass, ui, Section::Image, rect, None, None);
             values(pass, ui, current, rect, mark);
         }
         _ => section::header(
@@ -206,6 +206,7 @@ pub(super) fn show(
             Section::Image,
             rect,
             mark.map(|mark| mark.words.as_str()),
+            None,
         ),
     }
 }

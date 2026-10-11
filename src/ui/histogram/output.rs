@@ -2,14 +2,17 @@
 //! display starts from it, every value pushed through the display's
 //! response and binned again on the curve the screen is driven with — sRGB's
 //! — from black to as far above white as the surface goes, so that what the
-//! surface clips piles into the end it is clipped at.
+//! surface clips piles into the end it is clipped at. A gray image read
+//! through a ramp — a false color, or a measurement — is binned along the
+//! ramp instead, from one end to the other, which for the gray ramp is the
+//! screen's own code: the axis is the band under it, read straight across.
 
 use std::sync::Arc;
 
 use super::plot::{Past, band, bars, white_mark};
 use super::*;
 use crate::image::Transfer;
-use crate::image::display::{Display, Headroom, ToneMap};
+use crate::image::display::{Colormap, Display, Headroom, ToneMap};
 use crate::image::stats::Fine;
 use crate::ui::FrameInput;
 
@@ -29,8 +32,11 @@ pub(super) struct Binned {
     pub plot: Plot,
     /// How far above white the plot's axis runs, as a ratio to white: the
     /// surface's room, or, on a surface whose room is not known, as far as
-    /// the response goes.
+    /// the response goes. 1 along a ramp, which has no room past its end.
     pub room: f32,
+    /// The ramp the axis runs along, where the image is read through one;
+    /// otherwise it is the screen's light, spaced on [`ENCODING`].
+    pub ramp: Option<Colormap>,
 }
 
 /// What a plot of the output is worked out from: the input's fine bins, by
@@ -41,7 +47,7 @@ struct Key {
     offset: u32,
     gain: u32,
     tone_map: ToneMap,
-    false_colored: bool,
+    ramp: Option<Colormap>,
     headroom: Headroom,
     room: u32,
 }
@@ -54,7 +60,7 @@ impl Key {
             offset: offset.to_bits(),
             gain: gain.to_bits(),
             tone_map: current.display.tone_map(),
-            false_colored: current.display.false_colored(current.image.is_gray()),
+            ramp: current.display.ramp(current.image.is_gray()),
             headroom: input.headroom,
             room: input.room.to_bits(),
         }
@@ -92,7 +98,7 @@ pub(super) fn binned_for(current: &Current, headroom: Headroom, room: f32) -> Bi
         offset: 0,
         gain: 0,
         tone_map: current.display.tone_map(),
-        false_colored: false,
+        ramp: current.display.ramp(current.image.is_gray()),
         headroom,
         room: room.to_bits(),
     };
@@ -138,27 +144,47 @@ fn rebin(current: &Current, headroom: Headroom, room: f32, key: Key) -> Binned {
     let display = &current.display;
     let transfer = current.image.color.transfer;
     let gray = current.image.is_gray();
-    let room = resolved_room(fine, room, |v| {
-        response(display, transfer, gray, headroom, v)
-    });
-    let plot = fine.rebinned([0.0, ENCODING.to_encoded(room)], |v| {
-        ENCODING.to_encoded(response(display, transfer, gray, headroom, v))
-    });
+    let ramp = display.ramp(gray);
+    let through = |v| response(display, transfer, gray, headroom, v);
+    // Along a ramp the response is where on it a value lands, 0 to 1 and
+    // never past: the axis is the ramp itself. Light is spaced as the
+    // screen codes it, to the surface's room.
+    let room = match ramp {
+        Some(_) => 1.0,
+        None => resolved_room(fine, room, through),
+    };
+    let plot = fine.rebinned([0.0, placed(ramp, room)], |v| placed(ramp, through(v)));
     Binned {
         key,
         fine: Arc::clone(fine),
         plot,
         room,
+        ramp,
     }
 }
 
-/// The output value at the middle of `bin`, as a ratio to white.
-fn output_at(binned: &Binned, bin: usize) -> f32 {
-    ENCODING.to_linear(bin_value(&binned.plot, bin))
+/// Where an output value falls on the axis: its code on the screen's curve
+/// for light, and its own place along a ramp.
+fn placed(ramp: Option<Colormap>, out: f32) -> f32 {
+    match ramp {
+        Some(_) => out,
+        None => ENCODING.to_encoded(out),
+    }
 }
 
-/// An output value as the header writes it: a ratio to white, to three
-/// places with the zeros it does not need taken off.
+/// The output value at the middle of `bin`: a ratio to white, or the place
+/// along the ramp.
+fn output_at(binned: &Binned, bin: usize) -> f32 {
+    let at = bin_value(&binned.plot, bin);
+    match binned.ramp {
+        Some(_) => at,
+        None => ENCODING.to_linear(at),
+    }
+}
+
+/// An output value as the header writes it: a ratio to white, or the place
+/// along the ramp, to three places with the zeros it does not need taken
+/// off.
 fn output_words(value: f32) -> String {
     trimmed(format!("{value:.3}"))
 }
@@ -193,7 +219,7 @@ pub(super) fn pixel_mark(
     )
     .min(binned.room);
     Some(Mark {
-        bin: binned.plot.bin_at(ENCODING.to_encoded(out)),
+        bin: binned.plot.bin_at(placed(binned.ramp, out)),
         words: output_words(out),
         ..Mark::default()
     })
@@ -211,7 +237,6 @@ pub(super) fn show(
     mark: Option<&Mark>,
 ) {
     let binned = plots.output;
-    let gray = current.image.is_gray();
     let plot_rect = Section::Output.plot(rect);
     bars(
         pass,
@@ -223,8 +248,8 @@ pub(super) fn show(
         &accent_rule(pass, mark),
     );
 
-    let top = ENCODING.to_encoded(binned.room);
-    let white = ENCODING.to_encoded(1.0) / top;
+    let top = placed(binned.ramp, binned.room);
+    let white = placed(binned.ramp, 1.0) / top;
     if white < 1.0 - 1e-3 {
         white_mark(pass, ui, plot_rect, white, 1.0);
     }
@@ -232,10 +257,11 @@ pub(super) fn show(
     // The row of stops under the band: 0 at white, below it how far under
     // white an output is, and on a surface with room above white how far
     // past it the screen goes, up to the room. Exact, the output's values
-    // being ratios to white already. Left off a measurement, as the
-    // Display section's row is: its values are quantities rather than
-    // light, and stops of the screen's light would read as stops of them.
-    if current.image.referred != crate::image::Referred::Measured {
+    // being ratios to white already. Left off an axis that is a ramp, whose
+    // places are not light, and off a measurement, as the Display section's
+    // row is: its values are quantities rather than light, and stops of the
+    // screen's light would read as stops of them.
+    if binned.ramp.is_none() && current.image.referred != crate::image::Referred::Measured {
         plot::ev_scale(
             pass,
             ui,
@@ -247,18 +273,16 @@ pub(super) fn show(
 
     // What each output comes out as, along the foot: gray from black to
     // white, chevrons in the accent over the stretch past white where the
-    // surface goes there, and under a false color the ramp, read at the
-    // output value.
-    let display = &current.display;
-    let false_colored = display.false_colored(gray);
-    band(pass, ui, plot_rect, Past::Chevrons, |t| {
-        let out = ENCODING.to_linear(t * top);
-        let color = if false_colored {
-            display.colormap().color(out.clamp(0.0, 1.0))
-        } else {
-            [out.clamp(0.0, 1.0); 3]
-        };
-        (Color::from_linear(color), out > ABOVE_WHITE)
+    // surface goes there, and along a ramp the ramp itself, end to end.
+    band(pass, ui, plot_rect, Past::Chevrons, |t| match binned.ramp {
+        Some(ramp) => (Color::from_linear(ramp.color(t)), false),
+        None => {
+            let out = ENCODING.to_linear(t * top);
+            (
+                Color::from_linear([out.clamp(0.0, 1.0); 3]),
+                out > ABOVE_WHITE,
+            )
+        }
     });
 
     section::header(
@@ -267,5 +291,6 @@ pub(super) fn show(
         Section::Output,
         rect,
         mark.map(|mark| mark.words.as_str()),
+        None,
     );
 }

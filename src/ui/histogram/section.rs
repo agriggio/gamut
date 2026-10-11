@@ -172,8 +172,17 @@ pub fn button(rect: Rect) -> Rect {
 /// open: the section's mark and name in the accent, the one thing on the
 /// panel picked out in it; and on the right what the pointer is reading at
 /// its stage — `readout` — set short of the square the section's own button
-/// takes, [`button`].
-pub fn header(pass: &Pass, ui: &egui::Ui, section: Section, rect: Rect, readout: Option<&str>) {
+/// takes, [`button`]. While nothing is being read, `standing` goes in its
+/// place in the dim ink: what holds at the stage whatever the pointer does,
+/// which the Display section uses for the reading the file is under.
+pub fn header(
+    pass: &Pass,
+    ui: &egui::Ui,
+    section: Section,
+    rect: Rect,
+    readout: Option<&str>,
+    standing: Option<&str>,
+) {
     let theme = pass.theme;
     let grid = pass.grid;
     let painter = ui.painter();
@@ -194,15 +203,18 @@ pub fn header(pass: &Pass, ui: &egui::Ui, section: Section, rect: Rect, readout:
         FontId::proportional(TEXT_SIZE),
         theme.accent.into(),
     );
-    if let Some(readout) = readout {
-        painter.text(
-            pos2(grid.snap(readout_end(line)), middle),
-            Align2::RIGHT_CENTER,
-            readout,
-            FontId::proportional(ROW_TEXT),
-            theme.text_primary.into(),
-        );
-    }
+    let (words, ink) = match (readout, standing) {
+        (Some(readout), _) => (readout, theme.text_primary),
+        (None, Some(standing)) => (standing, theme.text_dim),
+        (None, None) => return,
+    };
+    painter.text(
+        pos2(grid.snap(readout_end(line)), middle),
+        Align2::RIGHT_CENTER,
+        words,
+        FontId::proportional(ROW_TEXT),
+        ink.into(),
+    );
 }
 
 /// Where a header's readout ends: short of the square at the end of the

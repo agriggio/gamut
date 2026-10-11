@@ -68,7 +68,13 @@ as the information's sections do: its mark and name in the accent
 (`Section::mark`) — a monitor for Output, sliders for Display, the sun for
 the gain map, as it wears everywhere else in the window, and a picture for
 Image, as the information's Image section wears — and on the right what the pointer is reading at its
-stage. The header's last square (`section::button`) is the section's own
+stage. The Display section's header, while nothing is being read, says in
+the dim ink how the file is being read (`display::mode`): *graded*,
+*metered* or *measurement*, one word per `Referred`, since that is the one
+fact the section's rows all follow from — the window it opened on, whether
+the exposure and the curves are live, whether a gray file is spread along
+the gray ramp — and was otherwise only to be inferred from which of them
+is lit. The header's last square (`section::button`) is the section's own
 button where it has one: the Gain map section's eye, which shows the map
 in the picture's place, lit while it is. It is kept clear in every other
 section, so the readouts end on one line down the column, and it is where
@@ -140,8 +146,16 @@ it readable where it crosses the planes' lines.
 
 **Output** is the Display plot pushed through the display's response and
 encoded on sRGB's curve, over 0 to the surface's room above white
-(`FrameInput::room`, which is `App::display_headroom`). It is rebinned, not
-scanned: `Stats::scan` counts the pixels into 4081 fine bins on the input's
+(`FrameInput::room`, which is `App::display_headroom`). Where a gray image
+is read through a ramp — a false color, or the gray ramp a measurement is
+spread along (`Display::ramp`) — its axis is the ramp instead, from one end
+to the other with no room past it, and the band under the plot is the ramp
+itself: the response is where along the ramp a value lands, and for the
+gray ramp that is the screen's code, so the plot is the Display plot across
+the window with what lies outside piled at the ends, which is the truth of
+what the screen receives. Spaced on sRGB's curve it would put a value's bar
+where the *light* of that code falls, a place the ramp never gave it. It is
+rebinned, not scanned: `Stats::scan` counts the pixels into 4081 fine bins on the input's
 axis (`stats::Fine`), and `Fine::rebinned` pushes each fine bin's value
 through the response and spreads its count over the output bins it stands
 for, out-of-range piling into the end it went out of. A handle dragged
@@ -209,7 +223,9 @@ from the value, not the bins, so they are exact wherever they are drawn.
 - **Output** counts from white: its values are ratios to white already, so a
   stop is `2^n` encoded on sRGB's curve over the axis's top. On a surface with
   room above white the row runs past 0 to the room, which is the one thing
-  the band, held to what the panel can show, cannot say.
+  the band, held to what the panel can show, cannot say. It is left off an
+  axis that is a ramp, whose places are not light, and off a measurement
+  (`Referred::Measured`) as the Display row is.
 - **Display** counts from the value the window puts at white — the white
   handle, `Display::displayed_bounds` — so the plot reads as stops below
   clipping, as a camera's does, and a stop on the exposure slider moves the
@@ -528,13 +544,25 @@ exactly when the number is wanted.
 
 ### What goes dead
 
-The row of curves is dead under a false color, and says why when rested on.
-The compositor holds the curve at a clip there — `Display::curve_on` is
-where the choice is made, and `composite.rs` and the pointer's readout both
-ask it, the bar's words `Display::false_colored` — because a ramp has no
-color past its end for a
-highlight to roll off into, and a curve over the ramp would bend the very
-mapping the reading is being taken off. `Display::response` runs the curve
+The exposure's slider is dead on a single-channel measurement, and says why
+when rested on (`MEASUREMENT_NOT_EXPOSED`): a stop is a doubling of light,
+and its values are not light; and over the gray ramp a stop up is exactly
+the white handle brought in to the window's middle, which the handle does
+in the file's own units. `Display::has_exposure` is the one test, and
+`Display::set_exposure` the one refusal, so the slider, `d` and `f` and
+`--exposure` cannot disagree; the bar's EV item never appears for such a
+file, since the exposure stays at nothing.
+
+The row of curves is dead under a false color, and on a single-channel
+measurement, which is read through the gray ramp, and says why when rested
+on — a reason each (`FALSE_COLOR_CLIPS`, `MEASUREMENT_CLIPS`), the false
+color's first where both hold, being the one the hand chose. The compositor
+holds the curve at a clip there — `Display::curve_on` is where the choice
+is made, and `composite.rs` and the pointer's readout both ask it, both
+reading `Display::ramp`; the bar's words read `Display::false_colored`,
+since the gray ramp is nothing to name — because a ramp has no color past
+its end for a highlight to roll off into, and a curve over the ramp would
+bend the very mapping the reading is being taken off. `Display::response` runs the curve
 the compositor runs, the buttons refuse the press and `t` does nothing, and
 the row stays where it is — the section's height is the file's — rather
 than leaving. A panel that lit whichever curve was chosen and let the buttons
@@ -559,7 +587,8 @@ It runs six stops each way (`SLIDER_STOPS`), not the sixteen the keys and
 row has that is a few pixels each at six, which is a slider that can be
 put on a value, and under two at sixteen, which is not; and six is the
 whole of what a viewer does with an exposure, a shadow lifted out of black
-or a highlight brought back from four stops over. Past the end the handle
+or a highlight brought back from four stops over. It is drawn dead on a
+single-channel measurement, which has no exposure (see *What goes dead*). Past the end the handle
 stands hollow at it, as a band handle out past the plot does, and the
 reading says where the exposure really is. The slider is dragged *to* the
 pointer, as the handles are, and asks through `Command::Exposure` only for

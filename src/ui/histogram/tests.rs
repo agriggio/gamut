@@ -669,6 +669,76 @@ fn the_output_scale_follows_the_display_and_the_inputs_holds_still() {
     assert!(brighter < output, "{brighter} against {output}");
 }
 
+/// A gray image read through a ramp — a measurement, or a false color — is
+/// binned along the ramp, so the middle of its window lands at the middle
+/// of the Output's axis, where light at half of white lands three quarters
+/// of the way along; the axis has no room past the ramp's end on any
+/// surface; and the pixel's mark is its place along the ramp.
+#[test]
+fn the_output_runs_along_the_ramp_where_the_picture_is_read_through_one() {
+    let mut measured = shown(DecodedImage::new(
+        1024,
+        1,
+        Samples::F32 {
+            channels: Channels::Gray,
+            data: (0..1024).map(|x| x as f32 / 1023.0).collect(),
+        },
+        ColorSpace::LINEAR_BT709,
+        AlphaMode::Opaque,
+    ));
+    measured.shown.display.set_displayed_bounds(0.0, 1.0);
+    let heaviest = |binned: &output::Binned| {
+        let luma = &binned.plot.luma;
+        (0..luma.len()).max_by_key(|&bin| luma[bin]).unwrap()
+    };
+    let binned = output::binned_for(&measured, Headroom::Above, f32::INFINITY);
+    assert_eq!(binned.room, 1.0, "a ramp has no room past its end");
+    let mark = output::pixel_mark(&measured, Headroom::None, &binned, 511, 0).unwrap();
+    assert_eq!(mark.words, "0.5");
+    let bin = mark.bin.unwrap();
+    assert!((bin as f32 / BINS as f32 - 0.5).abs() < 0.01, "{bin}");
+    // Evenly spread along the ramp: no bin stands out.
+    let luma = &binned.plot.luma;
+    let (low, high) = (luma[BINS / 4] as f32, luma[3 * BINS / 4] as f32);
+    assert!(
+        (low - high).abs() <= 0.1 * low.max(high),
+        "{low} against {high}"
+    );
+
+    // Light: the same value lands where the screen codes half of white.
+    let graded = picture(true);
+    let binned = output::binned_for(&graded, Headroom::None, 1.0);
+    let mark = output::pixel_mark(&graded, Headroom::None, &binned, 47, 0).unwrap();
+    let encoded = crate::image::Transfer::Srgb.to_encoded(0.5);
+    let bin = mark.bin.unwrap();
+    assert!((bin as f32 / BINS as f32 - encoded).abs() < 0.02, "{bin}");
+    assert!(
+        heaviest(&binned) > BINS / 2,
+        "the ramp of codes piles toward white as light"
+    );
+
+    // And a false color on it is a ramp again.
+    let mut graded = picture(true);
+    graded.shown.display.set_colormap(Colormap::Viridis, true);
+    let binned = output::binned_for(&graded, Headroom::None, 1.0);
+    assert_eq!(binned.ramp, Some(Colormap::Viridis));
+    let mark = output::pixel_mark(&graded, Headroom::None, &binned, 47, 0).unwrap();
+    let bin = mark.bin.unwrap();
+    assert!((bin as f32 / BINS as f32 - 0.5).abs() < 0.02, "{bin}");
+}
+
+/// The Display section stands under the word for how the file is read,
+/// one per reading, so that what its rows do is said rather than inferred.
+#[test]
+fn the_display_section_names_the_reading_the_file_is_under() {
+    use crate::image::Referred;
+    let words: Vec<_> = [Referred::Display, Referred::Scene, Referred::Measured]
+        .map(display::mode)
+        .to_vec();
+    assert_eq!(words, ["graded", "metered", "measurement"]);
+    assert_eq!(display::mode(picture(true).image.referred), "graded");
+}
+
 /// Integer samples are plotted on the whole range they can hold, a raw's
 /// from black to the sensor's saturation, however little of it a linear
 /// file was measured over, and their axis is written in quarters of it;

@@ -147,7 +147,7 @@ pub(super) fn show(
     let readout = mark
         .map(|mark| mark.words.clone())
         .unwrap_or_else(|| summary(current, map));
-    section::header(pass, ui, Section::GainMap, rect, Some(&readout));
+    section::header(pass, ui, Section::GainMap, rect, Some(&readout), None);
 
     let Some(lift) = plots.lift else {
         ui.painter().rect_filled(

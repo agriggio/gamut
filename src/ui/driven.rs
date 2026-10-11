@@ -865,12 +865,16 @@ fn the_side_panel_waits_for_the_file_coming_in() {
     assert!(harness.query_by_label("Copy All").is_none());
 }
 
+/// And on a gray measurement, which the gray ramp clips the same way; the
+/// false colors stay live on both.
 #[test]
 fn the_curves_are_dead_under_a_false_color() {
+    use crate::image::Referred;
     use crate::image::display::Colormap;
 
-    // Gray and linear: a file that is offered the false colors.
-    let image = DecodedImage::new(
+    // Gray and linear: a measurement, offered the false colors and read
+    // through the gray ramp without one.
+    let mut image = DecodedImage::new(
         40,
         25,
         Samples::F32 {
@@ -883,8 +887,8 @@ fn the_curves_are_dead_under_a_false_color() {
     let stats = Stats::scan(&image);
     let mut current = photograph();
     current.display = Display::for_image_with(&image, &stats, Startup::default());
-    current.image = Arc::new(image);
-    current.stats = stats;
+    current.image = Arc::new(image.clone());
+    current.stats = stats.clone();
 
     let mut with_histogram = panels();
     with_histogram.side = Some(super::side::Side::Histogram);
@@ -894,7 +898,32 @@ fn the_curves_are_dead_under_a_false_color() {
     let dead = |harness: &Harness<'static, State>, label: &str| {
         harness.get_by_label(label).accesskit_node().is_disabled()
     };
+    for index in 0..ToneMap::ALL.len() {
+        assert!(dead(&harness, &format!("Curve {index}")), "curve {index}");
+    }
+    assert_eq!(click(&mut harness, "Curve 1"), []);
+    assert!(!dead(&harness, "False color 0"));
+    // And so is the exposure's slider, a measurement having no light to
+    // push: a drag along it asks for nothing.
+    assert!(dead(&harness, "Exposure"));
+    let slider = harness.get_by_label("Exposure").rect();
+    let y = slider.center().y;
+    assert_eq!(
+        drag(&mut harness, [slider.center().x, y], [slider.max.x, y]),
+        []
+    );
+
+    // The same picture graded is light, and its curves are live until a
+    // false color is put on it.
+    image.referred = Referred::Display;
+    let mut current = photograph();
+    current.display = Display::for_image_with(&image, &stats, Startup::default());
+    current.image = Arc::new(image);
+    current.stats = stats;
+    harness.state_mut().current = Some(current);
+    harness.run();
     assert!(!dead(&harness, "Curve 1"));
+    assert!(!dead(&harness, "Exposure"));
     assert_eq!(
         click(&mut harness, "Curve 1"),
         [Command::Press(Control::Curve(1))]

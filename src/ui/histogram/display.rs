@@ -10,6 +10,7 @@ use super::plot::{Counts, PLOT_BACKGROUND, Past, Scale, band, bars};
 use super::slider::slider;
 use super::track::track;
 use super::*;
+use crate::image::Referred;
 use crate::image::display::{Colormap, Display, Headroom, ToneMap};
 
 /// The row of false colors under the band: how deep a swatch is, and the
@@ -330,7 +331,28 @@ pub(super) fn show(
     }
     rows(pass, ui, current, rect);
     let readout = held.or_else(|| mark.map(|mark| mark.words.clone()));
-    section::header(pass, ui, Section::Display, rect, readout.as_deref());
+    section::header(
+        pass,
+        ui,
+        Section::Display,
+        rect,
+        readout.as_deref(),
+        Some(mode(current.image.referred)),
+    );
+}
+
+/// The word the section stands under while nothing is being read: how the
+/// file is being read, which is what decides everything in the section —
+/// the window it opened on, whether the exposure and the curves are live,
+/// whether a gray file is spread along the gray ramp — and is otherwise
+/// only to be inferred from which of them is lit and which dim. One word
+/// per [`Referred`], since that is the one fact they all follow from.
+pub(super) fn mode(referred: Referred) -> &'static str {
+    match referred {
+        Referred::Display => "graded",
+        Referred::Scene => "metered",
+        Referred::Measured => "measurement",
+    }
 }
 
 /// The row of stops under the band: 0 at the value the window puts at
@@ -342,7 +364,7 @@ pub(super) fn show(
 /// and have no stops to count, and off a window whose white is not a
 /// positive number of anything.
 fn stops(pass: &Pass, ui: &egui::Ui, current: &Current, bars: Rect) {
-    if current.image.referred == crate::image::Referred::Measured {
+    if current.image.referred == Referred::Measured {
         return;
     }
     let (_, white) = current.display.displayed_bounds();
@@ -539,7 +561,13 @@ fn rows(pass: &mut Pass, ui: &mut egui::Ui, current: &Current, rect: Rect) {
         );
     }
 
-    slider(pass, ui, display.exposure_stops(), rows.slider());
+    slider(
+        pass,
+        ui,
+        display.exposure_stops(),
+        display.has_exposure(),
+        rows.slider(),
+    );
 
     // Its reading at the end of the row, in the units the rest of the
     // interface quotes it in: stops counted in quarters, as the bar and the
@@ -553,15 +581,15 @@ fn rows(pass: &mut Pass, ui: &mut egui::Ui, current: &Current, rect: Rect) {
         theme.text_primary.into(),
     );
 
-    // The curves are dead under a false color, which clips at the top of
-    // its ramp whatever curve is on — the row stays, since the section's
-    // height is the file's, and says why when rested on.
-    let false_colored = display.false_colored(current.image.is_gray());
+    // The curves are dead under a ramp — a false color, or a measurement's
+    // gray — which clips at its top whatever curve is on; the row stays,
+    // since the section's height is the file's, and says why when rested on.
+    let ramped = display.ramp(current.image.is_gray()).is_some();
     for (widget, rect) in row_buttons(rect) {
         let Some((label, active)) = row_label(widget, display) else {
             continue;
         };
-        let enabled = !(false_colored && matches!(widget, Control::Curve(_)));
+        let enabled = !(ramped && matches!(widget, Control::Curve(_)));
         let (_, _, ink) = button(pass, ui, rect, widget, active, enabled, TOGGLE_RADIUS);
         ui.painter().text(
             egui::Rect::from(rect).center(),

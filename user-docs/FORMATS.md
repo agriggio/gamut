@@ -115,7 +115,11 @@ the setting in stops, ready to be pushed either way with `d` and `f`.
 Measurement data — a 16-bit or floating-point TIFF, and any other linear
 file — opens on a trimmed window, the central 99.8% of what it holds,
 because values occupying a fraction of the nominal range otherwise show as a
-black rectangle. Where any of that leaves highlights above white — a PQ
+black rectangle. A single-channel measurement is spread straight across the
+grays, the middle of the window coming out middle gray, as an elevation
+model or a temperature grid is drawn everywhere else; the window's ends are
+hard ends, on any monitor, and neither the exposure nor the tone curve does
+anything on it, since its values are not light. Where any of that leaves highlights above white — a PQ
 frame, a gain-mapped photograph, the windows of a metered church — the
 neutral tone map is on from the start rather than clipping, unless the image
 is going out to an HDR surface, where the highlights have somewhere to go

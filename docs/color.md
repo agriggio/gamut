@@ -100,7 +100,16 @@ transfer function decides it unless a decoder knows better:
   rather than a default, since one hot pixel is enough to ruin it. Linear is
   taken as measured by default: it is the safe reading of numbers nobody
   has vouched for, and only a decoder that knows its format carries light
-  says otherwise.
+  says otherwise. A single-channel measurement is read through the gray
+  ramp (`Display::ramp`): the windowed value is the gray *code*, so the
+  middle of the window is middle gray and the values spread evenly over the
+  grays, as every viewer of such data draws them and as the false colors
+  here place a value along their ramps. Shown as light, the middle of the
+  window would be half of white's light, which the screen's curve puts
+  three quarters of the way up its codes, and the lower quarter of the
+  window would take half the grays. A color measurement is left as light:
+  three linear channels nobody has vouched for are as likely a photograph
+  as data, and a photograph encoded twice washes out.
 
 `--transfer linear|srgb|pq|hlg|gamma:N` overrides the guess, which matters
 most for TIFF: the same container carries scanned photographs and frames of
@@ -204,7 +213,10 @@ stop up says so, and the picture never goes flat at the top in silence.
 False color (`r`, or `--colormap`) applies to single-channel images, and
 holds the curve at a clip while active, on either surface — a curve on top of
 a colormap would distort the mapping you are reading values off, and there is
-no color past the end of the ramp for headroom to show as.
+no color past the end of the ramp for headroom to show as. The gray ramp a
+single-channel measurement is read through is a ramp in the same sense, and
+holds the curve the same way; `Display::ramp` is the one test behind both,
+and `Display::false_colored` only the narrower one of what the bar names.
 
 **Wide gamut** is headroom of another kind. The working space is BT.709, and
 `params.primaries` in `shaders/image.wgsl` carries a P3, Adobe RGB or
