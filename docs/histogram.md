@@ -40,6 +40,19 @@ plot is at the top of the Image plot under it, and the matrix that moved it
 is the gap between the two. A layout that kept every section in one place
 for every file would have to leave a hole where a picture has no gain map;
 the column closes up instead, and the sections above the gap do not move.
+The same holds while the gain map is shown in the picture's place: the Image
+section is left out (`Section::applies`), since what the display then starts
+from is the map in stops, which the Gain map section already plots — on the
+range its metadata describes, in whole stops, each code spread over the
+stretch it stands for — and an Image section would plot it again as a bare
+measurement, on its measured ends, and under a name that says the file
+stores it, which it does not. The column is then the flow it is on screen:
+the map, the display, the output.
+While the depth map is shown, the Gain map section is left out in its turn:
+nothing on screen is lifted, and its header's share of the lift shown would
+not be true of anything in the window. The Image section is then the depth
+map's own samples. The switch to the gain map is still in the bar and on its
+key, so leaving the section out strands nothing.
 
 Every section is a fixed height (`Section::height`), and the column is as
 tall as its sections, whatever the window. The one exception is the Display

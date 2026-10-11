@@ -1,9 +1,12 @@
 use super::display::{Rows, plot_area, row_buttons, swatch_button};
 use super::*;
+use crate::image::auxiliary::{Auxiliary, Showing};
+use crate::image::depth::DepthMap;
 use crate::image::display::{Colormap, Headroom, ToneMap};
 use crate::image::gain_map::{GainMap, Lift};
 use crate::image::stats::Axis;
 use crate::image::{AlphaMode, Channels, ColorSpace, DecodedImage, Referred, Samples};
+use crate::ui::Face;
 use crate::ui::side;
 use crate::ui::slider::{HANDLE_GRIP, HANDLE_WIDTH};
 
@@ -220,6 +223,69 @@ fn the_gain_maps_section_is_there_only_with_a_map() {
         mapped
             .iter()
             .any(|(section, _)| *section == Section::GainMap)
+    );
+}
+
+/// While the gain map is shown in the picture's place, the Gain map section
+/// is the stage the display starts from, and the Image section, which would
+/// plot the same map again, is left out; it comes back with the picture.
+#[test]
+fn the_image_section_gives_way_to_a_shown_gain_map() {
+    let mut current = gain_mapped();
+    let sections = |current: &Current| -> Vec<Section> {
+        laid_out(current, 600.0)
+            .into_iter()
+            .map(|(section, _)| section)
+            .collect()
+    };
+    let showing = Showing::Auxiliary(Auxiliary::GainMap);
+    assert!(current.show(showing, |picture| {
+        picture.auxiliary(Auxiliary::GainMap).map(Face::new)
+    }));
+    assert_eq!(
+        sections(&current),
+        [Section::Output, Section::Display, Section::GainMap]
+    );
+    assert!(current.show(Showing::Picture, |_| None));
+    assert_eq!(
+        sections(&current),
+        [
+            Section::Output,
+            Section::Display,
+            Section::GainMap,
+            Section::Image
+        ]
+    );
+}
+
+/// While the depth map is shown in the picture's place, nothing on screen
+/// is lifted, and the Gain map section is left out; the Image section is
+/// the depth map's own.
+#[test]
+fn the_gain_maps_section_gives_way_to_a_shown_depth_map() {
+    let mut image = gain_mapped().image.as_ref().clone();
+    image.depth = Some(std::sync::Arc::new(DepthMap {
+        width: 2,
+        height: 1,
+        samples: Samples::U8 {
+            channels: Channels::Gray,
+            data: vec![0, 255],
+        },
+        scale: None,
+    }));
+    let mut current = shown(image);
+    assert!(
+        current.show(Showing::Auxiliary(Auxiliary::Depth), |picture| {
+            picture.auxiliary(Auxiliary::Depth).map(Face::new)
+        })
+    );
+    let sections: Vec<Section> = laid_out(&current, 600.0)
+        .into_iter()
+        .map(|(section, _)| section)
+        .collect();
+    assert_eq!(
+        sections,
+        [Section::Output, Section::Display, Section::Image]
     );
 }
 

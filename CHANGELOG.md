@@ -8,6 +8,14 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
 
 ### Changed
 
+- With the gain map shown in the picture's place, the histogram leaves its
+  Image section out. It plotted the map a second time, as a bare
+  measurement between its measured ends, under the Gain map section that
+  already plots it in stops; the column now runs from the map to the
+  screen, and the Image section comes back with the picture.
+- With the depth map shown, the histogram leaves its Gain map section out:
+  nothing on screen is lifted, and its header said how much of the lift
+  was shown while none of it was.
 - The histogram plots light stored as floating-point linear values — a
   Radiance picture, an EXR — in stops, from the darkest the picture holds to
   say anything about up to its brightest. The Display and Image sections'

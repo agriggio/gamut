@@ -4,6 +4,7 @@
 use egui::{Align2, FontId, pos2};
 
 use super::*;
+use crate::image::auxiliary::{Auxiliary, Showing};
 
 /// One stage of the picture's way from the file to the screen, as a
 /// section of the column. In the order the column lays them out, which is
@@ -62,11 +63,24 @@ impl Section {
         }
     }
 
-    /// Whether `current` passes through this stage.
+    /// Whether `current` passes through this stage. The Gain map section is
+    /// there while the picture or its map is on screen, and left out while
+    /// another of the file's images is, which nothing lifts. The Image
+    /// section is left out while the gain map is shown in the picture's
+    /// place: what the display starts from is then the map in stops, which
+    /// is the Gain map section's plot already, and the file stores neither
+    /// it nor the picture under it.
     pub fn applies(self, current: &Current) -> bool {
         match self {
-            Section::GainMap => current.picture_face().image.gain_map.is_some(),
-            Section::Output | Section::Display | Section::Image => true,
+            Section::GainMap => {
+                current.picture_face().image.gain_map.is_some()
+                    && matches!(
+                        current.showing,
+                        Showing::Picture | Showing::Auxiliary(Auxiliary::GainMap)
+                    )
+            }
+            Section::Image => current.showing != Showing::Auxiliary(Auxiliary::GainMap),
+            Section::Output | Section::Display => true,
         }
     }
 
