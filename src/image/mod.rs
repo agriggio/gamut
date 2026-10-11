@@ -351,6 +351,14 @@ pub struct DecodedImage {
     /// depth map: read by the pointer's readout and by nothing else. See
     /// [`depth`].
     pub depth: Option<depth::Shared>,
+    /// The window the image opens on where it is not the one its
+    /// [`Referred`] gives it: a gain map shown in the picture's place opens
+    /// on its full range, its every value being one its metadata defines,
+    /// with nothing stray for a trim to throw out and its strongest lift in
+    /// the tail a trim would clip. See [`AutoWindow::default_for`].
+    ///
+    /// [`AutoWindow::default_for`]: display::AutoWindow::default_for
+    pub opens_on: Option<display::AutoWindow>,
 }
 
 impl DecodedImage {
@@ -375,6 +383,7 @@ impl DecodedImage {
             nodata: None,
             gain_map: None,
             depth: None,
+            opens_on: None,
         }
     }
 
@@ -791,6 +800,7 @@ mod tests {
             nodata: None,
             gain_map: None,
             depth: None,
+            opens_on: None,
         }
     }
 
@@ -860,6 +870,7 @@ mod tests {
             nodata: None,
             gain_map: None,
             depth: None,
+            opens_on: None,
         };
 
         let sample = image.sample(0, 0, None).expect("inside the image");

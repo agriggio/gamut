@@ -31,6 +31,7 @@
 use std::sync::Arc;
 
 use crate::image::color::{ColorSpace, Transfer};
+use crate::image::display::AutoWindow;
 use crate::image::stats::{BINS, COLOR, Plot};
 use crate::image::{AlphaMode, Channels, DecodedImage, Referred, Samples};
 use ultrahdr_rs::GainMapMetadata;
@@ -168,6 +169,7 @@ impl GainMap {
             AlphaMode::Opaque,
         );
         image.referred = Referred::Measured;
+        image.opens_on = Some(AutoWindow::MinMax);
         image
     }
 
@@ -515,9 +517,9 @@ mod tests {
         assert_eq!(two_stops.weight(4.0), 1.0);
         assert_eq!(two_stops.weight(16.0), 1.0);
         assert_eq!(two_stops.weight(f32::NAN), 0.0);
+        assert_eq!(two_stops.weight(f32::INFINITY), 1.0, "room not known");
 
         let apple = map(Lift::Apple { headroom: 4.0 });
-        assert_eq!(two_stops.weight(f32::INFINITY), 1.0, "room not known");
         assert_eq!(apple.weight(1.0), 0.0);
         assert!((apple.weight(2.0) - 0.5).abs() < 1e-6);
         assert_eq!(apple.weight(4.0), 1.0);
@@ -617,6 +619,33 @@ mod tests {
         assert!((data[2] - 3.0).abs() < 1e-3);
         let [low, high] = color.lift_range().expect("a range");
         assert!(low.abs() < 1e-5 && (high - 3.0).abs() < 1e-3);
+    }
+
+    /// Shown, the map opens on its full range, and a reset puts it back
+    /// there: its strongest lift is a handful of pixels, which a trim would
+    /// clip to the top of the window with the lift under them.
+    #[test]
+    fn the_map_shown_opens_on_its_full_range() {
+        use crate::image::display::{Display, Startup};
+        use crate::image::stats::Stats;
+        let mut data = vec![0; 2000];
+        data.push(255);
+        let map = GainMap {
+            width: 2001,
+            height: 1,
+            channels: 1,
+            data,
+            lift: Lift::Iso(iso(2.0)),
+        };
+        let image = map.image();
+        let stats = Stats::scan(&image);
+        let mut display = Display::for_image_with(&image, &stats, Startup::default());
+        assert_eq!(display.auto(), AutoWindow::MinMax);
+        assert!((display.window_high() - 2.0).abs() < 1e-3);
+        display.put_white(1.0);
+        display.reset(&stats, &image);
+        assert_eq!(display.auto(), AutoWindow::MinMax);
+        assert!((display.window_high() - 2.0).abs() < 1e-3);
     }
 
     /// The lift's histogram counts the unlifted pixel at nothing and the

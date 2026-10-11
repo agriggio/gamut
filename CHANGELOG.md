@@ -20,6 +20,10 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
 - With the depth map shown, the histogram leaves its Gain map section out:
   nothing on screen is lifted, and its header said how much of the lift
   was shown while none of it was.
+- A gain map shown in the picture's place opens on its full range rather
+  than a trimmed one, as the reset button puts it back: black where it
+  leaves the picture alone, white where it lifts it most. The trim clipped
+  its strongest lift — the sun, a lamp — to white along with the lift under it.
 - The histogram plots light stored as floating-point linear values — a
   Radiance picture, an EXR — in stops, from the darkest the picture holds to
   say anything about up to its brightest. The Display and Image sections'

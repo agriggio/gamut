@@ -536,7 +536,11 @@ and the bottom bar says the same in one word each: *stored*, *full*,
 *trimmed*, and *manual* once a handle has moved. There is no fourth button
 for "the image's own", because the file's own is always one of the three —
 *As stored* on a graded file and on scene light, *Trimmed* on a measurement
-— and the reset button puts it back, the meter's exposure with it.
+— and the reset button puts it back, the meter's exposure with it. The one
+measurement that opens on *Full range* is a gain map shown in the picture's
+place (`DecodedImage::opens_on`): its every value is one its metadata
+defines, so there is nothing stray for a trim to throw out, and the tail a
+trim clips is where the map lifts most.
 
 ### The band is the levels track
 

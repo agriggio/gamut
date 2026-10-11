@@ -1132,6 +1132,7 @@ mod tests {
             nodata: None,
             gain_map: None,
             depth: None,
+            opens_on: None,
         }
     }
 
@@ -1231,6 +1232,7 @@ mod tests {
             nodata: None,
             gain_map: None,
             depth: None,
+            opens_on: None,
         };
         let key = Stats::scan(&element).key.unwrap();
         assert!((key - 0.5).abs() < 1e-6, "{key}");
@@ -1253,6 +1255,7 @@ mod tests {
             nodata: None,
             gain_map: None,
             depth: None,
+            opens_on: None,
         }
     }
 
@@ -1323,6 +1326,7 @@ mod tests {
             nodata: None,
             gain_map: None,
             depth: None,
+            opens_on: None,
         };
 
         for stride in [1, 5] {
@@ -1372,6 +1376,7 @@ mod tests {
             nodata: None,
             gain_map: None,
             depth: None,
+            opens_on: None,
         };
 
         let p3 = Stats::scan(&red(Primaries::DisplayP3));
@@ -1435,6 +1440,7 @@ mod tests {
             nodata: None,
             gain_map: None,
             depth: None,
+            opens_on: None,
         };
         let stats = Stats::scan(&image);
         let plot = &stats.plot;
@@ -1482,6 +1488,7 @@ mod tests {
             nodata: None,
             gain_map: None,
             depth: None,
+            opens_on: None,
         };
         // BT.709 luminance weights green at 0.7152.
         assert!((Stats::scan(&green).max - 0.7152).abs() < 1e-4);
@@ -1502,6 +1509,7 @@ mod tests {
             nodata: None,
             gain_map: None,
             depth: None,
+            opens_on: None,
         }
     }
 
@@ -1668,6 +1676,7 @@ mod tests {
             nodata: None,
             gain_map: None,
             depth: None,
+            opens_on: None,
         }
     }
 
@@ -1906,6 +1915,7 @@ mod tests {
             nodata: None,
             gain_map: None,
             depth: None,
+            opens_on: None,
         };
         let stats = Stats::scan(&image);
         assert!((stats.min - 0.25).abs() < 1e-6);

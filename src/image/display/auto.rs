@@ -52,7 +52,12 @@ impl AutoWindow {
     /// Held apart from [`super::Display::for_image_with`] because it is also what
     /// [`super::Display::reset`] puts back, and what the histogram panel's row of
     /// windows names outright: the file's own is always one of the three.
+    /// An image that says which it opens on, [`DecodedImage::opens_on`],
+    /// opens on that.
     pub fn default_for(image: &DecodedImage) -> Self {
+        if let Some(auto) = image.opens_on {
+            return auto;
+        }
         match image.referred {
             Referred::Display | Referred::Scene => AutoWindow::Off,
             Referred::Measured => AutoWindow::Percentile,
