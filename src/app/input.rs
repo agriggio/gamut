@@ -123,10 +123,6 @@ pub enum Action {
     /// right strip.
     ShowHelp,
     ToggleHistogram,
-    /// Which of that panel's planes are plotted. Both can be off: the panel
-    /// still has its response curve and its ramp to read.
-    ToggleLuma,
-    TogglePlanes,
     /// The information panel on one of its tabs, or away where it is up on
     /// that tab already: `i` the curated facts, `I` every tag exiftool
     /// reads. The panel's button is the plain toggle, which keeps the tab.
@@ -397,8 +393,6 @@ pub(super) fn action_of(tip: Tip) -> Option<Action> {
         Tip::Control(Control::PixelFormat) => CyclePixelFormat,
         // The histogram panel's own, and the row of false colors a key
         // cycles through.
-        Tip::Control(Control::Luma) => ToggleLuma,
-        Tip::Control(Control::Planes) => TogglePlanes,
         Tip::Control(Control::Marks) => MarkClipped,
         Tip::Control(Control::Reset) => ResetDisplay,
         // Only the swatches that are actually on offer: an index past the
@@ -983,19 +977,6 @@ pub static ROWS: &[Row] = &[
             [digit(CTRL, KeyCode::Digit0)]
         ),
     },
-    // The three that work the histogram's plot, under the key that opens it.
-    Row {
-        section: Section::Interface,
-        when: None,
-        help: "Toggle the luminance plane on the histogram",
-        keys: one!("interface.luma", ToggleLuma, [key('j')]),
-    },
-    Row {
-        section: Section::Interface,
-        when: None,
-        help: "Toggle the color planes on the histogram",
-        keys: one!("interface.planes", TogglePlanes, [key('k')]),
-    },
     // The same key as the two pixel copies, with nothing held: what it
     // switches is what they take away with them.
     Row {
@@ -1348,7 +1329,7 @@ pub static ROWS: &[Row] = &[
     Row {
         section: Section::Display,
         when: None,
-        help: "Toggle the marks on the clipped pixels: red at white, blue at black",
+        help: "Mark clipped pixels, or stop: red at white, blue at black",
         keys: one!("display.marks", MarkClipped, [key('w')]),
     },
     Row {
@@ -2176,8 +2157,6 @@ impl App {
                 return self.perform(ToggleInterface);
             }
             ToggleHistogram => return self.press(Control::Histogram),
-            ToggleLuma => return self.press(Control::Luma),
-            TogglePlanes => return self.press(Control::Planes),
             ToggleInfo => return self.show_info_on(ui::tags::Tab::Facts),
             ToggleRawData => return self.show_info_on(ui::tags::Tab::Tags),
             ToggleMinimap => return self.press(Control::Minimap),
@@ -3112,12 +3091,7 @@ impl App {
             // rendering, which is why the reset below leaves it alone; the
             // marks are where `w` lands too, so that the key and the button
             // beside the panel's band cannot come to mean different things.
-            Control::Minimap
-            | Control::Grid
-            | Control::Loupe
-            | Control::Luma
-            | Control::Planes
-            | Control::Marks => {
+            Control::Minimap | Control::Grid | Control::Loupe | Control::Marks => {
                 let flag = self
                     .panels
                     .flag_mut(widget)

@@ -583,11 +583,9 @@ fn a_menu_cell_is_named_in_its_own_words_and_by_the_key_that_reaches_it() {
 fn the_histogram_panels_buttons_are_named_briefly_and_by_their_keys() {
     let named = |widget| names(Tip::Control(widget));
 
-    assert_eq!(named(Control::Luma).as_deref(), Some("Luminance plane (j)"));
-    assert_eq!(named(Control::Planes).as_deref(), Some("Color planes (k)"));
     assert_eq!(
         named(Control::Marks).as_deref(),
-        Some("Mark the clipped pixels (w)")
+        Some("Mark clipped pixels (w)")
     );
     assert_eq!(
         named(Control::Reset).as_deref(),
@@ -634,8 +632,6 @@ fn the_histogram_panels_buttons_are_named_briefly_and_by_their_keys() {
     // Short enough to be read where they are drawn: beside a toggle, on
     // a panel one panel wide.
     for widget in [
-        Control::Luma,
-        Control::Planes,
         Control::Marks,
         Control::Reset,
         Control::Ramp(1),

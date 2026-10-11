@@ -617,9 +617,7 @@ pub fn words(tip: Tip) -> Option<String> {
         // is up, a menu first — so the cross names itself.
         Tip::Control(Control::Dismiss) => "Dismiss this message",
         // The histogram panel's, in as few words as will carry them.
-        Tip::Control(Control::Luma) => "Luminance plane",
-        Tip::Control(Control::Planes) => "Color planes",
-        Tip::Control(Control::Marks) => "Mark the clipped pixels",
+        Tip::Control(Control::Marks) => "Mark clipped pixels",
         Tip::Control(Control::Reset) => "Reset the display",
         Tip::Control(Control::ShowGainMap) => "Show the gain map in the picture's place",
         // Named rather than merely shown: a swatch of viridis is a green

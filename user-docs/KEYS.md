@@ -542,7 +542,7 @@ that is not a paste; open it as an argument instead.
 | `Shift+S` | White point up | `display.white.up` |
 | `e` | Cycle the window rule: as stored (0–1) → full range → trimmed (the central 99.8%) | `display.window` |
 | `t` | Toggle the curve on the highlights: clip, or roll off | `display.tone-map` |
-| `w` | Mark the clipped pixels, or stop: red where a channel has reached white, blue where one has reached black | `display.marks` |
+| `w` | Mark clipped pixels, or stop: red where a channel has reached white, blue where one has reached black | `display.marks` |
 | `o` | Turn the room above white off and on, where the monitor is in HDR mode | `display.hdr` |
 | `v` | Show a raw as the camera's JPEG of it, or as the picture developed from the sensor | `display.camera-jpeg` |
 | `Shift+D` | Show a picture's depth map in its place, or the picture again | `display.depth` |

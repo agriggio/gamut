@@ -870,8 +870,7 @@ about what was just done, the region is what was being done to, and the one
 that stops being news first goes first. Stepping to another file takes it
 off, and so does the file coming back a different size — the pixels it
 marked out are no longer the pixels — while a reload at the same size keeps
-it, being the same picture read again. The key is `x` rather than `k`, which
-the histogram's planes toggle already holds in the j/k/l run.
+it, being the same picture read again. The key is `x`.
 
 ## The zoom box
 

@@ -62,22 +62,6 @@ const TOOLBAR_HEIGHT: f32 = CHIP_HEIGHT;
 pub const MIN_HEIGHT: f32 =
     2.0 * PANEL_INSET + TOOLBAR_HEIGHT + HEADER_GAP + Section::Output.height(false);
 
-/// Between one button of the row and the next.
-const TOOLBAR_GAP: f32 = 4.0;
-/// And the wider gap that sets the toggle marking the clipped pixels apart
-/// from the three that choose what the plots draw: those are about the
-/// panel, and it is about the picture.
-const TOOLBAR_GROUP_GAP: f32 = 12.0;
-
-/// The middle of the grid a mark is described on, and the two measures the
-/// plane toggles are drawn from, in that grid's units: how far each color
-/// disc is struck from the middle, and how big the discs are. The luminance
-/// disc is one mark where the colors are three, so it is the larger.
-const GRID_MIDDLE: f32 = 12.0;
-const LUMA_DISC: f32 = 8.0;
-const PLANE_ORBIT: f32 = 5.5;
-const PLANE_DISC: f32 = 4.0;
-
 /// The line a section opens with: its mark and name, what the pointer is
 /// reading at its stage, and the section's own button where it has one. As
 /// tall as that button, and a whole number of pixels, as everything a
@@ -231,35 +215,18 @@ pub fn panel(side: Rect) -> Rect {
 }
 
 /// The buttons at the head of the panel, each with where it goes in the row
-/// `row`: what the plots draw — the luminance and the color planes, and the
-/// then, set apart, the marks on the picture, and at the far
-/// end the reset, which does something rather than being something.
+/// `row`: the marks on the picture at the start, and at the far end the
+/// reset, which does something rather than being something.
 ///
 /// They act on every plot down the column, or on the picture, and on no
 /// one section, so they stand above all of them, where they stay in view
 /// however far the column is scrolled.
-///
-/// A control that could not act is left out rather than drawn dead: an image
-/// with one channel has no color planes to toggle, and the rest close the
-/// gap up. Hiding rather than dimming is the panel's rule — see
-/// [`display::swatch_button`] for the other place it is kept.
-fn toolbar(row: Rect, gray: bool) -> Vec<(Control, Rect)> {
+fn toolbar(row: Rect) -> [(Control, Rect); 2] {
     let square = |x: f32| Rect::new(x, row.y, TOOLBAR_HEIGHT, TOOLBAR_HEIGHT);
-    let planes: &[Control] = if gray {
-        &[Control::Luma]
-    } else {
-        &[Control::Luma, Control::Planes]
-    };
-    let mut x = row.x;
-    let mut buttons = Vec::new();
-    for control in planes {
-        buttons.push((*control, square(x)));
-        x += TOOLBAR_HEIGHT + TOOLBAR_GAP;
-    }
-    x += TOOLBAR_GROUP_GAP - TOOLBAR_GAP;
-    buttons.push((Control::Marks, square(x)));
-    buttons.push((Control::Reset, square(row.right() - TOOLBAR_HEIGHT)));
-    buttons
+    [
+        (Control::Marks, square(row.x)),
+        (Control::Reset, square(row.right() - TOOLBAR_HEIGHT)),
+    ]
 }
 
 /// One of `count` cells dividing `row` between them, with [`CELL_GAP`]
@@ -359,14 +326,6 @@ impl Plane {
         };
         Color32::from(color.with_alpha(255))
     }
-
-    /// Whether the panel has the plane on screen.
-    fn shown(self, panels: &crate::ui::Panels) -> bool {
-        match self {
-            Plane::Luma => panels.show_luma,
-            _ => panels.show_planes,
-        }
-    }
 }
 
 /// The rule a section marks its one value with: the accent, held back to
@@ -450,7 +409,6 @@ fn marked(
     pointer: Option<[u32; 2]>,
     headroom: crate::image::display::Headroom,
     plots: &Plots,
-    shown: impl Fn(Plane) -> bool,
 ) -> Traced {
     let mut traced = Traced::default();
     for &(section, rect) in layout {
@@ -479,7 +437,7 @@ fn marked(
                 Section::Display => plots.counts,
                 Section::Image => plots.image_counts,
             };
-            let cut = plotted.and_then(|plotted| counts.cut_at(plotted, bin, &shown));
+            let cut = plotted.and_then(|plotted| counts.cut_at(plotted, bin));
             if let Some(words) = cut.and_then(share_words) {
                 mark.words = format!("{words} · {}", mark.words);
             }
@@ -592,7 +550,7 @@ pub(super) fn show(pass: &mut Pass, ui: &mut egui::Ui, current: &Current, side: 
         // information panel's header is, so that the reset ends where its
         // copy button does.
         let row = Rect::new(row.min.x, row.min.y, row.width(), TOOLBAR_HEIGHT);
-        toolbar_buttons(pass, ui, current.image.is_gray(), row);
+        toolbar_buttons(pass, ui, row);
         // The hairline under the row, as under the information panel's
         // header: the column runs on under it rather than stopping short.
         ui.add_space((HEADER_GAP - RULE_WIDTH) / 2.0);
@@ -639,7 +597,6 @@ fn column(pass: &mut Pass, ui: &mut egui::Ui, current: &Current) {
             .as_deref()
             .map_or(plot::Counts::of(&current.stored.plot), plot::Counts::of),
     };
-    let panels = pass.panels;
     let traced = marked(
         current,
         &layout,
@@ -647,7 +604,6 @@ fn column(pass: &mut Pass, ui: &mut egui::Ui, current: &Current) {
         pass.input.pointer,
         pass.input.headroom,
         &plots,
-        |plane| plane.shown(panels),
     );
     for (place, (section, rect)) in layout.into_iter().enumerate() {
         // Every section after the first is parted from the one above by a
@@ -717,60 +673,24 @@ fn button(
 /// [`toolbar`].
 ///
 /// Drawn here rather than with the chrome's toggles because these belong to
-/// the panel: they say what the plots under them are showing, and two of
-/// them are pictures of the very thing they switch.
-fn toolbar_buttons(pass: &mut Pass, ui: &mut egui::Ui, gray: bool, row: Rect) {
+/// the panel.
+fn toolbar_buttons(pass: &mut Pass, ui: &mut egui::Ui, row: Rect) {
     let panels = pass.panels;
-    for (widget, rect) in toolbar(row, gray) {
-        // The reset is never lit, where the toggles are: it does something
+    for (widget, rect) in toolbar(row) {
+        // The reset is never lit, where the toggle is: it does something
         // rather than being something, and a momentary button holding a
         // state is a button that has to explain itself.
         let active = panels.lit(widget);
         let (_, background, ink) = button(pass, ui, rect, widget, active, true, TOGGLE_RADIUS);
-        let grid = pass.grid;
-        let square = icon::square(grid, egui::Rect::from(rect), ICON_SIDE);
+        let square = icon::square(pass.grid, egui::Rect::from(rect), ICON_SIDE);
         let painter = ui.painter();
-        match widget {
-            // The two plane toggles are drawn here rather than taken from
-            // `ui::icon` because they are pictures of the planes themselves,
-            // each in the color that plane is plotted in — which is not
-            // something a mark drawn in one ink can be.
-            //
-            // Luminance is one plane, so it is one disc, in the neutral the
-            // plot draws that plane in.
-            Control::Luma => {
-                let place = icon::Placer::new(
-                    grid,
-                    Rect::new(square.min.x, square.min.y, square.width(), square.height()),
-                );
-                let at = place.free([GRID_MIDDLE, GRID_MIDDLE]);
-                painter.circle_filled(pos2(at[0], at[1]), place.units(LUMA_DISC), HISTOGRAM_LUMA);
-            }
-            // And the color planes are three, so they are three smaller
-            // discs, in their own colors: nothing else in the window is red,
-            // green and blue together.
-            Control::Planes => {
-                let place = icon::Placer::new(
-                    grid,
-                    Rect::new(square.min.x, square.min.y, square.width(), square.height()),
-                );
-                for (turn, plane) in HISTOGRAM_PLANES.into_iter().enumerate() {
-                    // Struck about the middle at a third of a turn each,
-                    // starting at the top, so the three read as one mark
-                    // rather than as a row.
-                    let angle = (-90.0 + 120.0 * turn as f32).to_radians();
-                    let at = place.free([
-                        GRID_MIDDLE + PLANE_ORBIT * angle.cos(),
-                        GRID_MIDDLE + PLANE_ORBIT * angle.sin(),
-                    ]);
-                    painter.circle_filled(pos2(at[0], at[1]), place.units(PLANE_DISC), plane);
-                }
-            }
+        let mark = match widget {
             // The warning sign, for what the display has thrown away.
-            Control::Marks => icon::paint(painter, icon::TRIANGLE_ALERT, square, ink, background),
+            Control::Marks => icon::TRIANGLE_ALERT,
             // Back to the start.
-            _ => icon::paint(painter, icon::ROTATE_CCW, square, ink, background),
-        }
+            _ => icon::ROTATE_CCW,
+        };
+        icon::paint(painter, mark, square, ink, background);
     }
 }
 

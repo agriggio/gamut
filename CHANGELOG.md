@@ -8,6 +8,11 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
 
 ### Changed
 
+- The histogram always plots both the luminance and the color planes. The
+  two buttons at the head of its panel that turned each off, their keys
+  (`j` and `k`, `keys.interface.luma` and `keys.interface.planes`) and the
+  Mac's *Histogram Plot* menu are gone; a configuration file that still
+  binds either name is refused like any other unknown key.
 - A picture with a gain map on an HDR surface whose monitor has not said
   how much room it has above white is shown with the whole of its lift.
   It used to be shown with none of it, as on an SDR monitor.

@@ -103,8 +103,6 @@ pub(super) fn panels() -> Panels {
         show_ui: true,
         show_filmstrip: false,
         side: None,
-        show_luma: true,
-        show_planes: true,
         mark_clipped: false,
         show_minimap: true,
         show_grid: false,

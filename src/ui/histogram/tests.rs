@@ -356,45 +356,17 @@ fn the_pointer_marks_the_bar_it_is_over() {
     assert_eq!(bin_across(BINS - 1), 1.0);
 }
 
-/// The row of buttons at the head of the panel: the plot toggles from the
-/// left, the clipped pixels' toggle set apart after them, and the reset at
-/// the far end, all inside the row and none on another. A control that
-/// could do nothing is not there at all, and the ones that remain close up.
+/// The row of buttons at the head of the panel: the clipped pixels' toggle
+/// at the start and the reset at the far end, both inside the row.
 #[test]
 fn the_row_of_buttons_heads_the_panel() {
     let row = Rect::new(10.0, 10.0, COLUMN_WIDTH, TOOLBAR_HEIGHT);
-    for gray in [true, false] {
-        let buttons = toolbar(row, gray);
-        let controls: Vec<Control> = buttons.iter().map(|(control, _)| *control).collect();
-        let expected: &[Control] = if gray {
-            &[Control::Luma, Control::Marks, Control::Reset]
-        } else {
-            &[
-                Control::Luma,
-                Control::Planes,
-                Control::Marks,
-                Control::Reset,
-            ]
-        };
-        assert_eq!(controls, expected, "gray {gray}");
-        for pair in buttons.windows(2) {
-            assert!(pair[0].1.right() < pair[1].1.x, "{pair:?}");
-        }
-        for (control, rect) in &buttons {
-            assert!(
-                rect.x >= row.x && rect.right() <= row.right(),
-                "{control:?}"
-            );
-            assert_eq!((rect.y, rect.height), (row.y, row.height), "{control:?}");
-        }
-        let [.., (_, log), (_, marks), (_, reset)] = buttons.as_slice() else {
-            panic!("{buttons:?}");
-        };
-        assert!(
-            marks.x - log.right() > TOOLBAR_GAP,
-            "the marks are set apart from the plot toggles"
-        );
-        assert_eq!(reset.right(), row.right(), "the reset at the far end");
+    let [(marks, at_start), (reset, at_end)] = toolbar(row);
+    assert_eq!((marks, reset), (Control::Marks, Control::Reset));
+    assert_eq!(at_start.x, row.x, "the marks at the start");
+    assert_eq!(at_end.right(), row.right(), "the reset at the far end");
+    for rect in [at_start, at_end] {
+        assert_eq!((rect.y, rect.height), (row.y, row.height), "{rect:?}");
     }
 }
 
@@ -551,7 +523,6 @@ fn a_pixel_is_traced_down_every_section() {
         Some([60, 0]),
         Headroom::None,
         &plots,
-        |_| true,
     );
     for section in [Section::Output, Section::Display, Section::GainMap] {
         let mark = traced
@@ -585,7 +556,6 @@ fn a_pixel_is_traced_down_every_section() {
         Some([60, 0]),
         Headroom::None,
         &plots,
-        |_| true,
     );
     assert!(
         traced
@@ -605,7 +575,6 @@ fn a_pixel_is_traced_down_every_section() {
         Some([999, 0]),
         Headroom::None,
         &plots,
-        |_| true,
     );
     assert!(
         Section::ALL
@@ -725,7 +694,6 @@ fn a_bar_cut_off_says_its_share() {
             None,
             Headroom::None,
             &plots,
-            |_| true,
         )
         .image
         .expect("marked")

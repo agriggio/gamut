@@ -196,14 +196,13 @@ pub(super) fn show(
     mark: Option<&Mark>,
 ) {
     let plot_rect = Section::Image.plot(rect);
-    // A rule for each channel whose plane is on screen, the luminance last
+    // A rule for each channel, the luminance last
     // so that it stands over the colors where they meet; and the accent's
     // one rule where the pointer is on the plot instead.
     let rules: Vec<(usize, Color32)> = match mark {
         Some(mark) if !mark.channels.is_empty() => mark
             .channels
             .iter()
-            .filter(|channel| channel.plane.shown(pass.panels))
             .filter_map(|channel| Some((channel.bin?, channel.plane.ink())))
             .collect(),
         _ => accent_rule(pass, mark),

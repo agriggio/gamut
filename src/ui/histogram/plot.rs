@@ -176,23 +176,11 @@ impl Counts {
         share_of(count, total) / self.top
     }
 
-    /// The fullest share of a plane `planes` holds at `bin` on `plot`, where
-    /// it stands past the top: what the header says of a bar cut off.
-    pub(super) fn cut_at(
-        self,
-        plot: &Plot,
-        bin: usize,
-        planes: impl Fn(Plane) -> bool,
-    ) -> Option<f32> {
-        let luma = planes(Plane::Luma).then_some(&plot.luma);
-        let color = plot
-            .color
-            .iter()
-            .flat_map(|color| Plane::COLOR.into_iter().zip(color))
-            .filter(|(plane, _)| planes(*plane))
-            .map(|(_, counts)| counts);
-        luma.into_iter()
-            .chain(color)
+    /// The fullest share a plane of `plot` holds at `bin`, where it stands
+    /// past the top: what the header says of a bar cut off.
+    pub(super) fn cut_at(self, plot: &Plot, bin: usize) -> Option<f32> {
+        std::iter::once(&plot.luma)
+            .chain(plot.color.iter().flatten())
             .map(|counts| share_of(counts[bin], total(counts)))
             .filter(|&held| held > self.top)
             .max_by(f32::total_cmp)
@@ -245,7 +233,6 @@ pub(super) fn bars(
     bars: Rect,
     rules: &[(usize, Color32)],
 ) {
-    let panels = pass.panels;
     let painter = ui.painter();
     painter.rect_filled(
         egui::Rect::from(bars.inset(-PLOT_INSET, -PLOT_INSET)),
@@ -253,13 +240,8 @@ pub(super) fn bars(
         PLOT_BACKGROUND,
     );
 
-    let luma: Option<&[u32; BINS]> = panels.show_luma.then_some(&plotted.luma);
-    let color: &[[u32; BINS]] = match plotted.color.as_ref() {
-        Some(planes) if panels.show_planes => planes,
-        _ => &[],
-    };
-
-    lines(pass, ui, luma, color, counts, bars);
+    let color: &[[u32; BINS]] = plotted.color.as_ref().map_or(&[], |planes| planes);
+    lines(pass, ui, &plotted.luma, color, counts, bars);
     rule_over(pass, ui, section, bars, rules);
 }
 
@@ -357,7 +339,7 @@ fn rule_over(pass: &Pass, ui: &egui::Ui, section: Section, bars: Rect, rules: &[
     }
 }
 
-/// The planes the panel's toggles have on, at one column to a device pixel
+/// The plot's planes, at one column to a device pixel
 /// and as tall as the fullest bin under it, so that a spike is not averaged
 /// away by its neighbors: each plane's area laid down in [`line_area`], each
 /// over the others', then each plane's top as a line in its own ink, the
@@ -366,7 +348,7 @@ fn rule_over(pass: &Pass, ui: &egui::Ui, section: Section, bars: Rect, rules: &[
 fn lines(
     pass: &Pass,
     ui: &egui::Ui,
-    luma: Option<&[u32; BINS]>,
+    luma: &[u32; BINS],
     color: &[[u32; BINS]],
     counts: Counts,
     bars: Rect,
@@ -376,16 +358,15 @@ fn lines(
         .painter()
         .with_clip_rect(egui::Rect::from(bars.inset(-PLOT_INSET, -PLOT_INSET)));
     // Luminance first, so that its line runs under the color planes'.
-    let planes: Vec<(&[u32; BINS], Color32)> = luma
-        .map(|luma| (luma, Color32::from(HISTOGRAM_LUMA.with_alpha(255))))
-        .into_iter()
-        .chain(
-            color
-                .iter()
-                .zip(HISTOGRAM_PLANES)
-                .map(|(plane, ink)| (plane, Color32::from(ink))),
-        )
-        .collect();
+    let planes: Vec<(&[u32; BINS], Color32)> =
+        std::iter::once((luma, Color32::from(HISTOGRAM_LUMA.with_alpha(255))))
+            .chain(
+                color
+                    .iter()
+                    .zip(HISTOGRAM_PLANES)
+                    .map(|(plane, ink)| (plane, Color32::from(ink))),
+            )
+            .collect();
     let columns: Vec<_> = grid.columns(bars.x, bars.width).collect();
     let heights: Vec<Vec<f32>> = planes
         .iter()
@@ -745,10 +726,9 @@ mod tests {
 
         // And the header says how much a cut bar holds, where the plane is
         // on screen, and nothing of a bar that is not cut.
-        let held = scale.cut_at(&plot, BINS / 2, |_| true).expect("cut");
+        let held = scale.cut_at(&plot, BINS / 2).expect("cut");
         assert!((held - 1_000_000.0 / total as f32).abs() < 1e-6, "{held}");
-        assert_eq!(scale.cut_at(&plot, 3, |_| true), None);
-        assert_eq!(scale.cut_at(&plot, BINS / 2, |_| false), None);
+        assert_eq!(scale.cut_at(&plot, 3), None);
     }
 
     /// The scale is a share of the picture, not a count: the same share

@@ -378,10 +378,6 @@ fn image(b: &mut Builder) -> Vec<Node> {
         .enumerate()
         .map(|(index, map)| b.control(&ui::capitalized(map.label()), Control::Ramp(index), None))
         .collect();
-    let plot = vec![
-        b.button("Luminance", Control::Luma),
-        b.button("Color Planes", Control::Planes),
-    ];
     vec![
         b.action("Increase Exposure", Action::Exposure(EV_STEP)),
         b.action("Decrease Exposure", Action::Exposure(-EV_STEP)),
@@ -412,8 +408,6 @@ fn image(b: &mut Builder) -> Vec<Node> {
         b.button("Camera JPEG", Control::CameraJpeg),
         b.button("Depth Map", Control::Depth),
         b.button("Gain Map", Control::GainMap),
-        Node::Separator,
-        b.submenu("Histogram Plot", None, plot),
     ]
 }
 
@@ -695,8 +689,6 @@ impl App {
                 | Control::Info
                 | Control::Grid
                 | Control::Loupe
-                | Control::Luma
-                | Control::Planes
                 | Control::Marks => panels.lit(control),
                 Control::Depth => current
                     .is_some_and(|current| current.showing == Showing::Auxiliary(Auxiliary::Depth)),

@@ -100,7 +100,7 @@ composes into the Display curve and takes a header of its own, and a stage
 that lifts each pixel by its own amount is shaped as the Gain map section
 is, a histogram of the lift with how much of it is applied in its header.
 
-The row of buttons — the luminance and color planes, then, set apart, the marks on the picture, and at the far end the
+The row of buttons — the marks on the picture, and at the far end the
 reset (`histogram::toolbar`) — acts on every plot in the column, or on the
 picture, and on no one section, so it stands above all of them and stays
 in view however far the column is scrolled. With nothing beside them, the
@@ -324,8 +324,7 @@ the file to the screen.
 The Image section marks the pixel a channel at a time (`Mark::channels`):
 red, green and blue as the file holds them, and the luminance worked out
 from them as the plot's luminance plane is, each with a rule on its own
-plane in that plane's ink (`Plane::ink`) — only for the planes the panel has
-on screen — and its number on a line of its own under the header, after a
+plane in that plane's ink (`Plane::ink`) — and its number on a line of its own under the header, after a
 dot in the same ink, a cell to a channel so the numbers stay put as the
 pointer moves. Four numbers do not fit beside a heading at a float's
 decimals, which is why the line is its own. They are written as the bottom
@@ -393,9 +392,7 @@ per file and restored when a file comes back, where the marks stay on across
 files and are left alone by every reset. The key and the button both go
 through `App::press(Control::Marks)`, so the two cannot drift.
 
-The button is in the row at the panel's head, set apart from the three
-before it by `TOOLBAR_GROUP_GAP`: those choose what the plots draw, and
-this one paints the Output band's two ends — the pixels the screen has
+The button is at the start of the row at the panel's head, and paints the Output band's two ends — the pixels the screen has
 taken to black and to white — on the picture. The button wears
 Lucide's `triangle-alert` (`icon::TRIANGLE_ALERT`), the sign every editor's
 clipping warning wears.
@@ -672,9 +669,9 @@ Each plane is drawn as a line along its top (`plot::lines`), 1.5 device
 pixels wide, over an area laid down under it in a faint gray taken some way
 toward the line's own color (`plot::line_area`). The areas stack, so where
 the planes overlap the plot darkens to a neutral gray and where one stands
-alone it wears that plane's cast. Each plane is drawn where the panel has it
-on, the luminance plane in a neutral gray and first, so that its line runs
-under the color planes'.
+alone it wears that plane's cast. Every plane is always drawn, the
+luminance plane in a neutral gray and first, so that its line runs under the
+color planes'.
 The planes' inks are a red, a green and a blue held short of the primaries
 (`plot::HISTOGRAM_PLANES`), each leading in its own channel so that three
 lines crossing stay three; the full primaries, at a pixel to the bin, come
