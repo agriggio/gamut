@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use super::gain_map::Table;
-use super::{Channels, DecodedImage, Reader, Sample, Samples, Transfer};
+use super::{Channels, DecodedImage, Reader, Referred, Sample, Samples, Transfer};
 
 /// Bins are plenty for percentile work and cheap to keep around; the UI draws
 /// this directly as a histogram.
@@ -46,6 +46,135 @@ const LOG_CEIL: f32 = 128.0;
 const LOG_BINS_PER_STOP: usize = 8;
 const LOG_BINS: usize = (LOG_CEIL - LOG_FLOOR) as usize * LOG_BINS_PER_STOP;
 
+/// How a plot of the picture is spaced along its axis: what a position on
+/// [`Plot`]'s axis, and on [`Fine`]'s, stands for.
+///
+/// Everything that puts a value on the plot or reads one off it — the scan,
+/// the band and its handles, the response curve, the row of stops, the
+/// pointer's rule — goes through [`Axis::place`] and [`Axis::value`], so
+/// that the plot and what is drawn over it cannot be spaced two ways.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Axis {
+    /// The file's own curve: a value stands where the file encodes it,
+    /// which for a linear file is the value itself. See [`Plot`] for why.
+    Curve(Transfer),
+    /// Stops: a value stands at its base-2 logarithm, and a value with no
+    /// light in it — zero, or less — below every floor. For light stored
+    /// linear as floats, which has no curve of its own and no top: a
+    /// Radiance picture runs from nothing to a few hundred, and almost all
+    /// of it is in the bottom hundredth, where a linear axis would have it
+    /// in the first bin. Spaced in stops, the shadows get the room the eye
+    /// gives them, a stop of exposure moves every value the same distance,
+    /// and a window is a stretch of the axis rather than a sliver of it.
+    /// Not for a measurement, whose values are quantities rather than
+    /// light and may be negative, and whose stops no one counts.
+    Stops,
+}
+
+impl Axis {
+    /// The axis `image` is plotted on. The scan settles on a linear axis
+    /// instead where [`Axis::Stops`] has nothing to stand on — a picture
+    /// with no light in it — so what is read from is [`Stats::axis`].
+    pub fn of(image: &DecodedImage) -> Self {
+        let transfer = image.color.transfer;
+        let floats = matches!(image.samples, Samples::F32 { .. });
+        if floats && transfer.is_linear() && image.referred != Referred::Measured {
+            Axis::Stops
+        } else {
+            Axis::Curve(transfer)
+        }
+    }
+
+    /// Where a linear value stands on the axis.
+    pub fn place(self, linear: f32) -> f32 {
+        match self {
+            Axis::Curve(transfer) => encode(transfer, linear),
+            Axis::Stops => stops(linear),
+        }
+    }
+
+    /// The linear value standing at `place` on the axis.
+    pub fn value(self, place: f32) -> f32 {
+        match self {
+            Axis::Curve(transfer) => transfer.to_linear(place),
+            Axis::Stops => place.exp2(),
+        }
+    }
+
+    /// Where a sample as the file stores it — on its own curve, normalized
+    /// to 0..1 for integer samples — stands on the axis: where it is, on a
+    /// curve, and its stops otherwise, a linear file's stored sample being
+    /// the linear value.
+    pub fn place_stored(self, stored: f32) -> f32 {
+        match self {
+            Axis::Curve(_) => stored,
+            Axis::Stops => stops(stored),
+        }
+    }
+
+    /// Where one pixel read back out of `image` stands on a plot of it: its
+    /// luminance, worked out as the scan works it out, on this axis. `None`
+    /// for a value the scan would have thrown out as nodata. See
+    /// [`Plot::bin_of`] for why it is read from [`Sample::linear`].
+    pub fn place_of(self, image: &DecodedImage, sample: &Sample) -> Option<f32> {
+        let value = luminance(sample.linear(), sample.channels);
+        if !value.is_finite() || image.nodata.is_some_and(|sentinel| value == sentinel) {
+            return None;
+        }
+        Some(self.place(value))
+    }
+}
+
+/// A linear value in stops. Nothing, and less than nothing, has no
+/// logarithm: minus infinity, which is below every floor, rather than the
+/// not-a-number `log2` makes of a negative.
+fn stops(linear: f32) -> f32 {
+    linear.max(0.0).log2()
+}
+
+/// How far down a stops axis runs below its top at most, in stops: what a
+/// plot of [`BINS`] has room to say anything about at ten or so bins to the
+/// stop, and three times the range a photograph holds. A render's tail of
+/// near-nothing below it piles into the first bin.
+const STOPS_REACH: f32 = 24.0;
+
+/// The share of the lit pixels left out at the bottom when a stops axis's
+/// floor is read from them: a handful of stray pixels at next to nothing
+/// would otherwise put the floor tens of stops down and the picture back
+/// into a sliver of the plot. Far less than [`KEY_TRIM`], which is there
+/// to keep a residue out of a mean, where this is only to keep strays off
+/// an axis: the share is what piles into the first bin.
+const FLOOR_TRIM: f64 = 0.001;
+
+/// The range a stops axis spans — its floor and its top, in whole stops —
+/// for a picture whose plotted channels reach `highest` and whose lit
+/// luminance is binned by its logarithm in `log_counts`, as the range pass
+/// bins it: the top is the first whole stop at or above the brightest
+/// channel, and the floor is the darkest lit stop after the bottom
+/// [`FLOOR_TRIM`] is left off, no more than [`STOPS_REACH`] under the top
+/// and at least a stop under it, so that the axis always has a span.
+/// `None` where nothing reaches above zero, which has no top.
+fn stops_axis(highest: f32, log_counts: &[u32]) -> Option<(f32, f32)> {
+    // Written so that a `highest` that is not a number has no top either.
+    let top = highest.log2().ceil();
+    if !top.is_finite() {
+        return None;
+    }
+    let total: u64 = log_counts.iter().map(|&count| u64::from(count)).sum();
+    let trim = (total as f64 * FLOOR_TRIM) as u64;
+    let mut seen = 0u64;
+    let darkest = log_counts
+        .iter()
+        .position(|&count| {
+            seen += u64::from(count);
+            count > 0 && seen > trim
+        })
+        .map(|bin| LOG_FLOOR + bin as f32 / LOG_BINS_PER_STOP as f32)
+        .unwrap_or(f32::NEG_INFINITY);
+    let floor = darkest.floor().max(top - STOPS_REACH).min(top - 1.0);
+    Some((floor, top))
+}
+
 /// The histogram the interface draws.
 ///
 /// Binned on the curve the file stores its samples with, rather than on the
@@ -62,16 +191,20 @@ const LOG_BINS: usize = (LOG_CEIL - LOG_FLOOR) as usize * LOG_BINS_PER_STOP;
 /// The second is that the eye's response is close to the curve a
 /// display-referred file is encoded with, so plotting against it gives equal
 /// width to equal perceived steps: mid gray sits in the middle rather than a
-/// fifth of the way along. Linear files — scene light and measurements —
-/// store linear samples, so their plot stays linear, which is what
-/// measurement work wants.
+/// fifth of the way along. Linear integer files — sensor counts, and
+/// measurements — store linear samples, so their plot stays linear, which is
+/// what measurement work wants. Light stored linear as floats is spaced in
+/// stops instead: see [`Axis::Stops`].
 ///
 /// The axis follows the same split. A curved file is display-referred, so it
 /// spans the range such a file can hold — 0..1, widened by any over-range
 /// float samples — which puts clipping at either end where you can see it and
 /// lands 8-bit codes one to a bin. Linear samples have no nominal range to
 /// speak of, since the case that matters is 12-bit data in a 16-bit
-/// container, so their axis is the range actually measured.
+/// container, so their axis is the range actually measured; in stops, from
+/// the darkest the picture holds to say anything about up to its brightest
+/// ([`stops_axis`]). Which it is, and what a position on it stands for, is
+/// [`Stats::axis`].
 ///
 /// The channels plotted are the working space's, on the file's own curve: a
 /// P3 or BT.2020 file's color is carried into BT.709 before it is binned,
@@ -95,6 +228,15 @@ pub struct Plot {
 }
 
 impl Plot {
+    /// The two ends of the axis, as [`Display::step_black`] and
+    /// [`Display::step_white`] take them.
+    ///
+    /// [`Display::step_black`]: super::display::Display::step_black
+    /// [`Display::step_white`]: super::display::Display::step_white
+    pub fn range(&self) -> [f32; 2] {
+        [self.min, self.max]
+    }
+
     /// Which bin of the luminance plane one pixel read back out of `image`
     /// was counted in, so that a marker can point at the bar its own pixel is
     /// part of.
@@ -111,20 +253,8 @@ impl Plot {
     /// value the scan would have thrown out as nodata, or one outside the
     /// range it measured — which a strided scan can miss, and which the plot
     /// therefore does not cover.
-    pub fn bin_of(&self, image: &DecodedImage, sample: &Sample) -> Option<usize> {
-        self.bin_at(Self::value_of(image, sample)?)
-    }
-
-    /// Where one pixel read back out of `image` stands on a plot of it: its
-    /// luminance, worked out as the scan works it out, on the file's own
-    /// curve. `None` for a value the scan would have thrown out as nodata.
-    /// See [`Plot::bin_of`] for why it is read from [`Sample::linear`].
-    pub fn value_of(image: &DecodedImage, sample: &Sample) -> Option<f32> {
-        let value = luminance(sample.linear(), sample.channels);
-        if !value.is_finite() || image.nodata.is_some_and(|sentinel| value == sentinel) {
-            return None;
-        }
-        Some(encode(image.color.transfer, value))
+    pub fn bin_of(&self, axis: Axis, image: &DecodedImage, sample: &Sample) -> Option<usize> {
+        self.bin_at(axis.place_of(image, sample)?)
     }
 
     /// Which bin a value already on the plot's own axis falls in: the same
@@ -432,6 +562,9 @@ pub struct Stats {
     /// how much of the frame they cover. `None` where no pixel is above
     /// zero.
     pub key: Option<f32>,
+    /// How the plot and the fine bins are spaced: what a position on
+    /// their axis stands for.
+    pub axis: Axis,
     /// The same pixels binned for drawing. See [`Plot`] for why it is a
     /// second scan rather than the same one.
     pub plot: Plot,
@@ -520,6 +653,7 @@ impl Stats {
         let color = !channels.is_gray();
         let plotted = if color { COLOR } else { 1 };
         let alpha = channels.alpha_index();
+        let mut axis = Axis::of(image);
         let Range {
             min,
             max,
@@ -571,10 +705,26 @@ impl Stats {
                 histogram: [0; BINS],
                 counted: 0,
                 key: None,
+                axis: Axis::Curve(transfer),
                 plot: Plot::empty(),
                 fine: Arc::new(Fine::empty(0.0, 1.0, color)),
             };
         }
+
+        // A stops axis is read off what was measured, from the darkest
+        // the picture holds to say anything about up to its brightest; a
+        // picture with nothing above zero has no top for one, and is
+        // plotted on the linear axis its samples are in.
+        let (axis_min, axis_max) = match axis {
+            Axis::Stops => match stops_axis(axis_max, &log_counts) {
+                Some(range) => range,
+                None => {
+                    axis = Axis::Curve(transfer);
+                    (axis_min, axis_max)
+                }
+            },
+            Axis::Curve(_) => (axis_min, axis_max),
+        };
 
         let span = max - min;
         // A span at or below the smallest normal float is treated as flat:
@@ -610,7 +760,10 @@ impl Stats {
                         }
                         if let Some(fine_scale) = fine_scale {
                             // Rounded, as the luminance is: a fine bin is
-                            // the sample point at its middle.
+                            // the sample point at its middle. A value under
+                            // a stops axis's floor — minus infinity, for no
+                            // light at all — is the first bin, which is
+                            // where the cast saturates to.
                             let bin = |fine: &mut [u32], stored: f32| {
                                 let index = ((stored - axis_min) * fine_scale + 0.5) as usize;
                                 fine[index.min(FINE_BINS - 1)] += 1;
@@ -619,14 +772,14 @@ impl Stats {
                                 // Luminance is a linear quantity; it goes
                                 // onto the axis the same way the samples
                                 // themselves did.
-                                bin(&mut counts.fine.luma, encode(transfer, value));
+                                bin(&mut counts.fine.luma, axis.place(value));
                             }
                             if let Some(fine) = counts.fine.color.as_mut() {
                                 for (plane, (stored, decoded)) in
                                     encoded[..COLOR].iter().zip(linear).enumerate()
                                 {
                                     if is_data(*decoded) {
-                                        bin(&mut fine[plane], *stored);
+                                        bin(&mut fine[plane], axis.place_stored(*stored));
                                     }
                                 }
                             }
@@ -652,6 +805,7 @@ impl Stats {
             histogram: counts.histogram,
             counted: counts.counted,
             key,
+            axis,
             // The plot is the fine bins on the same axis, spread as any
             // other stage's plot of them is, so that a quantized file's codes
             // do not comb against bins of another width.
@@ -1282,11 +1436,14 @@ mod tests {
             gain_map: None,
             depth: None,
         };
-        let plot = Stats::scan(&image).plot;
+        let stats = Stats::scan(&image);
+        let plot = &stats.plot;
 
         for x in 0..image.width {
             let sample = image.sample(x, 0, None).expect("inside the image");
-            let bin = plot.bin_of(&image, &sample).expect("on the axis");
+            let bin = plot
+                .bin_of(stats.axis, &image, &sample)
+                .expect("on the axis");
             assert!(
                 plot.luma[bin] > 0,
                 "pixel {x} marked at bin {bin}, which counted nothing"
@@ -1348,11 +1505,19 @@ mod tests {
         }
     }
 
+    /// `image` read as a measurement rather than as light: numbers, on the
+    /// linear axis they are measured in.
+    fn measured(mut image: DecodedImage) -> DecodedImage {
+        image.referred = Referred::Measured;
+        image
+    }
+
     /// The point of the separate axis: saturated color runs well past the
     /// luminance range, and binning it there would pile it into the last bin.
     #[test]
     fn color_channels_are_binned_over_their_own_range() {
-        let stats = Stats::scan(&rgb_f32(vec![1.0, 0.0, 0.0]));
+        let stats = Stats::scan(&measured(rgb_f32(vec![1.0, 0.0, 0.0])));
+        assert_eq!(stats.axis, Axis::Curve(Transfer::Linear));
         let plot = &stats.plot;
         let color = plot.color.expect("an rgb image has channel counts");
 
@@ -1413,15 +1578,76 @@ mod tests {
     }
 
     /// A flat image spans nothing, and binning it would divide by a
-    /// zero-width axis.
+    /// zero-width axis. In stops it is given a stop to stand in, since a
+    /// spike at its one value is no lie there.
     #[test]
     fn a_flat_image_plots_nothing() {
-        let plot = Stats::scan(&rgb_f32(vec![0.5, 0.5, 0.5])).plot;
+        let plot = Stats::scan(&measured(rgb_f32(vec![0.5, 0.5, 0.5]))).plot;
         assert_eq!(plot.luma.iter().sum::<u32>(), 0);
         assert!(
             plot.color
                 .is_some_and(|planes| planes.iter().all(|plane| plane.iter().sum::<u32>() == 0))
         );
+
+        let stats = Stats::scan(&rgb_f32(vec![0.5, 0.5, 0.5]));
+        assert_eq!(stats.axis, Axis::Stops);
+        assert_eq!((stats.plot.min, stats.plot.max), (-2.0, -1.0));
+        assert_eq!(stats.plot.luma[BINS - 1], ONE);
+    }
+
+    /// Light stored linear as floats is plotted in stops, from the darkest
+    /// it holds to say anything about up to the first whole stop at or
+    /// above its brightest, and a pixel with no light in it is in the first
+    /// bin, below every floor.
+    #[test]
+    fn light_stored_as_floats_is_plotted_in_stops() {
+        let stats = Stats::scan(&linear_gray_f32(vec![0.0, 0.25, 1.0, 256.0]));
+        assert_eq!(stats.axis, Axis::Stops);
+        let plot = &stats.plot;
+        assert_eq!((plot.min, plot.max), (-2.0, 8.0));
+        assert_eq!(plot.luma[0], 2 * ONE, "none, and a quarter at the floor");
+        let unity = plot.bin_at(0.0).expect("1 is on the axis");
+        assert_eq!(plot.luma[unity - 1..=unity + 1].iter().sum::<u32>(), ONE);
+        assert_eq!(plot.luma[BINS - 1], ONE);
+        let sample = linear_gray_f32(vec![0.0, 0.25, 1.0, 256.0]);
+        let pixel = sample.sample(2, 0, None).expect("inside");
+        assert_eq!(plot.bin_of(stats.axis, &sample, &pixel), Some(unity));
+        assert_eq!(stats.axis.place(0.0), f32::NEG_INFINITY);
+        assert_eq!(stats.axis.place(-1.0), f32::NEG_INFINITY);
+        assert_eq!(stats.axis.value(3.0), 8.0);
+
+        // The linear axis stays what it was for a measurement, and a
+        // graded linear float is light.
+        let numbers = Stats::scan(&measured(linear_gray_f32(vec![0.0, 0.25, 1.0, 256.0])));
+        assert_eq!(numbers.axis, Axis::Curve(Transfer::Linear));
+        assert_eq!((numbers.plot.min, numbers.plot.max), (0.0, 256.0));
+        let mut graded = linear_gray_f32(vec![0.0, 0.25, 1.0]);
+        graded.referred = Referred::Display;
+        assert_eq!(Stats::scan(&graded).axis, Axis::Stops);
+    }
+
+    /// The floor of a stops axis is read off the picture with a sliver
+    /// trimmed from the bottom, so that a few stray pixels at next to
+    /// nothing cannot put it tens of stops down; a residue that is a real
+    /// share of the frame does pull it down, as far as the axis reaches;
+    /// and a picture with no light at all has no top for a stops axis and
+    /// is plotted on the linear one.
+    #[test]
+    fn a_stray_pixel_does_not_set_the_floor_of_a_stops_axis() {
+        let mut lit = vec![1.0; 2000];
+        lit.push(1e-30);
+        let stats = Stats::scan(&linear_gray_f32(lit));
+        assert_eq!((stats.plot.min, stats.plot.max), (-1.0, 0.0));
+        assert_eq!(stats.plot.luma[0], ONE, "the stray is in the first bin");
+
+        let mut residue = vec![1.0; 80];
+        residue.extend([1e-9; 20]);
+        let stats = Stats::scan(&linear_gray_f32(residue));
+        assert_eq!((stats.plot.min, stats.plot.max), (-STOPS_REACH, 0.0));
+        assert_eq!(stats.plot.luma[0], 20 * ONE);
+
+        let dark = Stats::scan(&linear_gray_f32(vec![0.0, 0.0, -1.0]));
+        assert_eq!(dark.axis, Axis::Curve(Transfer::Linear));
     }
 
     fn srgb_gray_u8(data: Vec<u8>) -> DecodedImage {
@@ -1558,7 +1784,7 @@ mod tests {
     /// over piles into the last bin, which is the clip.
     #[test]
     fn a_stage_moves_the_bins_and_piles_what_it_pushes_off_the_end() {
-        let stats = Stats::scan(&linear_gray_f32(vec![0.0, 0.25, 0.75, 1.0]));
+        let stats = Stats::scan(&measured(linear_gray_f32(vec![0.0, 0.25, 0.75, 1.0])));
         let doubled = stats.fine.rebinned([0.0, 1.0], |value| value * 2.0);
         // Half of 255 bins is between two of them, which share it.
         let half = (0.5 * (BINS - 1) as f32).floor() as usize;

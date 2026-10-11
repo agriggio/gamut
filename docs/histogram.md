@@ -144,6 +144,52 @@ are, so that it compares with the Output's bin for bin; the curve stands
 off them on an outline in the plot's ground (`CURVE_OUTLINE`), which keeps
 it readable where it crosses the planes' lines.
 
+### The axis
+
+What a position on the Display and Image plots stands for is
+`stats::Axis`, and everything that puts a value on either plot or reads one
+off it — the scan, the band and its handles, the response curve, the rows
+of stops, the pointer's rule, the handles' keys (`Display::step_black`) —
+goes through `Axis::place` and `Axis::value`, so that the plot and what is
+drawn over it cannot be spaced two ways. A file on a curve is plotted on
+that curve, and a linear integer file — sensor counts, a measurement — on
+its linear values; the reasons are with `stats::Plot`.
+
+Light stored linear as floats — a Radiance picture, an EXR — is plotted in
+stops instead (`Axis::Stops`): a value stands at its base-2 logarithm. Such
+a file has no curve of its own and no top. A Radiance picture runs from
+nothing to a few hundred with almost all of it in the bottom hundredth,
+which a linear axis puts in its first bin and its first two *fine* bins:
+the Output plot, rebinned from those, came out as two flat steps, and the
+window, the handles and the curve were a sliver at the plot's left edge
+that the exposure slider visibly did nothing to. In stops the shadows get
+the room the eye gives them, a stop of exposure is a shift along the axis
+by one stop, and the window is a stretch of the plot. A measurement keeps
+its linear axis: its values are quantities rather than light, may be
+negative, and have no stops anyone counts.
+
+The axis's range is read off the picture (`stats::stops_axis`): the top is
+the first whole stop at or above the brightest plotted channel, and the
+floor the darkest lit stop after the bottom `FLOOR_TRIM` of the lit pixels
+is left off — a thousandth, enough to keep a few stray pixels at next to
+nothing from putting the floor tens of stops down and the picture back in
+a sliver, and no more, since what is trimmed piles into the first bin — no
+further than `STOPS_REACH` under the top, and at least a stop under it so
+that the axis always has a span. A picture with no light in it has no top
+for a stops axis and is plotted on the linear one, which is why the axis
+is read from `Stats::axis` rather than worked out from the image again.
+
+A value with no light in it — zero, or less — has no logarithm, and stands
+at minus infinity, below every floor. A metered file's window opens at
+0..1, so its black handle stands at the band's left end, hollow, as a
+handle out past the band does; a drag of the band slides the white alone,
+since no light moved along by any distance is still no light
+(`track`); and the black point's key steps it up from the plot's floor,
+where the handle is drawn (`Display::placed`). The response curve is drawn
+on the same axis both ways, so a display doing nothing is still the
+diagonal and a stop of exposure lifts the whole line by a stop; black is
+the plot's floor (`plot::Scale`), which a response at black is drawn at.
+
 **Output** is the Display plot pushed through the display's response and
 encoded on sRGB's curve, over 0 to the surface's room above white
 (`FrameInput::room`, which is `App::display_headroom`). Where a gray image
@@ -234,15 +280,20 @@ from the value, not the bins, so they are exact wherever they are drawn.
   a measurement (`Referred::Measured`), whose values are not light.
 - **Gain map** counts the lift itself, the axis's own unit, so its ticks are
   evenly spaced.
-
-The Image section has none: its point is the file's own units, and its stops
-would be the Display row's again with no window on them.
+- **Image** has one only on an axis in stops (`stored::stop_across`),
+  counting from the file's own 1, which holds still while the window and
+  the exposure move the Display row's 0: the values at the axis's ends,
+  which the section writes on any other float axis, would be a column of
+  zeros at three places across twenty stops. On every other axis its point
+  is the file's own units, and its stops would be the Display row's again
+  with no window on them.
 
 Every row is worked out from 0 outward each way, so 0 is always written and
 the numbers further out give way to those nearer 0. A side stops where its
 ticks come closer than `EV_TICK_GAP`: on a curve the shadows crowd past
 reading around eight stops under white, and on a linear axis, where each
-stop down is half the distance of the last, after four or five.
+stop down is half the distance of the last, after four or five. On an axis
+in stops the ticks are evenly spaced and the row runs the plot's width.
 
 ## The pixel traced down the column
 

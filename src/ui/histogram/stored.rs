@@ -12,7 +12,8 @@
 //! integers — a raw's from black to the sensor's saturation, so that how
 //! far a picture stands short of clipping is the room to the right of it —
 //! and the range they were measured over where they are floats, which have
-//! no top to run to.
+//! no top to run to: in stops where the floats are light
+//! ([`Axis::Stops`]), with a row of stops from the file's own 1 under it.
 
 use std::sync::Arc;
 
@@ -21,11 +22,16 @@ use egui::FontId;
 use super::plot::{self, Counts, bars};
 use super::*;
 use crate::image::Samples;
-use crate::image::stats::Fine;
+use crate::image::stats::{Axis, Fine};
 use crate::ui::pixel::component;
 
 /// The room between one of the pixel's values and the next in the header.
 const VALUE_GAP: f32 = 8.0;
+
+/// How far either way of 1 the row of stops under an axis in stops is
+/// looked for over: past either end of any such axis, whose reach down from
+/// its top is bounded and whose top is a float's.
+const STOP_REACH: std::ops::RangeInclusive<i32> = -64..=64;
 
 /// The section's plot where it is not the stored scan's own, held between
 /// passes for as long as the scan is the same one.
@@ -88,10 +94,11 @@ fn stored_words(current: &Current, axis: f32) -> String {
 /// and in the units the file keeps its samples in. Integer samples have
 /// their whole range in quarters — 0, 64, 128, 192 and 255 for eight bits,
 /// the quarters of a power of two, the last held to the top — and floats,
-/// whose axis is only as wide as what they hold, its two ends.
+/// whose axis is only as wide as what they hold, its two ends. None on an
+/// axis in stops, which has a row of stops instead: see [`stop_across`].
 pub(super) fn ticks(current: &Current, plot: &Plot) -> Vec<(f32, String)> {
     let span = plot.max - plot.min;
-    if span.is_nan() || span <= 0.0 {
+    if span.is_nan() || span <= 0.0 || current.stored.axis == Axis::Stops {
         return Vec::new();
     }
     let along = |axis: f32| (axis - plot.min) / span;
@@ -108,6 +115,18 @@ pub(super) fn ticks(current: &Current, plot: &Plot) -> Vec<(f32, String)> {
             (along(stored / full), ends_words(stored, false))
         })
         .collect()
+}
+
+/// Where `stop` stops from the file's own 1 falls along `plot`, an axis in
+/// stops, as a fraction of the way along it: the row of stops under the
+/// plot of light stored as floats, which has no top to write and whose
+/// values across twenty stops would be a column of zeros at three places.
+/// Counted from 1 rather than from the window's white, which the Display
+/// section's row counts from: this is the file's own scale, and holds
+/// still while the window and the exposure move.
+pub(super) fn stop_across(plot: &Plot, stop: i32) -> Option<f32> {
+    let span = plot.max - plot.min;
+    (span > 0.0).then(|| (stop as f32 - plot.min) / span)
 }
 
 /// A value along the axis as the row under the plot writes it: a count for
@@ -140,18 +159,19 @@ pub(super) fn bin_mark(current: &Current, plot: &Plot, bin: usize) -> Mark {
 pub(super) fn pixel_mark(current: &Current, plot: &Plot, x: u32, y: u32) -> Option<Mark> {
     let sample = current.sample_as_stored(x, y)?;
     let image = &current.image;
+    let axis = current.stored.axis;
     let scale = 1.0 / image.samples.full_scale();
     let mut channels = Vec::with_capacity(4);
     if !image.is_gray() {
         for (plane, stored) in Plane::COLOR.into_iter().zip(sample.stored()) {
             channels.push(Channel {
                 plane,
-                bin: plot.bin_at(stored * scale),
+                bin: plot.bin_at(axis.place_stored(stored * scale)),
                 words: component(*stored, float(current)),
             });
         }
     }
-    let luma = Plot::value_of(image, &sample)?;
+    let luma = axis.place_of(image, &sample)?;
     channels.push(Channel {
         plane: Plane::Luma,
         bin: plot.bin_at(luma),
@@ -189,12 +209,11 @@ pub(super) fn show(
         _ => accent_rule(pass, mark),
     };
     bars(pass, ui, Section::Image, plotted, counts, plot_rect, &rules);
-    plot::value_scale(
-        pass,
-        ui,
-        ev_row(plot_rect, plot_rect.bottom() + PLOT_INSET),
-        &ticks(current, plotted),
-    );
+    let row = ev_row(plot_rect, plot_rect.bottom() + PLOT_INSET);
+    match current.stored.axis {
+        Axis::Stops => plot::ev_scale(pass, ui, row, STOP_REACH, |stop| stop_across(plotted, stop)),
+        Axis::Curve(_) => plot::value_scale(pass, ui, row, &ticks(current, plotted)),
+    }
     match mark {
         Some(mark) if !mark.channels.is_empty() => {
             section::header(pass, ui, Section::Image, rect, None, None);

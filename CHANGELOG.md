@@ -8,6 +8,20 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
 
 ### Changed
 
+- The histogram plots light stored as floating-point linear values — a
+  Radiance picture, an EXR — in stops, from the darkest the picture holds to
+  say anything about up to its brightest. The Display and Image sections'
+  axes used to run straight from the file's lowest value to its highest,
+  which on a Radiance picture — nothing to a few hundred, almost all of it
+  in the bottom hundredth — put the whole picture, the window, its handles
+  and the response curve into the first few pixels of the plot, the
+  exposure slider visibly doing nothing to them, and the Output section
+  into a staircase of two flat steps. In stops the shadows have room, a stop
+  of exposure moves everything one stop along, the window is a stretch of
+  the band, and the Output plots the picture. The Image section has a row of
+  stops from the file's own 1 under its plot, in place of the values at its
+  ends. A measurement keeps its linear axis, as do the sensor counts of a
+  linear 16-bit file.
 - A single-channel measurement — a linear 16-bit or floating-point TIFF, an
   elevation model, a depth map — is spread straight across the grays: the
   middle of its window comes out middle gray, and each value the gray code

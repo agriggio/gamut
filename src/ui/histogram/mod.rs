@@ -506,7 +506,7 @@ fn width_of(ui: &egui::Ui, text: &str, size: f32) -> f32 {
     crate::ui::text_width(ui, text, FontId::proportional(size))
 }
 
-/// A value on the plot of the image as it is shown or stored, written in
+/// A value at `place` on the plot of the image as it is shown, written in
 /// the units the file counts in.
 ///
 /// Linear integer data reads back as counts — an elevation model in meters,
@@ -514,14 +514,14 @@ fn width_of(ui: &egui::Ui, text: &str, size: f32) -> f32 {
 /// else is the decoded value, to three places with the trailing zeros taken
 /// off, so that the ends of a 0..1 axis read `0` and `1` rather than as
 /// four decimals of nothing.
-fn axis_words(current: &Current, encoded: f32) -> String {
+fn axis_words(current: &Current, place: f32) -> String {
     let transfer = current.image.color.transfer;
     let scale = if transfer.is_linear() {
         current.image.samples.full_scale()
     } else {
         1.0
     };
-    let value = transfer.to_linear(encoded) * scale;
+    let value = current.stats.axis.value(place) * scale;
     if scale > 1.0 {
         return format!("{value:.0}");
     }

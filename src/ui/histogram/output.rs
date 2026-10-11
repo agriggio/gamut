@@ -13,7 +13,7 @@ use super::plot::{Past, band, bars, white_mark};
 use super::*;
 use crate::image::Transfer;
 use crate::image::display::{Colormap, Display, Headroom, ToneMap};
-use crate::image::stats::Fine;
+use crate::image::stats::{Axis, Fine};
 use crate::ui::FrameInput;
 
 /// The curve the output's axis is spaced on: the one the screen is driven
@@ -105,12 +105,10 @@ pub(super) fn binned_for(current: &Current, headroom: Headroom, room: f32) -> Bi
     rebin(current, headroom, room, input_key)
 }
 
-/// What the display makes of one value on the input's axis, as a ratio to
-/// white, never below black.
-fn response(display: &Display, transfer: Transfer, gray: bool, headroom: Headroom, v: f32) -> f32 {
-    display
-        .response(transfer.to_linear(v), gray, headroom)
-        .max(0.0)
+/// What the display makes of one value at `place` on the input's axis, as
+/// a ratio to white, never below black.
+fn response(display: &Display, axis: Axis, gray: bool, headroom: Headroom, place: f32) -> f32 {
+    display.response(axis.value(place), gray, headroom).max(0.0)
 }
 
 /// The room a plot of the output runs up to: the surface's, where it is
@@ -142,10 +140,10 @@ fn resolved_room(fine: &Fine, room: f32, through: impl Fn(f32) -> f32) -> f32 {
 fn rebin(current: &Current, headroom: Headroom, room: f32, key: Key) -> Binned {
     let fine = &current.stats.fine;
     let display = &current.display;
-    let transfer = current.image.color.transfer;
+    let axis = current.stats.axis;
     let gray = current.image.is_gray();
     let ramp = display.ramp(gray);
-    let through = |v| response(display, transfer, gray, headroom, v);
+    let through = |v| response(display, axis, gray, headroom, v);
     // Along a ramp the response is where on it a value lands, 0 to 1 and
     // never past: the axis is the ramp itself. Light is spaced as the
     // screen codes it, to the surface's room.
@@ -209,13 +207,14 @@ pub(super) fn pixel_mark(
     y: u32,
 ) -> Option<Mark> {
     let sample = current.sample(x, y)?;
-    let encoded = Plot::value_of(&current.image, &sample)?;
+    let axis = current.stats.axis;
+    let place = axis.place_of(&current.image, &sample)?;
     let out = response(
         &current.display,
-        current.image.color.transfer,
+        axis,
         current.image.is_gray(),
         headroom,
-        encoded,
+        place,
     )
     .min(binned.room);
     Some(Mark {

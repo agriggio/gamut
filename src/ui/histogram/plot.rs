@@ -35,33 +35,37 @@ pub(super) const HISTOGRAM_PLANES: [Color; COLOR] = [
     Color::rgb(84, 132, 236),
 ];
 
-/// How the response curve is scaled up the plot: in the file's own encoding,
-/// as the bins across are, from 0 at the axis to `ceiling` at the top.
+/// How the response curve is scaled up the plot: on the plot's own axis, as
+/// the bins across are, from `floor` at the axis to `ceiling` at the top.
 ///
-/// The ceiling is white — encoded, so that a display doing nothing draws the
-/// diagonal — except where the curve runs past it, which it does on a surface
-/// with room above white and no curve on: the top of the plot is then
-/// wherever the response gets to, and white is a line drawn across it.
-/// `white` is where that line goes, as a fraction of the plot's height, and
-/// `None` where white is the top and the line would be the plot's own edge.
+/// The floor is black — 0 on a curve, and on an axis in stops, where black
+/// is below every floor, the plot's own. The ceiling is white — on the
+/// axis, so that a display doing nothing draws the diagonal — except where
+/// the curve runs past it, which it does on a surface with room above white
+/// and no curve on: the top of the plot is then wherever the response gets
+/// to, and white is a line drawn across it. `white` is where that line
+/// goes, as a fraction of the plot's height, and `None` where white is the
+/// top and the line would be the plot's own edge.
 pub(super) struct Scale {
+    floor: f32,
     ceiling: f32,
     pub(super) white: Option<f32>,
 }
 
 impl Scale {
-    pub(super) fn new(encoded_white: f32, highest: f32) -> Self {
-        let ceiling = highest.max(encoded_white).max(f32::MIN_POSITIVE);
-        let white = encoded_white / ceiling;
+    pub(super) fn new(floor: f32, placed_white: f32, highest: f32) -> Self {
+        let ceiling = highest.max(placed_white).max(floor + f32::MIN_POSITIVE);
+        let white = (placed_white - floor) / (ceiling - floor);
         Self {
+            floor,
             ceiling,
             white: (white < 1.0 - 1e-3).then_some(white),
         }
     }
 
-    /// An encoded response as a fraction of the plot's height.
-    pub(super) fn up(&self, encoded: f32) -> f32 {
-        (encoded / self.ceiling).clamp(0.0, 1.0)
+    /// A response on the plot's axis as a fraction of the plot's height.
+    pub(super) fn up(&self, placed: f32) -> f32 {
+        ((placed - self.floor) / (self.ceiling - self.floor)).clamp(0.0, 1.0)
     }
 }
 

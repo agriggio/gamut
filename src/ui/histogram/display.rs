@@ -12,6 +12,7 @@ use super::track::track;
 use super::*;
 use crate::image::Referred;
 use crate::image::display::{Colormap, Display, Headroom, ToneMap};
+use crate::image::stats::Axis;
 
 /// The row of false colors under the band: how deep a swatch is, and the
 /// corner it is drawn with. Deep enough to press and to read the map off,
@@ -222,28 +223,28 @@ pub(super) fn row_buttons(rect: Rect) -> impl Iterator<Item = (Control, Rect)> {
     windows.chain(curves)
 }
 
-/// What the display makes of the value `encoded` stands at on the plot of
-/// the picture as it starts from it: the value, in the file's units, and
-/// what the display turns it into, which is the height of the response
-/// curve where the rule crosses it and the one number a curve on its own
-/// cannot be read off by eye.
+/// What the display makes of the value at `place` on the plot of the
+/// picture as it starts from it: the value, in the file's units, and what
+/// the display turns it into, which is the height of the response curve
+/// where the rule crosses it and the one number a curve on its own cannot
+/// be read off by eye.
 ///
 /// Neither will measure against the plot underneath with a ruler, because
-/// both of the plot's axes are spaced in the file's own encoding — the bins
-/// across, so that a quantized file does not comb, and the response up, so
-/// that a display doing nothing is the diagonal. The positions are the
-/// file's units and the numbers are the ones every other readout quotes; a
-/// curve that is straight and a value that is comparable cannot both be
-/// had, and the shape is what the plot is for.
-fn words(current: &Current, headroom: Headroom, encoded: f32) -> String {
-    let value = current.image.color.transfer.to_linear(encoded);
+/// both of the plot's axes are spaced on the plot's axis — the bins across,
+/// so that a quantized file does not comb, and the response up, so that a
+/// display doing nothing is the diagonal. The positions are the axis's and
+/// the numbers are the ones every other readout quotes; a curve that is
+/// straight and a value that is comparable cannot both be had, and the
+/// shape is what the plot is for.
+fn words(current: &Current, headroom: Headroom, place: f32) -> String {
+    let value = current.stats.axis.value(place);
     let mapped = current
         .display
         .response(value, current.image.is_gray(), headroom)
         .max(0.0);
     format!(
         "{}  {BECOMES}  {}",
-        axis_words(current, encoded),
+        axis_words(current, place),
         trimmed(format!("{mapped:.3}"))
     )
 }
@@ -262,10 +263,11 @@ pub(super) fn bin_mark(current: &Current, headroom: Headroom, bin: usize) -> Mar
 /// working space, and what the display makes of it.
 pub(super) fn pixel_mark(current: &Current, headroom: Headroom, x: u32, y: u32) -> Option<Mark> {
     let sample = current.sample(x, y)?;
-    let encoded = Plot::value_of(&current.image, &sample)?;
+    let axis = current.stats.axis;
+    let place = axis.place_of(&current.image, &sample)?;
     Some(Mark {
-        bin: current.stats.plot.bin_of(&current.image, &sample),
-        words: words(current, headroom, encoded),
+        bin: current.stats.plot.bin_of(axis, &current.image, &sample),
+        words: words(current, headroom, place),
         ..Mark::default()
     })
 }
@@ -310,12 +312,12 @@ pub(super) fn show(
         // runs at the ends are the range the display is throwing away,
         // drawn at the width they occupy. The handles that set those ends
         // are drawn over it, in [`track()`].
-        let transfer = current.image.color.transfer;
+        let axis = current.stats.axis;
         let headroom = pass.input.headroom;
         let channels = current.image.channels();
         let display = &current.display;
         band(pass, ui, plot_rect, Past::Rule, |t| {
-            let value = transfer.to_linear(plotted.min + t * span);
+            let value = axis.value(plotted.min + t * span);
             (
                 Color::from_linear(display.shade(value, channels, headroom)),
                 display.response(value, gray, headroom) > ABOVE_WHITE,
@@ -373,7 +375,7 @@ fn stops(pass: &Pass, ui: &egui::Ui, current: &Current, bars: Rect) {
     }
     let plotted = &current.stats.plot;
     let span = plotted.max - plotted.min;
-    let transfer = current.image.color.transfer;
+    let axis = current.stats.axis;
     plot::ev_scale(
         pass,
         ui,
@@ -381,7 +383,7 @@ fn stops(pass: &Pass, ui: &egui::Ui, current: &Current, bars: Rect) {
         -EV_REACH..=EV_REACH,
         |stop| {
             let value = white * (stop as f32).exp2();
-            Some((transfer.to_encoded(value) - plotted.min) / span)
+            Some((axis.place(value) - plotted.min) / span)
         },
     );
 }
@@ -409,7 +411,7 @@ fn curve(pass: &Pass, ui: &egui::Ui, current: &Current, bars: Rect) {
     let headroom = pass.input.headroom;
     let plotted = &current.stats.plot;
     let span = plotted.max - plotted.min;
-    let transfer = current.image.color.transfer;
+    let axis = current.stats.axis;
     let gray = current.image.is_gray();
     // Sampled per column rather than per bin: the response is a continuous
     // function of the value, and stepping it where the transform does not
@@ -425,28 +427,34 @@ fn curve(pass: &Pass, ui: &egui::Ui, current: &Current, bars: Rect) {
     // A vertex to the device pixel, so that a steep toe is drawn as finely
     // as the screen can show it.
     let columns = pass.grid.columns(bars.x, bars.width).len().max(1);
-    // Decoded to run the transform on, then encoded again to be drawn: both
-    // axes are in the file's own units, so a display doing nothing would be
-    // the diagonal.
+    // Read off the axis to run the transform on, then put back on it to be
+    // drawn: both axes are the plot's, so a display doing nothing would be
+    // the diagonal. Black is the plot's floor: 0 on a curve, and on an axis
+    // in stops, where black is below every floor, the plot's own, which a
+    // response at black is drawn at.
+    let floor = match axis {
+        Axis::Curve(_) => 0.0,
+        Axis::Stops => plotted.min,
+    };
     let responses: Vec<f32> = (0..=columns)
         .map(|column| {
             let across = column as f32 / columns as f32;
-            let value = transfer.to_linear(plotted.min + across * span);
+            let value = axis.value(plotted.min + across * span);
             let response = current.display.response(value, gray, headroom).max(0.0);
-            transfer.to_encoded(response).max(0.0)
+            axis.place(response).max(floor)
         })
         .collect();
     // The plot's height is white, unless the response runs past it — a
     // surface with room above white, and no curve on — in which case the
     // top is wherever the response gets to and white is a line across it.
-    let highest = responses.iter().copied().fold(0.0, f32::max);
-    let scale = Scale::new(transfer.to_encoded(1.0), highest);
+    let highest = responses.iter().copied().fold(floor, f32::max);
+    let scale = Scale::new(floor, axis.place(1.0), highest);
     // Where the curve reaches white, where that is not the top of the plot:
     // the value the window puts at white, the 0 of the row of stops, a rule
     // up from it to the curve and a dot where the two meet.
     let reaches = scale.white.and_then(|up| {
         let (_, white) = current.display.displayed_bounds();
-        let across = (transfer.to_encoded(white) - plotted.min) / span;
+        let across = (axis.place(white) - plotted.min) / span;
         (across.is_finite() && (0.0..=1.0).contains(&across)).then_some((across, up))
     });
     if let Some((across, up)) = reaches {

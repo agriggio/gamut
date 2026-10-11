@@ -2,7 +2,8 @@ use super::display::{Rows, plot_area, row_buttons, swatch_button};
 use super::*;
 use crate::image::display::{Colormap, Headroom, ToneMap};
 use crate::image::gain_map::{GainMap, Lift};
-use crate::image::{AlphaMode, Channels, ColorSpace, DecodedImage, Samples};
+use crate::image::stats::Axis;
+use crate::image::{AlphaMode, Channels, ColorSpace, DecodedImage, Referred, Samples};
 use crate::ui::side;
 use crate::ui::slider::{HANDLE_GRIP, HANDLE_WIDTH};
 
@@ -25,6 +26,28 @@ fn picture(gray: bool) -> Current {
         ColorSpace::SRGB,
         AlphaMode::Opaque,
     ))
+}
+
+/// Scene light stored as floats, as a Radiance picture is: a ramp of a
+/// stop to every `per_stop` pixels from fourteen stops under 1 to eight
+/// over, metered on arrival.
+fn scene(per_stop: usize) -> Current {
+    let stops = 22 * per_stop;
+    let data: Vec<f32> = (0..stops)
+        .map(|x| (x as f32 / per_stop as f32 - 14.0).exp2())
+        .collect();
+    let mut image = DecodedImage::new(
+        stops as u32,
+        1,
+        Samples::F32 {
+            channels: Channels::Gray,
+            data,
+        },
+        ColorSpace::LINEAR_BT709,
+        AlphaMode::Opaque,
+    );
+    image.referred = Referred::Scene;
+    shown(image)
 }
 
 /// The same color picture with a gray gain map beside it, lifting its right
@@ -725,6 +748,61 @@ fn the_output_runs_along_the_ramp_where_the_picture_is_read_through_one() {
     let mark = output::pixel_mark(&graded, Headroom::None, &binned, 47, 0).unwrap();
     let bin = mark.bin.unwrap();
     assert!((bin as f32 / BINS as f32 - 0.5).abs() < 0.02, "{bin}");
+}
+
+/// Scene light stored as floats is plotted in stops, so that what the
+/// display makes of it is plotted from bins fine enough to say: a Radiance
+/// picture's few hundred stops of nothing above its subject would otherwise
+/// put the whole window into two fine bins, and the Output's plot into a
+/// staircase of two steps. Its Image section has a row of stops from 1 in
+/// place of the values at its ends, and the window's black, at no light,
+/// is at the floor.
+#[test]
+fn scene_light_is_plotted_in_stops() {
+    let mut current = scene(40);
+    assert_eq!(current.stats.axis, Axis::Stops);
+    assert_eq!(
+        (current.stats.plot.min, current.stats.plot.max),
+        (-14.0, 8.0)
+    );
+    assert_eq!(current.image.referred, Referred::Scene);
+    assert!(current.display.has_exposure(), "metered");
+    // The window as metered: 0..1 of the file, a few stops of exposure on.
+    let (black, white) = current.display.displayed_bounds();
+    assert_eq!(black, 0.0);
+    assert!(white > 0.0 && white < 1.0, "{white}");
+
+    // What goes out is spread over the Output's axis, not stepped.
+    let binned = output::binned_for(&current, Headroom::None, 1.0);
+    let occupied = binned.plot.luma.iter().filter(|&&count| count > 0).count();
+    assert!(occupied > BINS / 2, "{occupied} bins hold anything");
+
+    // The pixel at 1 marks the Display and Image plots where 1 stands.
+    let unity = 14 * 40;
+    let mark = display::pixel_mark(&current, Headroom::None, unity, 0).expect("on the picture");
+    let bin = mark.bin.expect("on the axis");
+    assert!(
+        (bin as f32 / BINS as f32 - 14.0 / 22.0).abs() < 0.01,
+        "{bin}"
+    );
+    assert!(mark.words.starts_with("1  "), "{}", mark.words);
+    let mark =
+        stored::pixel_mark(&current, &current.stored.plot, unity, 0).expect("on the picture");
+    assert_eq!(mark.channels[0].bin, Some(bin));
+    assert!(stored::ticks(&current, &current.stored.plot).is_empty());
+    assert_eq!(
+        stored::stop_across(&current.stored.plot, 0),
+        Some(14.0 / 22.0)
+    );
+    assert_eq!(stored::stop_across(&current.stored.plot, 8), Some(1.0));
+
+    // A stop of exposure moves the Output's plot the same distance wherever
+    // it is: the display is a shift along the axis.
+    current.display.set_exposure(0.0);
+    let plain = output::binned_for(&current, Headroom::None, 1.0);
+    current.display.set_exposure(1.0);
+    let pushed = output::binned_for(&current, Headroom::None, 1.0);
+    assert!(pushed.plot.luma[BINS - 1] > plain.plot.luma[BINS - 1]);
 }
 
 /// The Display section stands under the word for how the file is read,

@@ -14,7 +14,8 @@ pub use auto::AutoWindow;
 pub use colormap::Colormap;
 pub use tone_map::{Headroom, ToneMap};
 
-use super::{Channels, DecodedImage, Referred, Sample, Stats, Transfer};
+use super::stats::Axis;
+use super::{Channels, DecodedImage, Referred, Sample, Stats};
 
 /// Whether a step from `from` to `to` is a step at all, against a window
 /// `width` wide: a press against the plot's end asks for the end, and the
@@ -451,48 +452,61 @@ impl Display {
     }
 
     /// The black handle stepped by `fraction` of the window's width along
-    /// the plot, and no lower than `floor`, the bottom of the plot: what a
-    /// press of the black point's key does.
+    /// the plot, and no lower than the plot's floor, the first of `plot`'s
+    /// two ends: what a press of the black point's key does.
     ///
-    /// Along the plot, which is on the file's own curve, `transfer`, rather
-    /// than in linear light: a step is the same distance on the band every
-    /// time, as a drag's is. In linear light a twentieth of a 0..1 window
-    /// on an sRGB file is a quarter of the band on the first press and a
-    /// tenth on the next, the handle bounding out of the shadows and then
-    /// slowing, since the curve gives the shadows most of the band.
+    /// Along the plot, which is on `axis` — the file's own curve, or stops
+    /// — rather than in linear light: a step is the same distance on the
+    /// band every time, as a drag's is. In linear light a twentieth of a
+    /// 0..1 window on an sRGB file is a quarter of the band on the first
+    /// press and a tenth on the next, the handle bounding out of the
+    /// shadows and then slowing, since the curve gives the shadows most of
+    /// the band.
     ///
     /// The handle stops at the floor because the band does, and a key that
     /// went on past it would be a lift — nothing coming out black — which
     /// is grading and not a place to look. Whether anything moved, since a
     /// press against the floor is a press that did nothing.
-    pub fn step_black(&mut self, fraction: f32, transfer: Transfer, floor: f32) -> bool {
-        let (black, white) = self.displayed_bounds();
-        let (black, white) = (transfer.to_encoded(black), transfer.to_encoded(white));
+    pub fn step_black(&mut self, fraction: f32, axis: Axis, plot: [f32; 2]) -> bool {
+        let (black, white) = self.placed(axis, plot);
+        let [floor, _] = plot;
         // A window already under the floor is not pushed up to it by a
         // press downward: the floor stops a step, it does not make one.
         let asked = (black + (white - black) * fraction).max(floor.min(black));
         if !asked.is_finite() || !moved(black, asked, white - black) {
             return false;
         }
-        self.put_black(transfer.to_linear(asked));
+        self.put_black(axis.value(asked));
         true
     }
 
     /// The white handle stepped by `fraction` of the window's width along
-    /// the plot, and no higher than `ceiling`, the top of the plot: what a
-    /// press of the white point's key does, the twin of
+    /// the plot, and no higher than the plot's top, the second of `plot`'s
+    /// two ends: what a press of the white point's key does, the twin of
     /// [`Display::step_black`] with the ceiling for the floor. A window
     /// already over the ceiling is not pulled down to it by a press upward.
     /// Whether anything moved.
-    pub fn step_white(&mut self, fraction: f32, transfer: Transfer, ceiling: f32) -> bool {
-        let (black, white) = self.displayed_bounds();
-        let (black, white) = (transfer.to_encoded(black), transfer.to_encoded(white));
+    pub fn step_white(&mut self, fraction: f32, axis: Axis, plot: [f32; 2]) -> bool {
+        let (black, white) = self.placed(axis, plot);
+        let [_, ceiling] = plot;
         let asked = (white + (white - black) * fraction).min(ceiling.max(white));
         if !asked.is_finite() || !moved(white, asked, white - black) {
             return false;
         }
-        self.put_white(transfer.to_linear(asked));
+        self.put_white(axis.value(asked));
         true
+    }
+
+    /// The two ends of the window as they stand on `axis`, for a step along
+    /// a plot that runs over `plot`. A black at no light has no place on an
+    /// axis in stops — it is below every floor — and stands at the plot's
+    /// floor for the step, as the handle drawn for it stands at the plot's
+    /// edge: a window's width is then its white's distance up from there.
+    fn placed(&self, axis: Axis, plot: [f32; 2]) -> (f32, f32) {
+        let (black, white) = self.displayed_bounds();
+        let black = axis.place(black);
+        let black = if black.is_finite() { black } else { plot[0] };
+        (black, axis.place(white))
     }
 
     /// Puts the rendering back to what this image would open with if nothing
@@ -705,7 +719,7 @@ impl Mapped {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::image::{AlphaMode, Channels, ColorSpace, Primaries, Referred, Samples};
+    use crate::image::{AlphaMode, Channels, ColorSpace, Primaries, Referred, Samples, Transfer};
 
     /// Linear float gray as a measurement: numbers that need not be light,
     /// windowed to what they hold.
@@ -1118,19 +1132,47 @@ mod tests {
             window_high: 0.6,
             ..Default::default()
         };
-        assert!(display.step_black(0.5, Transfer::Linear, 0.0));
+        assert!(display.step_black(0.5, Axis::Curve(Transfer::Linear), [0.0, 1.0]));
         assert!((display.window_low - 0.4).abs() < 1e-6);
         assert!((display.window_high - 0.6).abs() < 1e-6);
         assert_eq!(display.auto, AutoWindow::Manual);
         // Down by more than there is room for stops at the floor, and a
         // press against the floor moves nothing.
-        assert!(display.step_black(-5.0, Transfer::Linear, 0.1));
+        assert!(display.step_black(-5.0, Axis::Curve(Transfer::Linear), [0.1, 1.0]));
         assert!((display.window_low - 0.1).abs() < 1e-6);
-        assert!(!display.step_black(-0.05, Transfer::Linear, 0.1));
+        assert!(!display.step_black(-0.05, Axis::Curve(Transfer::Linear), [0.1, 1.0]));
         assert!((display.window_low - 0.1).abs() < 1e-6);
         // A window that starts under the floor is not lifted to it.
-        assert!(!display.step_black(-0.05, Transfer::Linear, 0.5));
+        assert!(!display.step_black(-0.05, Axis::Curve(Transfer::Linear), [0.5, 1.0]));
         assert!((display.window_low - 0.1).abs() < 1e-6);
+    }
+
+    /// On an axis in stops a black at no light is below every floor, and
+    /// a step of it starts from the plot's floor, where its handle is
+    /// drawn; a step of white is a share of the window's width up from
+    /// there, and the black stays at nothing.
+    #[test]
+    fn a_black_at_no_light_steps_from_the_floor_of_a_stops_axis() {
+        let mut display = Display {
+            window_low: 0.0,
+            window_high: 1.0,
+            ..Default::default()
+        };
+        assert!(display.step_white(-0.1, Axis::Stops, [-10.0, 0.0]));
+        assert_eq!(display.window_low, 0.0);
+        assert!(
+            (display.window_high - 0.5).abs() < 1e-6,
+            "{}",
+            display.window_high
+        );
+        assert!(display.step_black(0.05, Axis::Stops, [-10.0, 0.0]));
+        assert!(
+            (display.window_low.log2() + 9.55).abs() < 1e-4,
+            "{}",
+            display.window_low
+        );
+        // And no further down than the floor from there.
+        assert!(!display.step_black(-5.0, Axis::Stops, [-9.55, 0.0]));
     }
 
     /// A step is a twentieth of the band as drawn, which on a curved file
@@ -1144,11 +1186,11 @@ mod tests {
             window_high: 1.0,
             ..Default::default()
         };
-        assert!(display.step_black(0.05, Transfer::Srgb, 0.0));
+        assert!(display.step_black(0.05, Axis::Curve(Transfer::Srgb), [0.0, 1.0]));
         assert!((Transfer::Srgb.to_encoded(display.window_low) - 0.05).abs() < 1e-5);
         assert!(display.window_low < 0.005, "{}", display.window_low);
         // And the second press is the same distance along the band again.
-        assert!(display.step_black(0.05, Transfer::Srgb, 0.0));
+        assert!(display.step_black(0.05, Axis::Curve(Transfer::Srgb), [0.0, 1.0]));
         assert!((Transfer::Srgb.to_encoded(display.window_low) - 0.0975).abs() < 1e-5);
         assert!((display.window_high - 1.0).abs() < 1e-6);
     }
@@ -1163,16 +1205,16 @@ mod tests {
             window_high: 0.6,
             ..Default::default()
         };
-        let linear = Transfer::Linear;
-        assert!(display.step_white(0.5, linear, 1.0));
+        let linear = Axis::Curve(Transfer::Linear);
+        assert!(display.step_white(0.5, linear, [0.0, 1.0]));
         assert!((display.window_low - 0.2).abs() < 1e-6);
         assert!((display.window_high - 0.8).abs() < 1e-6);
         assert_eq!(display.exposure_stops, 0.0);
         assert_eq!(display.auto, AutoWindow::Manual);
-        assert!(display.step_white(5.0, linear, 1.0));
+        assert!(display.step_white(5.0, linear, [0.0, 1.0]));
         assert!((display.window_high - 1.0).abs() < 1e-6);
-        assert!(!display.step_white(0.05, linear, 1.0));
-        assert!(!display.step_white(0.05, linear, 0.5));
+        assert!(!display.step_white(0.05, linear, [0.0, 1.0]));
+        assert!(!display.step_white(0.05, linear, [0.0, 0.5]));
         assert!((display.window_high - 1.0).abs() < 1e-6);
     }
 
@@ -1184,24 +1226,25 @@ mod tests {
     fn a_step_of_white_is_the_windows_top_on_graded_light_too() {
         let mut display = Display::default();
         let srgb = Transfer::Srgb;
-        assert!(display.step_white(-0.05, srgb, 1.0));
+        let axis = Axis::Curve(srgb);
+        assert!(display.step_white(-0.05, axis, [0.0, 1.0]));
         assert_eq!(display.exposure_stops, 0.0);
         assert_eq!(display.window_low, 0.0);
         assert_eq!(display.auto, AutoWindow::Manual);
         let (_, white) = display.displayed_bounds();
         assert!((srgb.to_encoded(white) - 0.95).abs() < 1e-5, "{white}");
         // Along the plot: the second press is the same distance on the band.
-        assert!(display.step_white(-0.05, srgb, 1.0));
+        assert!(display.step_white(-0.05, axis, [0.0, 1.0]));
         let (_, white) = display.displayed_bounds();
         assert!((srgb.to_encoded(white) - 0.9025).abs() < 1e-5, "{white}");
         // And back up as far as the plot's top, no further.
-        assert!(display.step_white(5.0, srgb, 1.0));
+        assert!(display.step_white(5.0, axis, [0.0, 1.0]));
         assert!(
             (display.window_high - 1.0).abs() < 1e-5,
             "{}",
             display.window_high
         );
-        assert!(!display.step_white(0.05, srgb, 1.0));
+        assert!(!display.step_white(0.05, axis, [0.0, 1.0]));
         assert_eq!(display.exposure_stops, 0.0);
     }
 
@@ -1211,7 +1254,7 @@ mod tests {
         let stats = Stats::scan(&image);
         let mut display = Display::for_image_with(&image, &stats, Startup::default());
 
-        display.step_black(0.05, Transfer::Linear, 0.0);
+        display.step_black(0.05, Axis::Curve(Transfer::Linear), [0.0, 1.0]);
         assert_eq!(display.auto, AutoWindow::Manual);
         display.cycle_auto(&stats);
         assert_eq!(display.auto, AutoWindow::Off);

@@ -2202,20 +2202,18 @@ impl App {
                 });
             }
             // The handles' keys: each end of the window stepped along the
-            // plot, on the file's own curve and no further than the plot
-            // goes, as the handle it stands for is dragged.
+            // plot, on its axis and no further than the plot goes, as the
+            // handle it stands for is dragged.
             StepBlack(by) => {
                 return self.adjust(|current, _| {
-                    let transfer = current.image.color.transfer;
-                    let plot_min = current.stats.plot.min;
-                    current.display.step_black(by, transfer, plot_min)
+                    let (axis, plot) = (current.stats.axis, current.stats.plot.range());
+                    current.display.step_black(by, axis, plot)
                 });
             }
             StepWhite(by) => {
                 return self.adjust(|current, _| {
-                    let transfer = current.image.color.transfer;
-                    let plot_max = current.stats.plot.max;
-                    current.display.step_white(by, transfer, plot_max)
+                    let (axis, plot) = (current.stats.axis, current.stats.plot.range());
+                    current.display.step_white(by, axis, plot)
                 });
             }
             // Refused under a false color, and by the display itself, so that
