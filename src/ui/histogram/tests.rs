@@ -435,7 +435,9 @@ fn a_pixel_is_traced_down_every_section() {
     let plots = Plots {
         output: &binned,
         lift: lift.as_ref(),
+        image: &current.stored.plot,
         counts: input_counts(&current),
+        image_counts: input_counts(&current),
         output_counts: plot::Counts::of(&binned.plot),
         lift_counts: plot::Counts::of(lift.as_ref().unwrap()),
     };
@@ -525,7 +527,7 @@ fn the_image_section_writes_each_channel_as_the_file_keeps_it() {
 
     // The ramp's 61st pixel is code 240 in every channel.
     let color = picture(false);
-    let mark = stored::pixel_mark(&color, 60, 0).expect("on the picture");
+    let mark = stored::pixel_mark(&color, &color.stored.plot, 60, 0).expect("on the picture");
     assert_eq!(words(&mark), ["240", "240", "240", "240"]);
     let planes = color.stored.plot.color.expect("three planes");
     for (index, channel) in mark.channels.iter().take(3).enumerate() {
@@ -536,7 +538,7 @@ fn the_image_section_writes_each_channel_as_the_file_keeps_it() {
     }
 
     let gray = picture(true);
-    let mark = stored::pixel_mark(&gray, 60, 0).expect("on the picture");
+    let mark = stored::pixel_mark(&gray, &gray.stored.plot, 60, 0).expect("on the picture");
     assert_eq!(words(&mark), ["240"]);
     assert_eq!(mark.channels[0].plane, Plane::Luma);
 
@@ -550,7 +552,7 @@ fn the_image_section_writes_each_channel_as_the_file_keeps_it() {
         ColorSpace::LINEAR_BT709,
         AlphaMode::Opaque,
     ));
-    let mark = stored::pixel_mark(&float, 0, 0).expect("on the picture");
+    let mark = stored::pixel_mark(&float, &float.stored.plot, 0, 0).expect("on the picture");
     assert_eq!(words(&mark), ["0.2500", "0.5000", "1.0000", "0.4830"]);
 }
 
@@ -600,7 +602,9 @@ fn a_bar_cut_off_says_its_share() {
     let plots = Plots {
         output: &binned,
         lift: None,
+        image: &current.stored.plot,
         counts: input_counts(&current),
+        image_counts: input_counts(&current),
         output_counts: plot::Counts::of(&binned.plot),
         lift_counts: plot::Counts::of(&current.stored.plot),
     };
@@ -663,4 +667,57 @@ fn the_output_scale_follows_the_display_and_the_inputs_holds_still() {
         &output::binned_for(&current, Headroom::None, 1.0).plot,
     ));
     assert!(brighter < output, "{brighter} against {output}");
+}
+
+/// Integer samples are plotted on the whole range they can hold, a raw's
+/// from black to the sensor's saturation, however little of it a linear
+/// file was measured over, and their axis is written in quarters of it;
+/// floats, which have no top, on what they were measured over, and written
+/// at its ends.
+#[test]
+fn the_image_axis_is_the_whole_range_of_integer_samples() {
+    let linear = |samples| {
+        shown(DecodedImage::new(
+            2,
+            1,
+            samples,
+            ColorSpace::LINEAR_BT709,
+            AlphaMode::Opaque,
+        ))
+    };
+    let counts = linear(Samples::U16 {
+        channels: Channels::Gray,
+        data: vec![16384, 32768],
+    });
+    let plot = stored::rebinned(&counts).expect("put on the whole range");
+    assert_eq!((plot.min, plot.max), (0.0, 1.0));
+    for value in [16384.0, 32768.0] {
+        let bin = plot.bin_at(value / 65535.0).expect("on the axis");
+        assert!(plot.luma[bin] > 0, "{value}");
+    }
+    let past = plot.bin_at(0.6).expect("on the axis");
+    assert!(plot.luma[past..].iter().all(|&count| count == 0));
+    let mark = stored::pixel_mark(&counts, &plot, 1, 0).expect("on the picture");
+    assert_eq!(mark.channels[0].bin, plot.bin_at(32768.0 / 65535.0));
+    let ticks: Vec<String> = stored::ticks(&counts, &plot)
+        .into_iter()
+        .map(|(_, words)| words)
+        .collect();
+    assert_eq!(ticks, ["0", "16384", "32768", "49152", "65535"]);
+
+    let floats = linear(Samples::F32 {
+        channels: Channels::Gray,
+        data: vec![0.5, 4.0],
+    });
+    assert!(stored::rebinned(&floats).is_none());
+    let ticks: Vec<String> = stored::ticks(&floats, &floats.stored.plot)
+        .into_iter()
+        .map(|(_, words)| words)
+        .collect();
+    assert_eq!(ticks, ["0.5", "4"]);
+
+    assert!(
+        stored::rebinned(&picture(false)).is_none(),
+        "on a curve already"
+    );
 }

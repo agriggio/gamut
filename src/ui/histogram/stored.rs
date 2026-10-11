@@ -7,16 +7,69 @@
 //! on each plane, and each channel's value in the header, in the plane's
 //! own color and in the units the file keeps it in, as the bottom bar's
 //! Decimal readout writes them.
+//!
+//! Its axis is the whole range the file's samples can hold where they are
+//! integers — a raw's from black to the sensor's saturation, so that how
+//! far a picture stands short of clipping is the room to the right of it —
+//! and the range they were measured over where they are floats, which have
+//! no top to run to.
+
+use std::sync::Arc;
 
 use egui::FontId;
 
 use super::plot::{self, Counts, bars};
 use super::*;
 use crate::image::Samples;
+use crate::image::stats::Fine;
 use crate::ui::pixel::component;
 
 /// The room between one of the pixel's values and the next in the header.
 const VALUE_GAP: f32 = 8.0;
+
+/// The section's plot where it is not the stored scan's own, held between
+/// passes for as long as the scan is the same one.
+#[derive(Clone)]
+struct Held {
+    fine: Arc<Fine>,
+    plot: Option<Arc<Plot>>,
+}
+
+/// The section's plot where the stored scan's own axis is not the one it
+/// stands on — integer samples measured over less than their whole range,
+/// as a linear file's are — or `None` where it is: see [`rebinned`].
+pub(super) fn plotted(ui: &egui::Ui, current: &Current) -> Option<Arc<Plot>> {
+    let id = egui::Id::new("histogram image");
+    let fine = &current.stored.fine;
+    if let Some(held) = ui.data(|data| data.get_temp::<Held>(id))
+        && Arc::ptr_eq(&held.fine, fine)
+    {
+        return held.plot;
+    }
+    let plot = rebinned(current).map(Arc::new);
+    ui.data_mut(|data| {
+        data.insert_temp(
+            id,
+            Held {
+                fine: Arc::clone(fine),
+                plot: plot.clone(),
+            },
+        )
+    });
+    plot
+}
+
+/// The picture as stored on the whole range its integer samples can hold,
+/// rebinned from the scan's fine bins, or `None` where the scan already
+/// stands on it — a file on a curve, whose axis starts there — or where the
+/// samples are floats, whose axis is what they were measured over.
+pub(super) fn rebinned(current: &Current) -> Option<Plot> {
+    let plot = &current.stored.plot;
+    if float(current) || (plot.min == 0.0 && plot.max == 1.0) {
+        return None;
+    }
+    Some(current.stored.fine.rebinned([0.0, 1.0], |value| value))
+}
 
 /// Whether the file's samples are floats, which are written as numbers
 /// rather than as counts.
@@ -31,34 +84,28 @@ fn stored_words(current: &Current, axis: f32) -> String {
     component(axis * current.image.samples.full_scale(), float(current))
 }
 
-/// The values written along the plot's axis, each where it falls on the
-/// axis and in the units the file keeps its samples in. A file on a curve
-/// has its full scale in quarters — 0, 64, 128, 192 and 255 for eight bits,
-/// the quarters of a power of two, the last held to the top — and a linear
-/// one, whose axis is only as wide as what it holds, its two ends.
-fn ticks(current: &Current) -> Vec<(f32, String)> {
-    let plot = &current.stored.plot;
+/// The values written along `plot`'s axis, each where it falls on the axis
+/// and in the units the file keeps its samples in. Integer samples have
+/// their whole range in quarters — 0, 64, 128, 192 and 255 for eight bits,
+/// the quarters of a power of two, the last held to the top — and floats,
+/// whose axis is only as wide as what they hold, its two ends.
+pub(super) fn ticks(current: &Current, plot: &Plot) -> Vec<(f32, String)> {
     let span = plot.max - plot.min;
     if span.is_nan() || span <= 0.0 {
         return Vec::new();
     }
     let along = |axis: f32| (axis - plot.min) / span;
     let full = current.image.samples.full_scale();
-    let float = float(current);
-    if current.image.color.transfer.is_linear() {
+    if float(current) {
         return [plot.min, plot.max]
             .into_iter()
-            .map(|axis| (along(axis), ends_words(axis * full, float)))
+            .map(|axis| (along(axis), ends_words(axis * full, true)))
             .collect();
     }
     (0..=4)
         .map(|quarter| {
-            let stored = if float {
-                quarter as f32 / 4.0
-            } else {
-                ((full + 1.0) * quarter as f32 / 4.0).min(full)
-            };
-            (along(stored / full), ends_words(stored, float))
+            let stored = ((full + 1.0) * quarter as f32 / 4.0).min(full);
+            (along(stored / full), ends_words(stored, false))
         })
         .collect()
 }
@@ -74,12 +121,12 @@ fn ends_words(stored: f32, float: bool) -> String {
     }
 }
 
-/// What the section says with the pointer on its plot at `bin`: the value
-/// the bin stands for, in the units the file keeps its samples in.
-pub(super) fn bin_mark(current: &Current, bin: usize) -> Mark {
+/// What the section says with the pointer on its plot, `plot`, at `bin`:
+/// the value the bin stands for, in the units the file keeps its samples in.
+pub(super) fn bin_mark(current: &Current, plot: &Plot, bin: usize) -> Mark {
     Mark {
         bin: Some(bin),
-        words: stored_words(current, bin_value(&current.stored.plot, bin)),
+        words: stored_words(current, bin_value(plot, bin)),
         ..Mark::default()
     }
 }
@@ -88,11 +135,11 @@ pub(super) fn bin_mark(current: &Current, bin: usize) -> Mark {
 /// the pixel as the file stores it, a channel at a time — red, green and
 /// blue as the file holds them, and the luminance worked out from them as
 /// the plot's luminance plane is, put back on the file's curve and scale —
-/// each with the bin of its own plane. A gray file has the one channel.
-pub(super) fn pixel_mark(current: &Current, x: u32, y: u32) -> Option<Mark> {
+/// each with the bin of its own plane of `plot`, the section's. A gray file
+/// has the one channel.
+pub(super) fn pixel_mark(current: &Current, plot: &Plot, x: u32, y: u32) -> Option<Mark> {
     let sample = current.sample_as_stored(x, y)?;
     let image = &current.image;
-    let plot = &current.stored.plot;
     let scale = 1.0 / image.samples.full_scale();
     let mut channels = Vec::with_capacity(4);
     if !image.is_gray() {
@@ -117,18 +164,18 @@ pub(super) fn pixel_mark(current: &Current, x: u32, y: u32) -> Option<Mark> {
 }
 
 /// The Image section, laid out at `rect`: the header, with the pixel's
-/// values in it, and the plot of the picture as stored, with a
+/// values in it, and `plotted`, the plot of the picture as stored, with a
 /// rule in each plane's color for the pixel's channels.
 pub(super) fn show(
     pass: &mut Pass,
     ui: &mut egui::Ui,
     current: &Current,
     rect: Rect,
+    plotted: &Plot,
     counts: Counts,
     mark: Option<&Mark>,
 ) {
     let plot_rect = Section::Image.plot(rect);
-    let plotted = &current.stored.plot;
     // A rule for each channel whose plane is on screen, the luminance last
     // so that it stands over the colors where they meet; and the accent's
     // one rule where the pointer is on the plot instead.
@@ -146,7 +193,7 @@ pub(super) fn show(
         pass,
         ui,
         ev_row(plot_rect, plot_rect.bottom() + PLOT_INSET),
-        &ticks(current),
+        &ticks(current, plotted),
     );
     match mark {
         Some(mark) if !mark.channels.is_empty() => {

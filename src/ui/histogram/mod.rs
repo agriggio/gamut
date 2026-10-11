@@ -416,10 +416,15 @@ impl Traced {
 struct Plots<'a> {
     pub output: &'a output::Binned,
     pub lift: Option<&'a Plot>,
+    /// The Image's, which is the stored scan's own where that stands on the
+    /// axis the section wants — see [`stored::plotted`].
+    pub image: &'a Plot,
     /// The count axis the input's two plots — the Display's and the
     /// Image's — share, and the ones the Output's and the gain map's each
-    /// stand on alone.
+    /// stand on alone. The Image's stands alone too where its axis is not
+    /// the Display's, its bins then being of another width.
     pub counts: plot::Counts,
+    pub image_counts: plot::Counts,
     pub output_counts: plot::Counts,
     pub lift_counts: plot::Counts,
 }
@@ -461,14 +466,18 @@ fn marked(
                     Some(&current.stats.plot),
                 ),
                 Section::GainMap => (gain_map::bin_mark(plots.lift, bin), plots.lift),
-                Section::Image => (stored::bin_mark(current, bin), Some(&current.stored.plot)),
+                Section::Image => (
+                    stored::bin_mark(current, plots.image, bin),
+                    Some(plots.image),
+                ),
             };
             // A bar cut off at the top says how much it holds, which its
             // height no longer can.
             let counts = match section {
                 Section::Output => plots.output_counts,
                 Section::GainMap => plots.lift_counts,
-                Section::Display | Section::Image => plots.counts,
+                Section::Display => plots.counts,
+                Section::Image => plots.image_counts,
             };
             let cut = plotted.and_then(|plotted| counts.cut_at(plotted, bin, &shown));
             if let Some(words) = cut.and_then(share_words) {
@@ -486,7 +495,7 @@ fn marked(
             Section::Output => output::pixel_mark(current, headroom, plots.output, x, y),
             Section::Display => display::pixel_mark(current, headroom, x, y),
             Section::GainMap => gain_map::pixel_mark(current, plots.lift, x, y),
-            Section::Image => stored::pixel_mark(current, x, y),
+            Section::Image => stored::pixel_mark(current, plots.image, x, y),
         };
     }
     traced
@@ -617,10 +626,14 @@ fn column(pass: &mut Pass, ui: &mut egui::Ui, current: &Current) {
         .filter(|&[x, y]| visible.contains(pos2(x, y)));
     let binned = output::binned(ui, current, pass.input);
     let lift = gain_map::lift_plot(ui, current);
+    let image = stored::plotted(ui, current);
+    let counts = input_counts(current);
     let plots = Plots {
         output: &binned,
         lift: lift.as_deref(),
-        counts: input_counts(current),
+        image: image.as_deref().unwrap_or(&current.stored.plot),
+        counts,
+        image_counts: image.as_deref().map_or(counts, plot::Counts::of),
         output_counts: plot::Counts::of(&binned.plot),
         lift_counts: lift
             .as_deref()
@@ -654,7 +667,15 @@ fn column(pass: &mut Pass, ui: &mut egui::Ui, current: &Current) {
             Section::Output => output::show(pass, ui, current, rect, &plots, mark),
             Section::Display => display::show(pass, ui, current, rect, plots.counts, mark),
             Section::GainMap => gain_map::show(pass, ui, current, rect, &plots, mark),
-            Section::Image => stored::show(pass, ui, current, rect, plots.counts, mark),
+            Section::Image => stored::show(
+                pass,
+                ui,
+                current,
+                rect,
+                plots.image,
+                plots.image_counts,
+                mark,
+            ),
         }
     }
 }
