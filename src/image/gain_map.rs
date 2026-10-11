@@ -77,10 +77,11 @@ impl GainMap {
     /// How much of the lift a display with `headroom` — the ratio of its
     /// peak to its white, 1 for a monitor in SDR mode — gets: the standard's
     /// weight, where the display's headroom sits between the base's and the
-    /// alternate's, from none of it to all of it.
+    /// alternate's, from none of it to all of it. An infinite `headroom`
+    /// is a display whose room is not known, which gets all of it.
     pub fn weight(&self, headroom: f32) -> f32 {
         let stops = self.stops();
-        if stops.is_nan() || stops <= 0.0 || !headroom.is_finite() {
+        if stops.is_nan() || stops <= 0.0 || headroom.is_nan() {
             return 0.0;
         }
         let base = match &self.lift {
@@ -516,6 +517,7 @@ mod tests {
         assert_eq!(two_stops.weight(f32::NAN), 0.0);
 
         let apple = map(Lift::Apple { headroom: 4.0 });
+        assert_eq!(two_stops.weight(f32::INFINITY), 1.0, "room not known");
         assert_eq!(apple.weight(1.0), 0.0);
         assert!((apple.weight(2.0) - 0.5).abs() < 1e-6);
         assert_eq!(apple.weight(4.0), 1.0);

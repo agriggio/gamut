@@ -8,6 +8,10 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
 
 ### Changed
 
+- A picture with a gain map on an HDR surface whose monitor has not said
+  how much room it has above white is shown with the whole of its lift.
+  It used to be shown with none of it, as on an SDR monitor.
+
 - With the gain map shown in the picture's place, the histogram leaves its
   Image section out. It plotted the map a second time, as a bare
   measurement between its measured ends, under the Gain map section that

@@ -1397,8 +1397,9 @@ impl App {
 
     /// How much room above white the picture is going out to: the
     /// monitor's peak over its white, where it has said and the surface has
-    /// the room, and none otherwise. What a gain map's lift is weighed
-    /// against.
+    /// the room; unbounded where the surface has the room and the monitor
+    /// has not said how much, so that a gain map's lift is shown whole; and
+    /// none otherwise. What a gain map's lift is weighed against.
     fn display_headroom(&self) -> f32 {
         if self.headroom() != Headroom::Above {
             return 1.0;

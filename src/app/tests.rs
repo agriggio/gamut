@@ -4343,6 +4343,36 @@ fn a_monitor_change_is_noticed_once_and_kept() {
     assert_eq!(app.output.headroom, None);
 }
 
+/// A surface with room above white on a monitor that has not said how much
+/// shows a gain map's lift whole, rather than none of it.
+#[test]
+fn an_unknown_room_takes_the_whole_lift() {
+    use crate::image::gain_map::{GainMap, Lift};
+    let (mut app, _dir) = app_over("unknown room", &[("a.png", 4, 3)]);
+    let current = app.current.as_mut().unwrap();
+    let mut image = (*current.image).clone();
+    image.gain_map = Some(Arc::new(GainMap {
+        width: 2,
+        height: 1,
+        channels: 1,
+        data: vec![0, 255],
+        lift: Lift::Apple { headroom: 4.0 },
+    }));
+    current.image = Arc::new(image);
+    app.headless_surface_hdr = true;
+    assert_eq!(app.headroom(), Headroom::Above);
+    assert_eq!(app.output.headroom, None);
+    app.refresh_lift();
+    let weight = app
+        .current
+        .as_ref()
+        .unwrap()
+        .lift
+        .as_ref()
+        .map(|table| table.weight());
+    assert_eq!(weight, Some(1.0));
+}
+
 /// A display whose room grows while the headroom stays above white — a
 /// Mac's, ramping up from none once the window asks for room — has the
 /// lift of a gain-mapped picture weighed again, not left at the weight
