@@ -225,7 +225,7 @@ pub(super) fn bars(
     counts: Counts,
     bars: Rect,
     rules: &[(usize, Color32)],
-) {
+) -> Vec<f32> {
     // Luminance first, so that its line runs under the color planes'.
     let planes: Vec<(&[u32; BINS], Color32)> =
         std::iter::once((&plotted.luma, Color32::from(HISTOGRAM_LUMA.with_alpha(255))))
@@ -238,7 +238,7 @@ pub(super) fn bars(
                     .map(|(plane, ink)| (plane, Color32::from(ink))),
             )
             .collect();
-    draw(pass, ui, section, &planes, counts, bars, rules);
+    draw(pass, ui, section, &planes, counts, bars, rules)
 }
 
 /// One plane on its own ground, in its own ink, as [`bars`] draws a plot's
@@ -383,12 +383,19 @@ fn rule_over(
     stands
 }
 
-/// `words` beside a rule standing `across` the plot `bars`, in `ink`: at
-/// the top of the plot, after the rule where they fit and before it where
-/// they would run past the plot's end, as the white mark's label is. Over a
-/// fade of the plot's ground, so that a line the words cross does not run
-/// through them.
-pub(super) fn rule_label(ui: &egui::Ui, bars: Rect, across: f32, words: &str, ink: Color32) {
+/// `words` beside a rule standing `across` the plot `bars`, in `ink`, on
+/// the `row`th line down from the top of the plot: after the rule where
+/// they fit and before it where they would run past the plot's end, as the
+/// white mark's label is. Over a fade of the plot's ground, so that a line
+/// the words cross does not run through them.
+pub(super) fn rule_label(
+    ui: &egui::Ui,
+    bars: Rect,
+    across: f32,
+    row: usize,
+    words: &str,
+    ink: Color32,
+) {
     let painter = ui
         .painter()
         .with_clip_rect(egui::Rect::from(bars.inset(-PLOT_INSET, -PLOT_INSET)));
@@ -404,7 +411,7 @@ pub(super) fn rule_label(ui: &egui::Ui, bars: Rect, across: f32, words: &str, in
     } else {
         x - RULE_LABEL_GAP - size.x
     };
-    let at = pos2(left, bars.y + CLIP_INSET);
+    let at = pos2(left, bars.y + CLIP_INSET + row as f32 * size.y);
     let fade = egui::Shadow {
         offset: [0, 0],
         blur: RULE_LABEL_FADE,

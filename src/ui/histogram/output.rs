@@ -13,7 +13,7 @@ use super::plot::{Past, band, bars, white_mark};
 use super::*;
 use crate::image::Transfer;
 use crate::image::display::{Colormap, Display, Headroom, ToneMap};
-use crate::image::stats::{Axis, Fine};
+use crate::image::stats::{self, Axis, Fine, Quantity};
 use crate::ui::FrameInput;
 
 /// The curve the output's axis is spaced on: the one the screen is driven
@@ -187,18 +187,76 @@ fn output_words(value: f32) -> String {
     trimmed(format!("{value:.3}"))
 }
 
-/// What the section says with the pointer on its plot at `bin`.
-pub(super) fn bin_mark(binned: &Binned, bin: usize) -> Mark {
+/// What the display makes of a linear value, held to the plot's axis as
+/// the plot holds it: never below black, and never past the room, where
+/// what runs over piles into the end bin.
+fn output_of<'a>(
+    current: &'a Current,
+    headroom: Headroom,
+    binned: &'a Binned,
+) -> impl Fn(f32) -> f32 + 'a {
+    let gray = current.image.is_gray();
+    move |linear| {
+        current
+            .display
+            .response(linear, gray, headroom)
+            .max(0.0)
+            .min(binned.room)
+    }
+}
+
+/// Where the output value `out` stands among what the display makes of
+/// each pixel's `plane`, as a fraction of them: ranked after the response
+/// rather than before it, so that a pile the response clips together
+/// stands in its middle, as its bar does. The response to a gray never
+/// falls — a window is never inside out, [`Display::set_window`]
+/// refusing one — which is what lets the tally be searched rather than
+/// walked: see `the_response_to_a_gray_never_falls` in the tests.
+fn output_rank(
+    current: &Current,
+    headroom: Headroom,
+    binned: &Binned,
+    plane: Plane,
+    out: f32,
+) -> Option<f32> {
+    current
+        .stats
+        .rank_through(plane.quantity(), out, output_of(current, headroom, binned))
+}
+
+/// What the section says with the pointer on its plot at `bin`: the output
+/// value the bin stands for, and where it stands among what each plane's
+/// pixels come out as.
+pub(super) fn bin_mark(current: &Current, headroom: Headroom, binned: &Binned, bin: usize) -> Mark {
+    // The top bin's value is the room itself, which a round trip through
+    // the screen's curve would come back from a hair off, and miss the
+    // pile there.
+    let out = if bin == BINS - 1 {
+        binned.room
+    } else {
+        output_at(binned, bin)
+    };
+    let channels = Plane::drawn(current)
+        .into_iter()
+        .map(|plane| Channel {
+            plane,
+            bin: None,
+            words: String::new(),
+            rank: output_rank(current, headroom, binned, plane, out),
+        })
+        .collect();
     Mark {
         bin: Some(bin),
         words: output_words(output_at(binned, bin)),
-        ..Mark::default()
+        channels,
     }
 }
 
 /// What the section says with the pointer on the picture's pixel `(x, y)`:
 /// what the screen puts out for it, which is the display's response held
-/// to the surface's room.
+/// to the surface's room; and each plane of it — its luminance and its
+/// channels, each put through the response as the plot puts them — with
+/// its bin and where it stands among what that plane's pixels come out as.
 pub(super) fn pixel_mark(
     current: &Current,
     headroom: Headroom,
@@ -207,20 +265,42 @@ pub(super) fn pixel_mark(
     y: u32,
 ) -> Option<Mark> {
     let sample = current.sample(x, y)?;
-    let axis = current.stats.axis;
+    let stats = &current.stats;
+    let axis = stats.axis;
     let place = axis.place_of(&current.image, &sample)?;
-    let out = response(
-        &current.display,
-        axis,
-        current.image.is_gray(),
-        headroom,
-        place,
-    )
-    .min(binned.room);
+    let output = output_of(current, headroom, binned);
+    let out = output(axis.value(place));
+    let channels = Plane::drawn(current)
+        .into_iter()
+        .map(|plane| {
+            let value = match plane.quantity() {
+                Quantity::Luminance => stats::luminance_of(&sample),
+                Quantity::Channel(channel) => sample.linear()[channel],
+            };
+            let bin = match plane.quantity() {
+                Quantity::Luminance => binned.plot.bin_at(placed(binned.ramp, out)),
+                Quantity::Channel(_) => binned.plot.bin_at(placed(binned.ramp, output(value))),
+            };
+            // Ranked as the bin the pixel was counted in comes out, so that
+            // the pixel stands among the pixels it was counted with rather
+            // than a hair to one side of them.
+            let rank = stats
+                .binned(plane.quantity(), value)
+                .and_then(|binned_value| {
+                    output_rank(current, headroom, binned, plane, output(binned_value))
+                });
+            Channel {
+                plane,
+                bin,
+                words: String::new(),
+                rank,
+            }
+        })
+        .collect();
     Some(Mark {
         bin: binned.plot.bin_at(placed(binned.ramp, out)),
         words: output_words(out),
-        ..Mark::default()
+        channels,
     })
 }
 
@@ -237,14 +317,14 @@ pub(super) fn show(
 ) {
     let binned = plots.output;
     let plot_rect = Section::Output.plot(rect);
-    bars(
+    let stands = bars(
         pass,
         ui,
         Section::Output,
         &binned.plot,
         plots.output_counts,
         plot_rect,
-        &accent_rule(pass, mark),
+        &plane_rules(pass, mark),
     );
 
     let top = placed(binned.ramp, binned.room);
@@ -252,6 +332,7 @@ pub(super) fn show(
     if white < 1.0 - 1e-3 {
         white_mark(pass, ui, plot_rect, white, 1.0);
     }
+    plane_labels(ui, plot_rect, mark, &stands);
 
     // The row of stops under the band: 0 at white, below it how far under
     // white an output is, and on a surface with room above white how far

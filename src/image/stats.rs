@@ -808,28 +808,98 @@ impl Tally {
         max
     }
 
+    /// The counts, a bin to the code or to the [`key_of`] bin, in value
+    /// order.
+    fn counts(&self) -> &[u32] {
+        match self {
+            Tally::Codes { counts, .. } | Tally::Keys { counts, .. } => counts,
+        }
+    }
+
+    /// The bin `value`, in the tally's own units, is counted in, or `None`
+    /// for a value that is not a number.
+    fn index_of(&self, value: f32) -> Option<usize> {
+        if value.is_nan() {
+            return None;
+        }
+        Some(match self {
+            Tally::Codes { counts, full } => {
+                (value * full).round().clamp(0.0, (counts.len() - 1) as f32) as usize
+            }
+            Tally::Keys { .. } => key_of(value),
+        })
+    }
+
+    /// The one value the bin `index` stands for, in the tally's own units:
+    /// a code's own, or the middle of a float bin held within the exact
+    /// extremes, as [`Tally::bins`] has it.
+    fn value_at(&self, index: usize) -> f32 {
+        match self {
+            Tally::Codes { full, .. } => index as f32 / full,
+            Tally::Keys { min, max, .. } => {
+                let (low, high) = key_edges(index);
+                let (low, high) = (low.max(*min), high.min(*max).max(low));
+                (low + high) / 2.0
+            }
+        }
+    }
+
+    /// The share of the pixels in the bins `range`.
+    fn share_in(&self, range: std::ops::Range<usize>) -> u64 {
+        self.counts()[range]
+            .iter()
+            .map(|&count| u64::from(count))
+            .sum()
+    }
+
     /// Where `value`, in the tally's own units, stands among the pixels, as a
     /// fraction of them: those below it and half of those in its own bin,
     /// so that a value every pixel shares stands in the middle rather than
     /// at either end. `None` where nothing was counted, or for a value that
     /// is not a number.
     fn rank(&self, value: f32) -> Option<f32> {
-        if value.is_nan() {
-            return None;
-        }
-        let (counts, at) = match self {
-            Tally::Codes { counts, full } => {
-                let code = (value * full).round().clamp(0.0, (counts.len() - 1) as f32);
-                (counts, code as usize)
-            }
-            Tally::Keys { counts, .. } => (counts, key_of(value)),
-        };
+        let at = self.index_of(value)?;
         let total = self.total();
         if total == 0 {
             return None;
         }
-        let below: u64 = counts[..at].iter().map(|&count| u64::from(count)).sum();
-        let within = u64::from(counts[at]);
+        let below = self.share_in(0..at);
+        let within = self.share_in(at..at + 1);
+        Some(((below as f64 + within as f64 / 2.0) / total as f64) as f32)
+    }
+
+    /// Where `out` stands among what `through` makes of each bin's value,
+    /// as a fraction of the pixels: those it puts below `out` and half of
+    /// those it puts exactly at it, so that a pile `through` clips together
+    /// stands in its middle. `through` takes a value in the tally's own
+    /// units and must never fall, so that the bins below `out` are one run
+    /// of them from the bottom, found by halving rather than by putting
+    /// every bin through it. `None` where nothing was counted, or for an
+    /// `out` that is not a number.
+    fn rank_through(&self, out: f32, through: impl Fn(f32) -> f32) -> Option<f32> {
+        let total = self.total();
+        if total == 0 || out.is_nan() {
+            return None;
+        }
+        let bins = self.counts().len();
+        let at = |index: usize| through(self.value_at(index));
+        // The first bin from which `holds` is true, `holds` being false and
+        // then true along the bins.
+        let first = |holds: &dyn Fn(usize) -> bool| {
+            let (mut low, mut high) = (0, bins);
+            while low < high {
+                let middle = (low + high) / 2;
+                if holds(middle) {
+                    high = middle;
+                } else {
+                    low = middle + 1;
+                }
+            }
+            low
+        };
+        let reaching = first(&|index| at(index) >= out);
+        let past = first(&|index| at(index) > out);
+        let (below, within) = (self.share_in(0..reaching), self.share_in(reaching..past));
         Some(((below as f64 + within as f64 / 2.0) / total as f64) as f32)
     }
 
@@ -1522,6 +1592,10 @@ impl<R: Raw> Visit<R> for Binning<'_> {
 struct Scan<'a> {
     pass: Pass<'a>,
     tallies: Tallies,
+    /// The stored channels' tallies, taken out of `tallies` once counted
+    /// and shared: the Image section ranks against them, and so does the
+    /// Display section where nothing moves the channels.
+    stored: Vec<Arc<Tally>>,
 }
 
 impl<'a> Scan<'a> {
@@ -1541,7 +1615,15 @@ impl<'a> Scan<'a> {
                 clear.without(sentinel, |fraction| transfer.to_linear(fraction));
             }
         }
-        Self { pass, tallies }
+        let stored = std::mem::take(&mut tallies.stored)
+            .into_iter()
+            .map(Arc::new)
+            .collect();
+        Self {
+            pass,
+            tallies,
+            stored,
+        }
     }
 
     /// Whether the samples are floats, which have no codes.
@@ -1595,12 +1677,47 @@ pub struct Stats {
     /// made at every arrival and is otherwise a copy of 64 KiB; what is
     /// rebinned from it is cached by the address of this.
     pub fine: Arc<Fine>,
-    /// The luminance tallied, for the percentiles. Shared for the same
-    /// reason.
-    luma: Arc<Tally>,
-    /// Where the tally is of a gray picture's codes rather than of its
-    /// luminance in linear light, the curve a code is decoded through.
-    luma_curve: Option<Transfer>,
+    /// The luminance tallied, for the percentiles and the ranks. Shared
+    /// for the same reason.
+    luma: Ranked,
+    /// Each color channel as plotted, tallied, for the ranks: `None` on a
+    /// gray picture, which plots its luminance alone.
+    planes: Option<[Ranked; COLOR]>,
+}
+
+/// One of the quantities the Display plot draws, to rank a value among.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Quantity {
+    Luminance,
+    /// Red, green or blue, as the working space has them.
+    Channel(usize),
+}
+
+/// A tally of one of [`Stats`]' quantities, and where its values are not in
+/// linear light, the curve they are on: a stored channel's codes, or a gray
+/// picture's.
+#[derive(Clone, Debug)]
+struct Ranked {
+    tally: Arc<Tally>,
+    curve: Option<Transfer>,
+}
+
+impl Ranked {
+    /// A linear value in the tally's own units.
+    fn units(&self, linear: f32) -> f32 {
+        match self.curve {
+            Some(transfer) => encode(transfer, linear),
+            None => linear,
+        }
+    }
+
+    /// A value in the tally's own units in linear light.
+    fn linear(&self, units: f32) -> f32 {
+        match self.curve {
+            Some(transfer) => transfer.to_linear(units),
+            None => units,
+        }
+    }
 }
 
 impl Stats {
@@ -1646,11 +1763,32 @@ impl Stats {
         // stored channel, decoded.
         let (luma, luma_curve) = match &tallies.luma {
             Some(luma) => (luma, None),
-            None => (&tallies.stored[0], Some(transfer)),
+            None => (&*scan.stored[0], Some(transfer)),
         };
         let decode = |value: f32| match luma_curve {
             Some(transfer) => transfer.to_linear(value),
             None => value,
+        };
+        // The same, and each plotted plane, kept to rank a value against:
+        // the stored channels shared with [`Stored`] where they are what
+        // is plotted, so that the one count is not held twice.
+        let ranked_luma = Ranked {
+            tally: match &tallies.luma {
+                Some(luma) => Arc::new(luma.clone()),
+                None => Arc::clone(&scan.stored[0]),
+            },
+            curve: luma_curve,
+        };
+        let ranked_planes: Option<[Ranked; COLOR]> = match &tallies.planes {
+            Some(planes) => Some(planes.clone().map(|plane| Ranked {
+                tally: Arc::new(plane),
+                curve: None,
+            })),
+            None if color => Some(std::array::from_fn(|channel| Ranked {
+                tally: Arc::clone(&scan.stored[channel]),
+                curve: Some(transfer),
+            })),
+            None => None,
         };
         let (min, max, counted) = match &tallies.luma {
             Some(_) => (tallies.min, tallies.max, tallies.counted),
@@ -1668,8 +1806,8 @@ impl Stats {
             axis,
             plot: Plot::empty(),
             fine: Arc::new(Fine::empty(0.0, 1.0, color)),
-            luma: Arc::new(luma.clone()),
-            luma_curve,
+            luma: ranked_luma.clone(),
+            planes: ranked_planes.clone(),
         };
         if counted == 0 || !min.is_finite() || !max.is_finite() {
             // Nothing measurable at all; fall back to unit range so
@@ -1683,10 +1821,10 @@ impl Stats {
         // stored value is, or in linear light, placed as a value is.
         let plotted: Vec<(&Tally, Placed)> = match (&tallies.planes, gray) {
             (Some(planes), _) => planes.iter().map(|plane| (plane, Placed::Linear)).collect(),
-            (None, false) => tallies
+            (None, false) => scan
                 .stored
                 .iter()
-                .map(|channel| (channel, Placed::Stored))
+                .map(|channel| (&**channel, Placed::Stored))
                 .collect(),
             (None, true) => Vec::new(),
         };
@@ -1806,8 +1944,8 @@ impl Stats {
             // do not comb against bins of another width.
             plot: fine.rebinned([axis_min, axis_max], |value| value),
             fine: Arc::new(fine),
-            luma: Arc::new(luma.clone()),
-            luma_curve,
+            luma: ranked_luma,
+            planes: ranked_planes,
         }
     }
 
@@ -1818,12 +1956,49 @@ impl Stats {
         if self.counted == 0 || self.max <= self.min {
             return if fraction <= 0.0 { self.min } else { self.max };
         }
-        let value = self.luma.percentile(fraction);
-        let value = match self.luma_curve {
-            Some(transfer) => transfer.to_linear(value),
-            None => value,
-        };
+        let value = self.luma.linear(self.luma.tally.percentile(fraction));
         value.clamp(self.min, self.max)
+    }
+
+    fn ranked(&self, quantity: Quantity) -> Option<&Ranked> {
+        match quantity {
+            Quantity::Luminance => Some(&self.luma),
+            Quantity::Channel(channel) => self.planes.as_ref()?.get(channel),
+        }
+    }
+
+    /// Where the linear value `linear` stands among the pixels' `quantity`,
+    /// as a fraction of them: see [`Tally::rank`].
+    pub fn rank(&self, quantity: Quantity, linear: f32) -> Option<f32> {
+        let ranked = self.ranked(quantity)?;
+        ranked.tally.rank(ranked.units(linear))
+    }
+
+    /// The value the bin `linear` is tallied in stands for, in linear
+    /// light: what a pixel is counted as, so that a function of it lands
+    /// where the function of its bin does.
+    pub fn binned(&self, quantity: Quantity, linear: f32) -> Option<f32> {
+        let ranked = self.ranked(quantity)?;
+        let index = ranked.tally.index_of(ranked.units(linear))?;
+        Some(ranked.linear(ranked.tally.value_at(index)))
+    }
+
+    /// Where `out` stands among what `through` makes of the pixels'
+    /// `quantity`, as a fraction of them: those it puts below `out` and
+    /// half of those it puts at it. `through` takes a linear value and must
+    /// never fall, as the display's response to a gray does not, which is
+    /// what lets this search the tally rather than walk it through
+    /// `through`. See [`Tally::rank_through`].
+    pub fn rank_through(
+        &self,
+        quantity: Quantity,
+        out: f32,
+        through: impl Fn(f32) -> f32,
+    ) -> Option<f32> {
+        let ranked = self.ranked(quantity)?;
+        ranked
+            .tally
+            .rank_through(out, |units| through(ranked.linear(units)))
     }
 }
 
@@ -1833,6 +2008,12 @@ impl Stats {
 enum Placed {
     Stored,
     Linear,
+}
+
+/// The luminance of one pixel read back, in linear light, as the scan
+/// works it out: what [`Stats::rank`] ranks for [`Quantity::Luminance`].
+pub fn luminance_of(sample: &Sample) -> f32 {
+    luminance(sample.linear(), sample.channels)
 }
 
 /// Gray uses its one channel; color collapses to relative luminance,
@@ -1898,7 +2079,7 @@ pub struct Plane {
     pub max: f32,
     /// What the plot spans, on the axis.
     pub range: [f32; 2],
-    tally: Tally,
+    tally: Arc<Tally>,
     /// The channel counted from the pixels into [`FINE_BINS`] over `range`
     /// by the second pass, where the tally's bins are too coarse for the
     /// range: floats on a linear axis.
@@ -1968,8 +2149,7 @@ impl Stored {
         let floats = scan.floats();
         let data = image.referred == Referred::Measured;
         let mut axis = Axis::of(image);
-        let tallies = &scan.tallies;
-        let extremes: Vec<(f32, f32)> = tallies.stored.iter().map(Tally::extremes).collect();
+        let extremes: Vec<(f32, f32)> = scan.stored.iter().map(|tally| tally.extremes()).collect();
         let highest = extremes
             .iter()
             .map(|(_, max)| *max)
@@ -1986,7 +2166,7 @@ impl Stored {
             Axis::Stops => {
                 // Every channel's lit pixels together, for the floor.
                 let mut pooled = Tally::keys();
-                for tally in &tallies.stored {
+                for tally in &scan.stored {
                     pooled.add(tally);
                 }
                 match stops_axis(highest, &Lit::of(&pooled, None, |value| value)) {
@@ -2025,7 +2205,7 @@ impl Stored {
             }
             [min, max]
         };
-        let ranges: Vec<[f32; 2]> = tallies
+        let ranges: Vec<[f32; 2]> = scan
             .stored
             .iter()
             .zip(&extremes)
@@ -2053,10 +2233,10 @@ impl Stored {
                 .map(|(_, bins)| Some(bins))
                 .collect()
         } else {
-            tallies.stored.iter().map(|_| None).collect()
+            scan.stored.iter().map(|_| None).collect()
         };
 
-        let planes = tallies
+        let planes = scan
             .stored
             .iter()
             .zip(extremes)
@@ -2066,7 +2246,7 @@ impl Stored {
                 min,
                 max,
                 range,
-                tally: tally.clone(),
+                tally: Arc::clone(tally),
                 binned,
             })
             .collect();
@@ -2548,6 +2728,38 @@ mod tests {
         assert_eq!(keys.rank(0.5), Some(0.5));
         assert_eq!(keys.rank(1.0), Some(0.75));
         assert_eq!(keys.rank(1e30), Some(1.0));
+    }
+
+    /// A value is ranked among what a function makes of the pixels: those
+    /// it puts below the value and half of those it puts at it, so that a
+    /// pile the function clips together stands in the pile's middle.
+    #[test]
+    fn a_tally_ranks_a_value_through_a_function() {
+        let mut codes = Tally::codes(255.0, 256);
+        if let Tally::Codes { counts, .. } = &mut codes {
+            counts.fill(1);
+        }
+        let doubled = |value: f32| (2.0 * value).min(1.0);
+        // Codes 128 and up are doubled past 1 and clipped to it: half of
+        // them stand below the pile's middle, and all 128 below them.
+        assert_eq!(codes.rank_through(1.0, doubled), Some(0.75));
+        assert_eq!(
+            codes.rank_through(2.0 * (64.0 / 255.0), doubled),
+            Some(64.5 / 256.0)
+        );
+        assert_eq!(codes.rank_through(-1.0, doubled), Some(0.0));
+        assert_eq!(codes.rank_through(f32::NAN, doubled), None);
+
+        let mut keys = Tally::keys();
+        if let Tally::Keys { counts, min, max } = &mut keys {
+            for value in [-2.0, 0.5, 0.5, 300.0] {
+                counts[key_of(value)] += 1;
+            }
+            (*min, *max) = (-2.0, 300.0);
+        }
+        let floored = |value: f32| value.max(0.0);
+        assert_eq!(keys.rank_through(0.0, floored), Some(0.125));
+        assert_eq!(keys.rank_through(1.0, floored), Some(0.75));
     }
 
     /// The tally's bins are in value order, each spanning the values that

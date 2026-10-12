@@ -364,6 +364,39 @@ floats. The words sit after the rule, or before it where they would run off
 the plot's end, over a fade of the plot's ground so that a plane's line
 crossing them does not cut through them.
 
+The Display and Output sections do the same for each plane they draw, the
+luminance and, on a color picture, the three channels (`Plane::drawn`). A
+pixel puts a rule on each plane's plot in that plane's ink, and each
+percentile on a line of its own down from the top, the luminance's first,
+so that four rules close together do not write over one another
+(`histogram::plane_rules`, `plane_labels`). A pointer on the plot has one
+value, so it keeps the accent's one rule with the four percentiles stacked
+beside it: where that value stands among each plane.
+
+The Display section ranks against the tallies the scan counted the plot
+from (`Stats::rank`, `stats::Quantity`): the luminance's, and each channel's
+— the stored channel's own, shared with the Image section, where nothing
+moves the channels, and the working space's where a lift or a change of
+primaries does. Keeping them costs nothing in time, since the pass counts
+them either way.
+
+The Output section ranks what the response makes of each pixel rather than
+the pixel itself (`Stats::rank_through`, `output::output_rank`), held to
+the plot's axis as the plot holds it, so a pixel the screen clips stands in
+the middle of the pile at white, as that bar's height says, rather than
+where its own value stood before the response. Below the clip it stands
+where it did in the Display section. The response to a gray never falls —
+the window is never inside out (`Display::set_window`), and both curves and
+the clip rise — so the bins that come out below a value are one run from
+the bottom, found by halving the tally rather than putting every bin
+through the response; `the_response_to_a_gray_never_falls` holds that. A
+pixel is ranked as the bin it was counted in comes out (`Stats::binned`), so
+that it lands among the pixels counted with it. A channel goes through the
+response as the plot sends it, as though it were gray: under the neutral
+curve, whose desaturation moves a channel by what the others are, that is
+the plot's approximation, and the percentile agrees with the plot rather
+than with the screen.
+
 A pointer on one section's plot is reading that plot's axis and is on no
 pixel besides, so only that section marks anything, with the value its bin
 stands for. Every hit test is against the rectangles the pass laid out,

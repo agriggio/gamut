@@ -12,7 +12,7 @@ use super::track::track;
 use super::*;
 use crate::image::Referred;
 use crate::image::display::{Colormap, Display, Headroom, ToneMap};
-use crate::image::stats::Axis;
+use crate::image::stats::{Axis, Quantity};
 
 /// The row of false colors under the band: how deep a swatch is, and the
 /// corner it is drawn with. Deep enough to press and to read the map off,
@@ -267,26 +267,62 @@ fn words(current: &Current, headroom: Headroom, place: f32) -> String {
     )
 }
 
-/// What the section says with the pointer on its plot at `bin`.
+/// What the section says with the pointer on its plot at `bin`: the value
+/// the bin stands for and what the display makes of it, and where that
+/// value stands among each plane's pixels.
 pub(super) fn bin_mark(current: &Current, headroom: Headroom, bin: usize) -> Mark {
+    let stats = &current.stats;
+    let place = bin_value(&stats.plot, bin);
+    let value = stats.axis.value(place);
+    let channels = Plane::drawn(current)
+        .into_iter()
+        .map(|plane| Channel {
+            plane,
+            bin: None,
+            words: String::new(),
+            rank: stats.rank(plane.quantity(), value),
+        })
+        .collect();
     Mark {
         bin: Some(bin),
-        words: words(current, headroom, bin_value(&current.stats.plot, bin)),
-        ..Mark::default()
+        words: words(current, headroom, place),
+        channels,
     }
 }
 
 /// What the section says with the pointer on the picture's pixel `(x, y)`:
 /// the pixel as the display starts from it, which is lifted and in the
-/// working space, and what the display makes of it.
+/// working space, and what the display makes of it; and each plane of it —
+/// its luminance and its channels — with the bin it is in on that plane's
+/// plot and where it stands among that plane's pixels.
 pub(super) fn pixel_mark(current: &Current, headroom: Headroom, x: u32, y: u32) -> Option<Mark> {
     let sample = current.sample(x, y)?;
-    let axis = current.stats.axis;
+    let stats = &current.stats;
+    let axis = stats.axis;
     let place = axis.place_of(&current.image, &sample)?;
+    let luma = stats.plot.bin_of(axis, &current.image, &sample);
+    let channels = Plane::drawn(current)
+        .into_iter()
+        .map(|plane| {
+            let (value, bin) = match plane.quantity() {
+                Quantity::Luminance => (stats::luminance_of(&sample), luma),
+                Quantity::Channel(channel) => {
+                    let value = sample.linear()[channel];
+                    (value, stats.plot.bin_at(axis.place(value)))
+                }
+            };
+            Channel {
+                plane,
+                bin,
+                words: String::new(),
+                rank: stats.rank(plane.quantity(), value),
+            }
+        })
+        .collect();
     Some(Mark {
-        bin: current.stats.plot.bin_of(axis, &current.image, &sample),
+        bin: luma,
         words: words(current, headroom, place),
-        ..Mark::default()
+        channels,
     })
 }
 
@@ -305,14 +341,14 @@ pub(super) fn show(
     let gray = current.image.is_gray();
     let plot_rect = plot_area(rect);
     let plotted = &current.stats.plot;
-    bars(
+    let stands = bars(
         pass,
         ui,
         Section::Display,
         plotted,
         counts,
         plot_rect,
-        &accent_rule(pass, mark),
+        &plane_rules(pass, mark),
     );
 
     let span = plotted.max - plotted.min;
@@ -344,6 +380,8 @@ pub(super) fn show(
         curve(pass, ui, current, plot_rect);
         stops(pass, ui, current, plot_rect);
     }
+
+    plane_labels(ui, plot_rect, mark, &stands);
 
     let held = track(pass, ui, current, plot_rect);
     if gray {

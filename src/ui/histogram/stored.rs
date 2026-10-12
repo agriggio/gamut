@@ -358,7 +358,7 @@ pub(super) fn show(
         );
         for (channel, across) in marked.iter().zip(stands) {
             if let Some(rank) = channel.rank {
-                plot::rule_label(ui, *bars, across, &percentile_words(rank), plane.ink());
+                plot::rule_label(ui, *bars, across, 0, &percentile_words(rank), plane.ink());
             }
         }
         // The row of values under this plot, where each plane has its own

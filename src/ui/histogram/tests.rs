@@ -745,6 +745,110 @@ fn the_image_section_writes_each_channel_as_the_file_keeps_it() {
     assert_eq!(words(&mark), ["0.2500", "0.5000", "1.0000"]);
 }
 
+/// The display's response to a gray never falls, whatever the window, the
+/// exposure, the curve and the surface: what lets the Output section rank
+/// a value by searching the tally rather than walking every bin of it
+/// through the response.
+#[test]
+fn the_response_to_a_gray_never_falls() {
+    let values: Vec<f32> = (-400..=600)
+        .map(|step| step as f32 / 100.0)
+        .map(|stops| {
+            if stops < 0.0 {
+                -(-stops).exp2() + 1.0
+            } else {
+                stops.exp2() - 1.0
+            }
+        })
+        .collect();
+    for gray in [true, false] {
+        for tone_map in ToneMap::ALL {
+            for headroom in [Headroom::None, Headroom::Above] {
+                for (low, high, stops) in [(0.0, 1.0, 0.0), (0.1, 0.4, 2.0), (-3.0, 20.0, -1.5)] {
+                    let mut display = crate::image::display::Display::default();
+                    display.set_window(low, high);
+                    display.set_exposure(stops);
+                    display.set_tone_map(tone_map, gray);
+                    let mut last = f32::NEG_INFINITY;
+                    for &value in &values {
+                        let out = display.response(value, gray, headroom);
+                        assert!(
+                            out >= last,
+                            "{tone_map:?} {headroom:?} [{low}, {high}] {stops:+}: \
+                             {value} comes out {out}, under {last}"
+                        );
+                        last = out;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The Display section ranks the pixel's luminance and each of its
+/// channels among that plane's pixels, the luminance first, each with a
+/// rule on its own plane's plot; a pointer on the plot ranks the one value
+/// it is on among every plane.
+#[test]
+fn the_display_section_ranks_each_plane_of_the_pixel() {
+    let current = picture(false);
+    let mark = display::pixel_mark(&current, Headroom::None, 10, 0).expect("on the picture");
+    let planes: Vec<Plane> = mark.channels.iter().map(|channel| channel.plane).collect();
+    assert_eq!(planes, [Plane::Luma, Plane::Red, Plane::Green, Plane::Blue]);
+    for channel in &mark.channels {
+        // The ramp's eleventh of sixty-four distinct values.
+        let rank = channel.rank.expect("ranked");
+        assert!((rank - 10.5 / 64.0).abs() < 1e-6, "{channel:?}");
+        assert!(channel.bin.is_some(), "{channel:?}");
+    }
+
+    let gray = picture(true);
+    let mark = display::pixel_mark(&gray, Headroom::None, 10, 0).expect("on the picture");
+    assert_eq!(mark.channels.len(), 1);
+    assert_eq!(mark.channels[0].rank, Some(10.5 / 64.0));
+
+    // The plot's ends: black, which the ramp's first pixel is at, and
+    // white, which the ramp stops short of.
+    for (bin, expected) in [(0, 0.5 / 64.0), (BINS - 1, 1.0)] {
+        let mark = display::bin_mark(&current, Headroom::None, bin);
+        assert_eq!(mark.channels.len(), 4);
+        for channel in &mark.channels {
+            assert_eq!(channel.bin, None);
+            let rank = channel.rank.expect("ranked");
+            assert!((rank - expected).abs() < 1e-6, "{bin}: {channel:?}");
+        }
+    }
+}
+
+/// The Output section ranks what each pixel comes out as: the pixels the
+/// screen clips at white are one pile, and every one of them stands at the
+/// pile's middle — lower than its own value stands in the Display
+/// section — as a pointer on the pile's bar does.
+#[test]
+fn the_output_section_ranks_a_clipped_pile_at_its_middle() {
+    let mut current = picture(true);
+    current.display.set_exposure(1.0);
+    let binned = output::binned_for(&current, Headroom::None, 1.0);
+    let rank = |x: u32| {
+        output::pixel_mark(&current, Headroom::None, &binned, x, 0)
+            .expect("on the picture")
+            .channels[0]
+            .rank
+            .expect("ranked")
+    };
+    let (top, clipped) = (rank(63), rank(55));
+    assert_eq!(top, clipped);
+    let shown = display::pixel_mark(&current, Headroom::None, 63, 0).expect("on the picture");
+    assert!(top < shown.channels[0].rank.expect("ranked"));
+    assert!(top < 1.0 && top > 0.5, "{top}");
+    let pile = output::bin_mark(&current, Headroom::None, &binned, BINS - 1);
+    assert_eq!(pile.channels[0].rank, Some(top));
+    // Below the clip, a pixel stands where it does before the response.
+    let dark =
+        output::pixel_mark(&current, Headroom::None, &binned, 10, 0).expect("on the picture");
+    assert_eq!(dark.channels[0].rank, Some(10.5 / 64.0));
+}
+
 /// On an SDR screen the output stops at white: a stop of exposure piles
 /// the top of a ramp into the last bin.
 #[test]

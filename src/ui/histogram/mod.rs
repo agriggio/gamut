@@ -30,7 +30,7 @@ use egui::{Color32, FontId, Sense, WidgetInfo, WidgetType, pos2};
 use crate::image::auxiliary::Showing;
 use crate::image::decode::Reading;
 use crate::image::display::{AutoWindow, EV_STEP};
-use crate::image::stats::{BINS, Plot};
+use crate::image::stats::{self, BINS, Plot};
 use crate::render::Color;
 
 use super::Rect;
@@ -350,6 +350,75 @@ impl Plane {
         };
         Color32::from(color.with_alpha(255))
     }
+
+    /// The quantity the Display and Output plots draw this plane of.
+    fn quantity(self) -> stats::Quantity {
+        match self {
+            Plane::Red => stats::Quantity::Channel(0),
+            Plane::Green => stats::Quantity::Channel(1),
+            Plane::Blue => stats::Quantity::Channel(2),
+            Plane::Luma => stats::Quantity::Luminance,
+        }
+    }
+
+    /// The planes the Display and Output plots draw for `current`, the
+    /// luminance first: the order their percentiles are stacked in.
+    fn drawn(current: &Current) -> Vec<Plane> {
+        let mut planes = vec![Plane::Luma];
+        if !current.image.is_gray() {
+            planes.extend(Plane::COLOR);
+        }
+        planes
+    }
+}
+
+/// The rules a plot of every plane marks `mark` with: a rule to each of the
+/// pixel's planes, in the plane's ink, where the mark has them, and
+/// otherwise the accent's one rule on the bin the pointer is on.
+fn plane_rules(pass: &Pass, mark: Option<&Mark>) -> Vec<(usize, Color32)> {
+    let channels: Vec<(usize, Color32)> = mark
+        .iter()
+        .flat_map(|mark| &mark.channels)
+        .filter_map(|channel| Some((channel.bin?, channel.plane.ink())))
+        .collect();
+    if channels.is_empty() {
+        accent_rule(pass, mark)
+    } else {
+        channels
+    }
+}
+
+/// Each plane's percentile beside its rule, a line to the plane down from
+/// the top of `bars`, the luminance's first: beside the plane's own rule
+/// where [`plane_rules`] drew one to each, and all beside the one rule
+/// where it drew the accent's. `stands` is where the rules stand, in the
+/// order they were drawn.
+fn plane_labels(ui: &egui::Ui, bars: Rect, mark: Option<&Mark>, stands: &[f32]) {
+    let Some(mark) = mark else {
+        return;
+    };
+    let own = mark.channels.iter().any(|channel| channel.bin.is_some());
+    let mut drawn = stands.iter();
+    for (row, channel) in mark.channels.iter().enumerate() {
+        let across = if own {
+            if channel.bin.is_none() {
+                continue;
+            }
+            drawn.next()
+        } else {
+            stands.first()
+        };
+        if let (Some(&across), Some(rank)) = (across, channel.rank) {
+            plot::rule_label(
+                ui,
+                bars,
+                across,
+                row,
+                &percentile_words(rank),
+                channel.plane.ink(),
+            );
+        }
+    }
 }
 
 /// The rule a section marks its one value with: the accent, held back to
@@ -445,7 +514,7 @@ fn marked(
         let bars = section.plot(rect);
         if let Some(bin) = hovered_bin(bars, cursor) {
             let mark = match section {
-                Section::Output => output::bin_mark(plots.output, bin),
+                Section::Output => output::bin_mark(current, headroom, plots.output, bin),
                 Section::Display => display::bin_mark(current, headroom, bin),
                 Section::GainMap => gain_map::bin_mark(plots.lift, bin),
                 Section::Image => unreachable!("answered above"),
