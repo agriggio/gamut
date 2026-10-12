@@ -756,7 +756,12 @@ toward the line's own color (`plot::line_area`). The areas stack, so where
 the planes overlap the plot darkens to a neutral gray and where one stands
 alone it wears that plane's cast. Every plane is always drawn, the
 luminance plane in a neutral gray and first, so that its line runs under the
-color planes'.
+color planes'. In the Image section a channel's line comes down to the axis
+after its last lit column and ends there (`plot::Tail::Dropped`): its plot
+runs on a range shared with the other channels, or wider than its pixels,
+and a line along the floor past its brightest pixel would read as a count of
+nothing there rather than as the end of the channel. The other sections
+draw the line to the plot's end (`plot::Tail::Drawn`).
 The planes' inks are a red, a green and a blue held short of the primaries
 (`plot::HISTOGRAM_PLANES`), each leading in its own channel so that three
 lines crossing stay three; the full primaries, at a pixel to the bin, come

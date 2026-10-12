@@ -238,11 +238,12 @@ pub(super) fn bars(
                     .map(|(plane, ink)| (plane, Color32::from(ink))),
             )
             .collect();
-    draw(pass, ui, section, &planes, counts, bars, rules)
+    draw(pass, ui, section, &planes, counts, bars, rules, Tail::Drawn)
 }
 
 /// One plane on its own ground, in its own ink, as [`bars`] draws a plot's
-/// planes together: the Image section's plot of one stored channel.
+/// planes together: the Image section's plot of one stored channel, its
+/// line ended where the last of the channel's pixels is behind it.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn plane_bars(
     pass: &Pass,
@@ -254,11 +255,35 @@ pub(super) fn plane_bars(
     bars: Rect,
     rules: &[(usize, Color32)],
 ) -> Vec<f32> {
-    draw(pass, ui, section, &[(plane, ink)], counts, bars, rules)
+    draw(
+        pass,
+        ui,
+        section,
+        &[(plane, ink)],
+        counts,
+        bars,
+        rules,
+        Tail::Dropped,
+    )
+}
+
+/// What becomes of a plane's line past its last lit bin, where every pixel
+/// is behind it and the rule there reads 100%.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Tail {
+    /// Drawn on along the axis to the plot's end.
+    Drawn,
+    /// Brought down to the axis and ended there: a channel's plot on a
+    /// range shared with the others, or wider than its pixels, would
+    /// otherwise draw a line along the floor through values it does not
+    /// hold, which reads as a count of nothing there rather than as the
+    /// end of the channel.
+    Dropped,
 }
 
 /// The ground, `planes` over it, and `rules` over them; where each rule
 /// stands this frame, as [`rule_over`] has it.
+#[allow(clippy::too_many_arguments)]
 fn draw(
     pass: &Pass,
     ui: &egui::Ui,
@@ -267,6 +292,7 @@ fn draw(
     counts: Counts,
     bars: Rect,
     rules: &[(usize, Color32)],
+    tail: Tail,
 ) -> Vec<f32> {
     let painter = ui.painter();
     painter.rect_filled(
@@ -274,7 +300,7 @@ fn draw(
         PLOT_RADIUS,
         PLOT_BACKGROUND,
     );
-    lines(pass, ui, planes, counts, bars);
+    lines(pass, ui, planes, counts, bars, tail);
     rule_over(pass, ui, section, bars, rules)
 }
 
@@ -434,14 +460,15 @@ const RULE_LABEL_FADE_ALPHA: u8 = 230;
 /// and as tall as the fullest bin under it, so that a spike is not averaged
 /// away by its neighbors: each plane's area laid down in [`line_area`], each
 /// over the others', then each plane's top as a line in its own ink, the
-/// first plane's under the rest; and a cap in the accent along the top of a
-/// column cut off there.
+/// first plane's under the rest, run on past its last lit column as `tail`
+/// says; and a cap in the accent along the top of a column cut off there.
 fn lines(
     pass: &Pass,
     ui: &egui::Ui,
     planes: &[(&[u32; BINS], Color32)],
     counts: Counts,
     bars: Rect,
+    tail: Tail,
 ) {
     let grid = pass.grid;
     let painter = ui
@@ -480,8 +507,9 @@ fn lines(
         }
     }
     let width = grid.device_pixels(LINE_PIXELS);
-    for (plane, (_, ink)) in heights.iter().zip(planes) {
-        let points: Vec<_> = columns
+    for (plane, (bins, ink)) in heights.iter().zip(planes) {
+        let ends = traced(bins, columns.len(), tail);
+        let points: Vec<_> = columns[..ends]
             .iter()
             .zip(plane)
             .map(|(column, &height)| {
@@ -491,7 +519,9 @@ fn lines(
                 )
             })
             .collect();
-        painter.line(points, egui::Stroke::new(width, *ink));
+        if points.len() > 1 {
+            painter.line(points, egui::Stroke::new(width, *ink));
+        }
     }
     for (index, column) in columns.iter().enumerate() {
         if heights.iter().any(|plane| plane[index] > 1.0) {
@@ -505,6 +535,20 @@ fn lines(
             );
         }
     }
+}
+
+/// How many of `columns` columns over `plane` its line is traced through:
+/// all of them where the `tail` is drawn, and otherwise up to the last
+/// column holding anything and the one after it, where the line comes down
+/// to the axis — none at all for a plane that holds nothing.
+fn traced(plane: &[u32; BINS], columns: usize, tail: Tail) -> usize {
+    if tail == Tail::Drawn {
+        return columns;
+    }
+    (0..columns)
+        .rev()
+        .find(|&column| tallest(plane, bins_under(column, columns)) > 0)
+        .map_or(0, |last| (last + 2).min(columns))
 }
 
 /// How a band marks the stretch of it where the screen goes past white,
@@ -784,6 +828,25 @@ mod tests {
             luma: counts,
             color: None,
         }
+    }
+
+    /// The Image section's line comes down to the axis after the last lit
+    /// column and ends there; every other section's runs on to the plot's
+    /// end, and a plane holding nothing is not traced at all.
+    #[test]
+    fn a_dropped_tail_ends_the_line_where_the_pixels_end() {
+        let columns = 100;
+        let mut plane = [0u32; BINS];
+        plane[bins_under(39, columns).start] = 5;
+        assert_eq!(traced(&plane, columns, Tail::Dropped), 41);
+        assert_eq!(traced(&plane, columns, Tail::Drawn), columns);
+        plane[BINS - 1] = 1;
+        assert_eq!(
+            traced(&plane, columns, Tail::Dropped),
+            columns,
+            "lit to the end"
+        );
+        assert_eq!(traced(&[0; BINS], columns, Tail::Dropped), 0);
     }
 
     /// A spike cannot set the scale: a picture spread evenly but for one
