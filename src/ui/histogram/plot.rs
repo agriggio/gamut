@@ -172,20 +172,6 @@ impl Counts {
     pub(super) fn up(self, count: u32, total: u64) -> f32 {
         share_of(count, total) / self.top
     }
-
-    /// The fullest share any of `planes` holds at `bin`, where it stands
-    /// past the top: what the header says of a bar cut off.
-    pub(super) fn cut_at<'a>(
-        self,
-        planes: impl IntoIterator<Item = &'a [u32; BINS]>,
-        bin: usize,
-    ) -> Option<f32> {
-        planes
-            .into_iter()
-            .map(|counts| share_of(counts[bin], total(counts)))
-            .filter(|&held| held > self.top)
-            .max_by(f32::total_cmp)
-    }
 }
 
 /// Every plane of `plot`: the luminance, then the color planes where it has
@@ -810,12 +796,6 @@ mod tests {
         assert!(scale.up(1_000_000, total) > 1.0);
         assert!(scale.up(5_000_000, total) > 1.0);
         assert_eq!(scale.up(0, total), 0.0, "an empty bin is flat");
-
-        // And the header says how much a cut bar holds, where the plane is
-        // on screen, and nothing of a bar that is not cut.
-        let held = scale.cut_at(planes_of(&plot), BINS / 2).expect("cut");
-        assert!((held - 1_000_000.0 / total as f32).abs() < 1e-6, "{held}");
-        assert_eq!(scale.cut_at(planes_of(&plot), 3), None);
     }
 
     /// The scale is a share of the picture, not a count: the same share

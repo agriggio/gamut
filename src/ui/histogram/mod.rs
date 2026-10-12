@@ -444,29 +444,12 @@ fn marked(
         }
         let bars = section.plot(rect);
         if let Some(bin) = hovered_bin(bars, cursor) {
-            let (mut mark, plotted) = match section {
-                Section::Output => (
-                    output::bin_mark(plots.output, bin),
-                    Some(&plots.output.plot),
-                ),
-                Section::Display => (
-                    display::bin_mark(current, headroom, bin),
-                    Some(&current.stats.plot),
-                ),
-                Section::GainMap => (gain_map::bin_mark(plots.lift, bin), plots.lift),
+            let mark = match section {
+                Section::Output => output::bin_mark(plots.output, bin),
+                Section::Display => display::bin_mark(current, headroom, bin),
+                Section::GainMap => gain_map::bin_mark(plots.lift, bin),
                 Section::Image => unreachable!("answered above"),
             };
-            // A bar cut off at the top says how much it holds, which its
-            // height no longer can.
-            let counts = match section {
-                Section::Output => plots.output_counts,
-                Section::GainMap => plots.lift_counts,
-                Section::Display | Section::Image => plots.counts,
-            };
-            let cut = plotted.and_then(|plotted| counts.cut_at(plot::planes_of(plotted), bin));
-            if let Some(words) = cut.and_then(share_words) {
-                mark.words = format!("{words} · {}", mark.words);
-            }
             *traced.slot(section) = Some(mark);
             return traced;
         }
@@ -541,29 +524,6 @@ fn percentile_words(rank: f32) -> String {
         format!("{percent:.1}")
     };
     format!("{number}%")
-}
-
-/// A share of the picture as the pointer's words write it — the share a
-/// bar cut off at the top holds — or `None` for none at all.
-///
-/// A tenth of a percent where the share is small enough for the tenths to
-/// mean something, whole percents where they no longer do, and a floor
-/// under the smallest share that is not nothing — a handful of pixels in a
-/// picture is not `0.0%`, which would say there were none.
-fn share_words(share: f32) -> Option<String> {
-    // A share that is not a number is not a share: written so that one
-    // fails the test rather than passing it.
-    if share.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) {
-        return None;
-    }
-    let percent = share * 100.0;
-    Some(if percent < 0.05 {
-        "<0.1%".to_string()
-    } else if percent < 10.0 {
-        format!("{percent:.1}%")
-    } else {
-        format!("{percent:.0}%")
-    })
 }
 
 /// Draws the histogram down the side panel `side`: the row of buttons at

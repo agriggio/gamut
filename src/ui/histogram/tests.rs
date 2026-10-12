@@ -110,23 +110,6 @@ fn an_exposure_is_written_in_the_quarters_it_is_stepped_in() {
     assert_eq!(stops_label(0.1), "+0.10");
 }
 
-/// A share of the picture is written so that a small one is still
-/// something and a large one is not four digits: nothing at all for
-/// none, a floor under the least that is not none, tenths while they
-/// tell the reader something and whole percents once they do not.
-#[test]
-fn a_clipped_share_is_written_to_be_read_at_a_glance() {
-    assert_eq!(share_words(0.0), None);
-    assert_eq!(share_words(-1.0), None);
-    assert_eq!(share_words(f32::NAN), None);
-    assert_eq!(share_words(0.0001).as_deref(), Some("<0.1%"));
-    assert_eq!(share_words(0.001).as_deref(), Some("0.1%"));
-    assert_eq!(share_words(0.0234).as_deref(), Some("2.3%"));
-    assert_eq!(share_words(0.1).as_deref(), Some("10%"));
-    assert_eq!(share_words(0.5).as_deref(), Some("50%"));
-    assert_eq!(share_words(1.0).as_deref(), Some("100%"));
-}
-
 /// A percentile is whole through the middle, to a tenth at either end
 /// where a tail is what is looked for, and never 0 or 100 unless it is
 /// exactly so.

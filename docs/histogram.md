@@ -353,6 +353,17 @@ its plot as its codes do, so each rule stands on the bar its channel was
 counted in. A pointer on one of the section's plots marks that plane alone
 (`stored::hovered`), with the value its bin stands for.
 
+Beside each of the section's rules is where its value stands among that
+channel's pixels, as a percentile (`plot::rule_label`): the share of them
+below it and half of those at it (`stats::Plane::rank`), so a value the
+whole picture shares reads 50% rather than 0% or 100%, and a clipped
+channel's top code reads short of 100% by half of what is piled there. It is
+read off the stored tally rather than off the plot's bins, so it is exact to
+the code for integer samples and to the tally's thousandth of an octave for
+floats. The words sit after the rule, or before it where they would run off
+the plot's end, over a fade of the plot's ground so that a plane's line
+crossing them does not cut through them.
+
 A pointer on one section's plot is reading that plot's axis and is on no
 pixel besides, so only that section marks anything, with the value its bin
 stands for. Every hit test is against the rectangles the pass laid out,
@@ -744,14 +755,12 @@ two end bins, across every plane, the fullest fiftieth (`plot::CUT`) stand
 past it, and two plots sharing one take the higher (`Counts::wider`), the one
 cutting fewer bars off. The ends are left out because what the window throws
 away piles up there. A bar
-past the top runs to it with a cap in the accent, and the pointer on it puts
-its share in the header ahead of the bin's value, which is all the height of
-a cut bar no longer says.
+past the top runs to it with a cap in the accent.
 
 Linear, because heights only compare linearly. A logarithmic switch was the
 plot's answer to one bin flattening the rest — a masked sea, a scan's
 surround, a flat sky — and the cut is a better one: the shape stays the
-distribution, and the spike says what it holds when asked.
+distribution, and the cap says the spike runs on.
 
 The gain map's plot has a top of its own, worked out the same way: it is of
 another image, the map, in stops of lift, and no height on it compares with
