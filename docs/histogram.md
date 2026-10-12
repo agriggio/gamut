@@ -547,13 +547,15 @@ say nothing the axis under it did not; here the section is the display, and
 its curve is what it is read for, a diagonal saying the display does
 nothing as plainly as a bend says what it does.
 
-### The rows are every file's
+### The rows are a photo's or data's
 
-Three rows of settings under the Display section's band — *Exposure*,
-*Window*, *Curve* — and every file gets all three, so the section is one
-height for every file and for the whole of a file's stay. A section whose
-controls jumped from one file to the next, or every time a handle was
-dragged past white, would be one no one could keep a hand on.
+Under the Display section's band, a photo has two rows of settings —
+*Exposure* and *Curve* — and an image read as data has one, *Window*. The
+section is one height for every photo and another for every measurement,
+and for the whole of a file's stay. A section whose controls jumped from
+one photo to the next, or every time a handle was dragged past white,
+would be one no one could keep a hand on; the reading is a choice made on
+the file, and the column moving when it is made says that it did something.
 
 Three kinds of file use this program — `AutoWindow::default_for` splits on
 `Referred`, and the colormaps, the float TIFF and the GeoTIFF keys say who
@@ -566,31 +568,51 @@ stops. The handles do not follow that split, because the black handle moves
 the window on every file: a graded file's window leaves 0..1 at the bottom
 the moment the black handle is touched, so a white handle that meant the
 exposure on a graded file and the window's top on a measured one would be a
-handle that meant a different thing on the next file along. The two dials
-are honestly two. The window is in the file's own units — both handles,
-both pairs of keys, the *Window* row — and the exposure is in stops — the
-slider, `d`/`f`, `--exposure` — a push on top of whatever the window is,
-which is exactly what a meter's reading is, and why a metered file arrives
-with the exposure dial turned rather than a fourth kind of window.
+handle that meant a different thing on the next file along. On a photo the
+two dials are honestly two. The window is in the file's own units — both
+handles, both pairs of keys — and the exposure is in stops — the slider,
+`d`/`f`, `--exposure` — a push on top of whatever the window is, which is
+exactly what a meter's reading is, and why a metered file arrives with the
+exposure dial turned rather than a fourth kind of window.
 
-The *Window* row of rules does follow the split: it is drawn only on an
-image read as data, and the rules are refused on a photo, the button
-(`tooltip::PHOTO_AS_STORED`) and `e` (`When::Data`) alike. A rule is an
-answer to the question a measurement raises — where, in numbers with no
-white, is the range worth looking at — and a photo does not raise it: its
-window is 0..1 by rights, *Full range* on it is the handles put at the
-darkest and brightest pixel, which a finished picture nearly always spans
-already, and *Trimmed* is an auto-levels that makes it look wrong rather
-than show anything a drag on the handles does not. Dragging the handles is
-how a photo's shadows and highlights are looked into, and the reset is what
-puts a hand-moved window back there, as it puts everything back. The
-interface treats the file's three readings as two, photo and data, for the
-same reason: scene light and graded light differ in how they open — the
-meter — and in nothing a control on the panel does.
+The *Window* row of rules is drawn only on an image read as data, and the
+rules are refused on a photo, the button (`tooltip::PHOTO_AS_STORED`) and
+`e` (`When::Data`) alike. A rule is an answer to the question a measurement
+raises — where, in numbers with no white, is the range worth looking at —
+and a photo does not raise it: its window is 0..1 by rights, *Full range*
+on it is the handles put at the darkest and brightest pixel, which a
+finished picture nearly always spans already, and *Trimmed* is an
+auto-levels that makes it look wrong rather than show anything a drag on
+the handles does not. Dragging the handles is how a photo's shadows and
+highlights are looked into, and the reset is what puts a hand-moved window
+back there, as it puts everything back. The interface treats the file's
+three readings as two, photo and data, for the same reason: scene light and
+graded light differ in how they open — the meter — and in nothing a control
+on the panel does.
 
-The curve row is every file's because the exposure is: a stop up puts the
-top of any file above white and the bar says **clipped**, and the curve is
-the answer to that. A row offered only to a file that opens above white
+The *Exposure* and *Curve* rows are drawn only on a photo, and refused on
+data, the buttons (`tooltip::DATA_HAS_NO_EXPOSURE`,
+`tooltip::DATA_HAS_NO_CURVE`), `d`/`f` and `t` (`When::Photo`),
+`--exposure` and `--tone-map` alike — `Display::has_exposure` and
+`Display::has_curve` are the one test, and `Display::set_exposure` and
+`Display::set_tone_map` the one refusal. The exposure because data's
+numbers need not be light, so a stop, a doubling of light, means nothing
+of them; and because a stop up is exactly the white handle brought in to
+the window's middle (`Display::transform` folds it into the gain), which
+the handle does in the file's own units, with a number a reader of data can
+quote. The curve because the window is what puts data on the screen, and
+the neutral curve bends the very mapping being read off: its toe moves
+every shadow and its desaturation every color, three channels as much as
+one. With no curve, data is held to white on every surface
+(`Display::curve_on` going out with no headroom, `Display::clips_white`
+saying so, the Output section's plot running to white): what is past the
+window's top is past what was asked to be shown, not light for the
+headroom to hold. A file of light read as data is switched back to *Photo*
+to have both again.
+
+The curve row is every photo's because the exposure is: a stop up puts the
+top of any picture above white and the bar says **clipped**, and the curve is
+the answer to that. A row offered only to a photo that opens above white
 would leave `t` putting a curve on a file whose panel had no row for it, and
 the bottom bar naming a curve there was no button for. It is not the
 false-color case, where the key is dead because the curve does nothing; on
@@ -685,21 +707,9 @@ exactly when the number is wanted.
 
 ### What goes dead
 
-The exposure's slider is dead on a single-channel measurement, and says why
-when rested on (`MEASUREMENT_NOT_EXPOSED`): a stop is a doubling of light,
-and its values are not light; and over the gray ramp a stop up is exactly
-the white handle brought in to the window's middle, which the handle does
-in the file's own units. `Display::has_exposure` is the one test, and
-`Display::set_exposure` the one refusal, so the slider, `d` and `f` and
-`--exposure` cannot disagree; the bar's EV item never appears for such a
-file, since the exposure stays at nothing.
-
-The row of curves is dead under a false color, and on a single-channel
-measurement, which is read through the gray ramp, and says why when rested
-on — a reason each (`FALSE_COLOR_CLIPS`, `MEASUREMENT_CLIPS`), the false
-color's first where both hold, being the one the hand chose. The compositor
-holds the curve at a clip there — `Display::curve_on` is where the choice
-is made, and `composite.rs` and the pointer's readout both ask it, both
+The row of curves is dead under a false color, and says why when rested on
+(`FALSE_COLOR_CLIPS`). The compositor holds the curve at a clip there —
+`Display::curve_on` is where the choice is made, and `composite.rs` and the pointer's readout both ask it, both
 reading `Display::ramp`; the bar's words read `Display::false_colored`,
 since the gray ramp is nothing to name — because a ramp has no color past
 its end for a highlight to roll off into, and a curve over the ramp would

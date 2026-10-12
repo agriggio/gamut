@@ -69,12 +69,13 @@ pub struct Display {
     exposure_stops: f32,
     tone_map: ToneMap,
     colormap: Colormap,
-    /// Whether the image is a single-channel measurement
-    /// ([`Referred::Measured`], one channel): numbers that need not be
-    /// light, read through the gray ramp rather than shown as light — see
-    /// [`Display::ramp`] — and with no exposure, since a stop is a doubling
-    /// of light — see [`Display::has_exposure`].
-    gray_measurement: bool,
+    /// Whether the image is read as data ([`Referred::Measured`]): numbers
+    /// that need not be light, with no exposure, since a stop is a doubling
+    /// of light — see [`Display::has_exposure`] — and no curve, since the
+    /// window is what puts them on the screen — see [`Display::has_curve`];
+    /// a single channel of them read through the gray ramp rather than
+    /// shown as light — see [`Display::ramp`].
+    measured: bool,
 }
 
 impl Default for Display {
@@ -87,7 +88,7 @@ impl Default for Display {
             exposure_stops: 0.0,
             tone_map: ToneMap::None,
             colormap: Colormap::Gray,
-            gray_measurement: false,
+            measured: false,
         }
     }
 }
@@ -142,7 +143,7 @@ impl Display {
             exposure_stops: 0.0,
             tone_map: ToneMap::None,
             colormap: Colormap::Gray,
-            gray_measurement: image.referred == Referred::Measured && image.is_gray(),
+            measured: image.referred == Referred::Measured,
         };
         display.apply_auto(stats);
         if let Some(auto) = startup.auto {
@@ -159,7 +160,9 @@ impl Display {
         if let Some(colormap) = startup.colormap.filter(|_| image.is_gray()) {
             display.colormap = colormap;
         }
-        if let Some(tone_map) = startup.tone_map {
+        if let Some(tone_map) = startup.tone_map
+            && display.has_curve()
+        {
             display.tone_map = tone_map;
         }
         if let Some(stops) = startup.exposure_stops
@@ -212,7 +215,7 @@ impl Display {
     /// the histogram's right corner is a share of, and the shader's mark on
     /// a white pixel waits on.
     pub fn clips_white(&self, gray: bool, headroom: Headroom) -> bool {
-        self.ramp(gray).is_some() || (self.tone_map == ToneMap::None && headroom == Headroom::None)
+        self.held_to_white(gray) || (self.tone_map == ToneMap::None && headroom == Headroom::None)
     }
 
     /// Whether a false color is on the picture: a colormap other than the
@@ -250,25 +253,36 @@ impl Display {
     /// the bar's word for a false color, its row of buttons — reads
     /// [`Display::false_colored`], since the gray ramp is nothing to name.
     pub fn ramp(&self, gray: bool) -> Option<Colormap> {
-        (gray && (self.colormap != Colormap::Gray || self.gray_measurement))
-            .then_some(self.colormap)
+        (gray && (self.colormap != Colormap::Gray || self.measured)).then_some(self.colormap)
     }
 
-    /// Whether the image is a single-channel measurement, read through the
-    /// gray ramp and with no exposure: what the tooltips on the dead curves
-    /// and the dead slider say why by.
-    pub fn gray_measurement(&self) -> bool {
-        self.gray_measurement
-    }
-
-    /// Whether the exposure acts on the picture. Not on a single-channel
-    /// measurement: a stop is a doubling of light, and its values are not
-    /// light; and over the gray ramp a stop up is exactly the white handle
-    /// brought in to the window's middle, which the handle does in the
-    /// file's own units. The one test behind the slider drawn dead, its
-    /// tooltip, the keys that step it and `--exposure` all refusing.
+    /// Whether the exposure acts on the picture. Not on an image read as
+    /// data: a stop is a doubling of light, and its values need not be
+    /// light; and a stop up is exactly the white handle brought in to the
+    /// window's middle, which the handle does in the file's own units. The
+    /// one test behind the slider left off the panel, the keys that step it
+    /// and `--exposure` all refusing.
     pub fn has_exposure(&self) -> bool {
-        !self.gray_measurement
+        !self.measured
+    }
+
+    /// Whether the curve acts on the picture. Not on an image read as data,
+    /// whatever its channels: the window is what fits its values to the
+    /// screen, and a curve would bend the very mapping being read off — the
+    /// neutral one's toe moves every shadow and its desaturation every
+    /// color. The one test behind the row left off the panel, `t` and
+    /// `--tone-map` all refusing, and the clip at the window's top
+    /// ([`Display::held_to_white`]).
+    pub fn has_curve(&self) -> bool {
+        !self.measured
+    }
+
+    /// Whether a `gray` or a color image goes out clipped at the window's
+    /// top whatever the curve and the surface: read through a ramp, which
+    /// has no color past its end for headroom to show as, or read as data,
+    /// whose window is the whole of its mapping to the screen.
+    fn held_to_white(&self, gray: bool) -> bool {
+        self.ramp(gray).is_some() || !self.has_curve()
     }
 
     /// Puts the two values that come out black and white where they are
@@ -373,7 +387,7 @@ impl Display {
     /// anything changed. The one place the refusal is made: the key that
     /// cycles the curves and the button that names one both come here.
     pub fn set_tone_map(&mut self, curve: ToneMap, gray: bool) -> bool {
-        if self.ramp(gray).is_some() {
+        if self.held_to_white(gray) {
             return false;
         }
         let changed = self.tone_map != curve;
@@ -553,17 +567,20 @@ impl Display {
     }
 
     /// The curve the picture goes out through, and the room it goes out
-    /// into: the chosen one on the surface as it is — or, over a ramp, a
-    /// plain clip whatever the surface.
+    /// into: the chosen one on the surface as it is — or, over a ramp or on
+    /// data, a plain clip whatever the surface.
     ///
     /// A ramp is already display-referred: a tone curve on top of one would
     /// distort the mapping the viewer is reading values off, and headroom
-    /// above the top of the ramp is a color the ramp does not have. The one place the choice is made: `render/composite.rs` asks
+    /// above the top of the ramp is a color the ramp does not have. Data is
+    /// read off its window the same way, its three channels as much as its
+    /// one, and what is past the window's top is past what was asked to be
+    /// shown, not light for the headroom to hold. The one place the choice is made: `render/composite.rs` asks
     /// this for the arm the shader runs, and [`Display::map`] runs the same
     /// arm on the CPU for the readouts, so neither can stop describing the
     /// screen the other draws.
     pub fn curve_on(&self, gray: bool, headroom: Headroom) -> (ToneMap, Headroom) {
-        if self.ramp(gray).is_some() {
+        if self.held_to_white(gray) {
             (ToneMap::None, Headroom::None)
         } else {
             (self.tone_map, headroom)
@@ -1705,5 +1722,47 @@ mod tests {
         assert!(display.has_exposure());
         assert!(display.set_exposure(1.0));
         assert!(!display.set_exposure(1.0), "already there");
+    }
+
+    /// Three channels read as data are shown as light, but read off their
+    /// window as a single channel is: no exposure, no curve — not from the
+    /// row, the key or the command line — and a clip at the window's top
+    /// on any surface. Scene light with the same numbers keeps both.
+    #[test]
+    fn color_data_has_no_exposure_and_no_curve() {
+        let mut image = float_gray(vec![0.0, 0.5, 1.0, 2.0, 0.0, 0.5]);
+        image.width = 2;
+        image.samples = Samples::F32 {
+            channels: Channels::Rgb,
+            data: vec![0.0, 0.5, 1.0, 2.0, 0.0, 0.5],
+        };
+        let mut display = opened(&image);
+        (display.window_low, display.window_high) = (0.0, 1.0);
+        assert_eq!(display.ramp(false), None, "shown as light");
+        assert!(!display.has_exposure() && !display.has_curve());
+        assert!(!display.set_exposure(1.0));
+        assert!(!display.set_tone_map(ToneMap::Neutral, false));
+        assert!(!display.cycle_tone_map(false));
+        for headroom in [Headroom::None, Headroom::Above] {
+            assert_eq!(
+                display.curve_on(false, headroom),
+                (ToneMap::None, Headroom::None)
+            );
+            assert!(display.clips_white(false, headroom));
+            assert_eq!(display.shade(2.0, Channels::Rgb, headroom), [1.0; 3]);
+        }
+        let startup = Startup {
+            exposure_stops: Some(2.0),
+            tone_map: Some(ToneMap::Neutral),
+            ..Startup::default()
+        };
+        let started = Display::for_image_with(&image, &Stats::scan(&image), startup);
+        assert_eq!(started.exposure_stops(), 0.0, "--exposure is passed over");
+        assert_eq!(started.tone_map(), ToneMap::None, "and --tone-map");
+
+        image.referred = Referred::Scene;
+        let started = Display::for_image_with(&image, &Stats::scan(&image), startup);
+        assert!(started.has_exposure() && started.has_curve());
+        assert_eq!(started.tone_map(), ToneMap::Neutral);
     }
 }

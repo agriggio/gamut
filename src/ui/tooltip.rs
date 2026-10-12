@@ -145,17 +145,17 @@ pub const NO_HDR_OUTPUT: &str = "HDR disabled because no HDR output is available
 pub const FALSE_COLOR_CLIPS: &str =
     "A false color clips at the top of its ramp, whatever the curve.";
 
-/// Why the row of curves is dead on a single-channel measurement with no
-/// false color on: its values are spread straight across the grays and clip
-/// at the window's ends, as a false color's are along its ramp, so a curve
-/// would bend the very mapping being read off.
-pub const MEASUREMENT_CLIPS: &str = "A measurement is spread straight across the grays and clips at the window's ends, whatever the curve.";
+/// Why a curve is refused on an image read as data: the window is what
+/// puts its values on the screen, and a curve would bend the very mapping
+/// being read off. The row is not drawn on such an image, as the window's
+/// is not on a photo ([`PHOTO_AS_STORED`]), so this is the reason a press
+/// from elsewhere — the Mac's menu — is refused.
+pub const DATA_HAS_NO_CURVE: &str = "Curve unavailable for data.";
 
-/// Why the exposure's slider is dead on a single-channel measurement: a
-/// stop is a doubling of light, and its values are not light; what it
-/// would do, the white handle does in the file's own units.
-pub const MEASUREMENT_NOT_EXPOSED: &str =
-    "No exposure control for measurement data; use black and white handles.";
+/// And why the exposure is: a stop is a doubling of light, and data's
+/// values need not be light; what it would do, the white handle does in
+/// the file's own units.
+pub const DATA_HAS_NO_EXPOSURE: &str = "Exposure unavailable for data.";
 
 /// What the camera's switch says, for the key, on a file with no camera JPEG
 /// in it. The switch itself is not drawn on such a file, so this is only
@@ -268,12 +268,9 @@ pub struct Conditions {
     pub openable: bool,
     /// Whether a false color is on the picture.
     pub false_colored: bool,
-    /// Whether the picture is a single-channel measurement, read through the
-    /// gray ramp — which holds the curve off as a false color does — and
-    /// with no exposure.
-    pub measured_gray: bool,
     /// Whether the image on screen is read as data, which is what the
-    /// window rules are for: a photo's window is as stored and the handles'.
+    /// window rules are for: a photo's window is as stored and the handles',
+    /// and data has neither an exposure nor a curve.
     pub data: bool,
     /// Whether one of the picture's maps is on screen in its place, which
     /// is data by nature: the switch between the readings is the picture's.
@@ -318,7 +315,6 @@ impl Default for Conditions {
             gain_map: false,
             openable: false,
             false_colored: false,
-            measured_gray: false,
             data: false,
             map_shown: false,
             picking: false,
@@ -362,7 +358,6 @@ impl Conditions {
         gain_map: true,
         openable: true,
         false_colored: false,
-        measured_gray: false,
         data: true,
         map_shown: false,
         picking: false,
@@ -403,7 +398,6 @@ pub fn disabled(tip: Tip, conditions: Conditions) -> Option<Refused> {
         hdr,
         openable,
         false_colored,
-        measured_gray,
         data,
         map_shown,
         picking,
@@ -526,17 +520,11 @@ pub fn disabled(tip: Tip, conditions: Conditions) -> Option<Refused> {
             hint: None,
         });
     }
-    if matches!(tip, Tip::Control(Control::Curve(_))) && measured_gray {
-        return Some(Refused {
-            said: MEASUREMENT_CLIPS,
-            hint: None,
-        });
+    if matches!(tip, Tip::Control(Control::Curve(_))) && data {
+        return said(DATA_HAS_NO_CURVE);
     }
-    if tip == Tip::Exposure && measured_gray {
-        return Some(Refused {
-            said: MEASUREMENT_NOT_EXPOSED,
-            hint: None,
-        });
+    if tip == Tip::Exposure && data {
+        return said(DATA_HAS_NO_EXPOSURE);
     }
     match (tip, hdr) {
         (Tip::Control(Control::Output), Hdr::NotInHdrMode) => Some(Refused {
@@ -919,13 +907,17 @@ mod tests {
     fn the_curves_say_why_they_are_dead_under_a_false_color() {
         for index in 0..ToneMap::ALL.len() {
             let curve = Tip::Control(Control::Curve(index));
-            assert_eq!(disabled(curve, Conditions::ALIVE), None);
+            let photo = Conditions {
+                data: false,
+                ..Conditions::ALIVE
+            };
+            assert_eq!(disabled(curve, photo), None);
             assert_eq!(
                 disabled(
                     curve,
                     Conditions {
                         false_colored: true,
-                        ..Conditions::ALIVE
+                        ..photo
                     }
                 ),
                 Some(Refused {
@@ -946,46 +938,47 @@ mod tests {
         );
     }
 
-    /// And on a gray measurement with no false color on, where the gray ramp
-    /// clips the same way: the reason is the measurement's, and a false
-    /// color put over it is named first, being the one the hand chose.
+    /// And on an image read as data, which has neither a curve nor an
+    /// exposure, whatever its channels: a false color put over a gray one
+    /// is named first, being the one the hand chose. The window's rules are
+    /// the other way about.
     #[test]
-    fn the_curves_say_why_they_are_dead_on_a_measurement() {
-        let measured = Conditions {
-            measured_gray: true,
+    fn the_curves_and_the_exposure_say_why_they_are_dead_on_data() {
+        let said = |said| Some(Refused { said, hint: None });
+        let data = Conditions {
+            data: true,
+            ..Conditions::ALIVE
+        };
+        let photo = Conditions {
+            data: false,
             ..Conditions::ALIVE
         };
         for index in 0..ToneMap::ALL.len() {
             let curve = Tip::Control(Control::Curve(index));
-            assert_eq!(
-                disabled(curve, measured),
-                Some(Refused {
-                    said: MEASUREMENT_CLIPS,
-                    hint: None,
-                })
-            );
+            assert_eq!(disabled(curve, data), said(DATA_HAS_NO_CURVE));
+            assert_eq!(disabled(curve, photo), None);
             assert_eq!(
                 disabled(
                     curve,
                     Conditions {
                         false_colored: true,
-                        ..measured
+                        ..data
                     }
                 )
                 .map(|refused| refused.said),
                 Some(FALSE_COLOR_CLIPS)
             );
         }
-        assert_eq!(disabled(Tip::Control(Control::Ramp(0)), measured), None);
+        assert_eq!(disabled(Tip::Control(Control::Ramp(0)), data), None);
         assert_eq!(
-            disabled(Tip::Exposure, measured),
-            Some(Refused {
-                said: MEASUREMENT_NOT_EXPOSED,
-                hint: None,
-            }),
-            "and the exposure, which a measurement has none of"
+            disabled(Tip::Exposure, data),
+            said(DATA_HAS_NO_EXPOSURE),
+            "and the exposure, which data has none of"
         );
-        assert_eq!(disabled(Tip::Exposure, Conditions::ALIVE), None);
+        assert_eq!(disabled(Tip::Exposure, photo), None);
+        let window = Tip::Control(Control::Window(0));
+        assert_eq!(disabled(window, data), None);
+        assert_eq!(disabled(window, photo), said(PHOTO_AS_STORED));
     }
 
     #[test]

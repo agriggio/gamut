@@ -669,24 +669,28 @@ way. Neither marks white where nothing is being clipped: on
 an HDR surface with no curve, or under a curve, the highlights are shown
 or rolled off rather than lost.
 
-Under the band, the exposure: a slider over six stops each way, its
-reading at the end of the row, dim on a single-channel measurement, which
-is not light and has no exposure to push — the handles set what comes out
-black and white there, and `d` and `f` do nothing. It snaps to the quarter stops `d`
-and `f` take, and a press anywhere along it puts the exposure there. The
-keys go on past the slider's ends, to ±16 stops, where the handle stands
-hollow at the end and the reading says where it is. On a file read as data
-there is a row of windows under that, which the `e` key cycles, named for
-what they do: *As stored* shows the values as they are, 0 to 1; *Full
-range* stretches everything the file holds to black and white; and
-*Trimmed* leaves the outermost 0.2% out before stretching, which is what
-data — sensor counts, a float TIFF, an elevation model — opens with. A
-photo has no such row: it opens as stored, stretching it would only make
-it look wrong, and the handles are the way into its shadows and
-highlights. Last, the *Curve* row — *Clip* or *Roll off* — that `t`
-toggles, since a stop or two of exposure puts the top of any file above
-white. The rows are the same for every photo, and the same for every file
-of data, so the panel changes height only between the two.
+Under the band of a photo, the exposure: a slider over six stops each way,
+its reading at the end of the row. It snaps to the quarter stops `d` and
+`f` take, and a press anywhere along it puts the exposure there. The keys
+go on past the slider's ends, to ±16 stops, where the handle stands hollow
+at the end and the reading says where it is. Under it, the *Curve* row —
+*Clip* or *Roll off* — that `t` toggles, since a stop or two of exposure
+puts the top of any picture above white.
+
+A file read as data has neither: its numbers need not be light, so there
+is no exposure to push — the white handle does the same job in the file's
+own units — and a curve would bend the values you are reading off. `d`,
+`f` and `t` do nothing on it, and values past the top of the window are
+clipped at white, on an HDR monitor too. Instead it has a row of windows,
+which the `e` key cycles, named for what they do: *As stored* shows the
+values as they are, 0 to 1; *Full range* stretches everything the file
+holds to black and white; and *Trimmed* leaves the outermost 0.2% out
+before stretching, which is what data — sensor counts, a float TIFF, an
+elevation model — opens with. A photo has no such row: it opens as stored,
+stretching it would only make it look wrong, and the handles are the way
+into its shadows and highlights. To push the exposure of a file read as
+data, press *Photo*. The rows are the same for every photo, and the same
+for every file of data, so the panel changes height only between the two.
 
 The curve is added to bring values brighter than white back down into a
 surface that cannot show them. *Clip* is not a second curve but the absence
@@ -722,9 +726,7 @@ False color applies to single-channel images only, and `r` does nothing on a
 color one. While a colormap is active, tone mapping is suspended — a curve on
 top of a colormap would distort the values you are reading off it — so the
 histogram's row of curves goes dim, `t` does nothing, and both come back
-with the gray ramp. On a single-channel measurement — a linear TIFF, an
-elevation model — the gray ramp is read the same way, straight across the
-grays, so the curves stay dim there too.
+with the gray ramp.
 
 Everything on this page shows up in one line at the right of the bottom bar,
 in front of the buttons there: the window by name, the exposure in the quarter

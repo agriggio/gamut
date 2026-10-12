@@ -877,10 +877,9 @@ fn the_side_panel_waits_for_the_file_coming_in() {
     assert!(harness.query_by_label("Copy All").is_none());
 }
 
-/// And on a gray measurement, which the gray ramp clips the same way; the
-/// false colors stay live on both. A measurement is read as data, which
-/// the pair at the head of the panel says, and has the row of windows,
-/// which a photo has not.
+/// A measurement is read as data, which the pair at the head of the panel
+/// says, and has the row of windows and neither the curves nor the
+/// exposure, which a photo has; the false colors are live on both.
 #[test]
 fn the_curves_are_dead_under_a_false_color() {
     use crate::image::Referred;
@@ -912,10 +911,14 @@ fn the_curves_are_dead_under_a_false_color() {
     let dead = |harness: &Harness<'static, State>, label: &str| {
         harness.get_by_label(label).accesskit_node().is_disabled()
     };
-    for index in 0..ToneMap::ALL.len() {
-        assert!(dead(&harness, &format!("Curve {index}")), "curve {index}");
-    }
-    assert_eq!(click(&mut harness, "Curve 1"), []);
+    assert!(
+        harness.query_by_label("Curve 0").is_none(),
+        "data has no curve"
+    );
+    assert!(
+        harness.query_by_label("Exposure").is_none(),
+        "and no exposure"
+    );
     assert!(!dead(&harness, "False color 0"));
     let lit = |harness: &Harness<'static, State>, label: &str| {
         matches!(
@@ -932,16 +935,6 @@ fn the_curves_are_dead_under_a_false_color() {
         click(&mut harness, "Window 0"),
         [Command::Press(Control::Window(0))]
     );
-    // And so is the exposure's slider, a measurement having no light to
-    // push: a drag along it asks for nothing.
-    assert!(dead(&harness, "Exposure"));
-    let slider = harness.get_by_label("Exposure").rect();
-    let y = slider.center().y;
-    assert_eq!(
-        drag(&mut harness, [slider.center().x, y], [slider.max.x, y]),
-        []
-    );
-
     // The same picture graded is light, and its curves are live until a
     // false color is put on it.
     image.referred = Referred::Display;

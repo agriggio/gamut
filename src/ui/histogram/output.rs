@@ -146,9 +146,11 @@ fn rebin(current: &Current, headroom: Headroom, room: f32, key: Key) -> Binned {
     let through = |v| response(display, axis, gray, headroom, v);
     // Along a ramp the response is where on it a value lands, 0 to 1 and
     // never past: the axis is the ramp itself. Light is spaced as the
-    // screen codes it, to the surface's room.
+    // screen codes it, to the surface's room — or to white where it is
+    // clipped there whatever the surface, as data is.
     let room = match ramp {
         Some(_) => 1.0,
+        None if display.clips_white(gray, headroom) => 1.0,
         None => resolved_room(fine, room, through),
     };
     let plot = fine.rebinned([0.0, placed(ramp, room)], |v| placed(ramp, through(v)));

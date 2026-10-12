@@ -1037,8 +1037,8 @@ fn the_window_rules_are_refused_on_a_photo() {
 }
 
 /// On a file read as data the rules are live: *As stored* puts a
-/// hand-moved window back at 0..1, setting the rule and nothing else, so
-/// an exposure on top of the window stays; and `e` cycles on from it.
+/// hand-moved window back at 0..1, and `e` cycles on from it. The
+/// exposure is refused, data having none.
 #[test]
 fn as_stored_puts_a_hand_moved_window_back_on_data() {
     use crate::image::display::AutoWindow;
@@ -1054,7 +1054,8 @@ fn as_stored_puts_a_hand_moved_window_back_on_data() {
     assert!(app.conditions().data);
     assert_eq!(display(&app).auto(), AutoWindow::Percentile);
     assert_eq!(app.perform(Action::StepBlack(0.05)), Effect::Redraw);
-    assert_eq!(app.perform(Action::Exposure(0.5)), Effect::Redraw);
+    assert_eq!(app.perform(Action::Exposure(0.5)), Effect::Nothing);
+    assert_eq!(app.perform(Action::CycleToneMap), Effect::Nothing);
     assert_eq!(display(&app).auto(), AutoWindow::Manual);
 
     let _ = app.act(Command::Press(Control::Window(0)));
@@ -1063,11 +1064,7 @@ fn as_stored_puts_a_hand_moved_window_back_on_data() {
         (display(&app).window_low(), display(&app).window_high()),
         (0.0, 1.0)
     );
-    assert_eq!(
-        display(&app).exposure_stops(),
-        0.5,
-        "the rule, not the exposure"
-    );
+    assert_eq!(display(&app).exposure_stops(), 0.0);
     assert_eq!(app.perform(Action::CycleAutoWindow), Effect::Redraw);
     assert_eq!(display(&app).auto(), AutoWindow::MinMax);
 }

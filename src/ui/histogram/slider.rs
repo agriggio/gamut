@@ -13,11 +13,10 @@ use crate::ui::slider::{self as line, Line};
 ///
 /// The run is [`SLIDER_STOPS`] each way. An exposure past that, from the
 /// keys or `--exposure`, stands hollow at the end, as a band handle out past
-/// the plot does. Dead where the picture has no exposure
-/// (`Display::has_exposure`) — a measurement, whose values are not light —
-/// and says why when rested on; the row stays, since the section's height
-/// is the file's.
-pub(super) fn slider(pass: &mut Pass, ui: &mut egui::Ui, exposure: f32, live: bool, room: Rect) {
+/// the plot does. Drawn only where the picture has an exposure
+/// (`Display::has_exposure`), which is every photo — see
+/// `display::rows_height`.
+pub(super) fn slider(pass: &mut Pass, ui: &mut egui::Ui, exposure: f32, room: Rect) {
     let ground = pass.theme.bar_background;
     let asked = line::show(
         pass,
@@ -30,7 +29,7 @@ pub(super) fn slider(pass: &mut Pass, ui: &mut egui::Ui, exposure: f32, live: bo
             step: EV_STEP,
             origin: 0.0,
             tip: Some(Tip::Exposure),
-            live,
+            live: true,
             ground,
         },
         room,

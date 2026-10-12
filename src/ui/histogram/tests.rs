@@ -522,14 +522,14 @@ fn the_false_colors_are_under_the_display_band_and_nowhere_else() {
         swatch_button(with, 0).y >= ev_row(with, ramp(with).bottom()).bottom(),
         "the false colors are under the row of stops"
     );
-    assert!(swatch_button(with, 0).bottom() <= Rows::new(rect, false).exposure.y);
+    assert!(swatch_button(with, 0).bottom() <= Rows::new(rect, false).span().0);
 }
 
 /// The rows sit under the Display section's band, inside the section, and
 /// the last of them ends it. A photo has the exposure and the curve; an
-/// image read as data has the row of windows between them, and its
-/// section is taller by that row — so the column moves only between the
-/// two kinds of file, never between two photos.
+/// image read as data has the row of windows alone, and its section is
+/// shorter by a row — so the column moves only between the two kinds of
+/// file, never between two photos.
 #[test]
 fn the_rows_sit_under_the_display_band() {
     let photo = picture(false);
@@ -540,7 +540,7 @@ fn the_rows_sit_under_the_display_band() {
     assert_eq!(
         data_rect.height - photo_rect.height,
         display::rows_height(true) - display::rows_height(false),
-        "taller by the row of windows"
+        "a row shorter"
     );
 
     for (current, rect) in [(&photo, photo_rect), (&data, data_rect)] {
@@ -558,7 +558,7 @@ fn the_rows_sit_under_the_display_band() {
             );
         }
         assert_eq!(
-            rows.bottom(),
+            rows.span().1,
             rect.bottom(),
             "the last row ends the section"
         );
@@ -567,21 +567,26 @@ fn the_rows_sit_under_the_display_band() {
             .map(|(widget, _)| widget)
             .collect();
         if is_data {
-            assert_eq!(labels, ["Exposure", "Window", "Curve"]);
-            assert_eq!(widgets.len(), WINDOWS.len() + ToneMap::ALL.len());
-        } else {
-            assert_eq!(labels, ["Exposure", "Curve"]);
-            assert_eq!(widgets.len(), ToneMap::ALL.len());
+            assert_eq!(labels, ["Window"]);
+            assert_eq!(widgets.len(), WINDOWS.len());
             assert!(
-                !widgets.iter().any(|w| matches!(w, Control::Window(_))),
-                "a photo's window is as stored and the handles'"
+                rows.slider().is_none() && rows.stops().is_none(),
+                "data has no exposure"
             );
+            continue;
         }
-        assert_eq!(rows.slider().x, rows.exposure.x);
-        assert!(rows.slider().right() < rows.stops().x);
-        assert_eq!(rows.stops().right(), inside.right());
+        assert_eq!(labels, ["Exposure", "Curve"]);
+        assert_eq!(widgets.len(), ToneMap::ALL.len());
         assert!(
-            rows.slider().width - HANDLE_GRIP > 3.0 * 2.0 * SLIDER_STOPS / EV_STEP,
+            !widgets.iter().any(|w| matches!(w, Control::Window(_))),
+            "a photo's window is as stored and the handles'"
+        );
+        let (slider, stops) = (rows.slider().unwrap(), rows.stops().unwrap());
+        assert_eq!(slider.x, rows.exposure.unwrap().0.x);
+        assert!(slider.right() < stops.x);
+        assert_eq!(stops.right(), inside.right());
+        assert!(
+            slider.width - HANDLE_GRIP > 3.0 * 2.0 * SLIDER_STOPS / EV_STEP,
             "a quarter stop is wider than a few pixels"
         );
     }
@@ -607,7 +612,7 @@ fn a_handle_is_easier_to_take_hold_of_than_it_is_wide() {
             grip.y >= plot.bottom() + PLOT_INSET,
             "{grip:?} over {plot:?}"
         );
-        assert!(grip.bottom() <= Rows::new(rect, false).exposure.y);
+        assert!(grip.bottom() <= Rows::new(rect, false).span().0);
         if gray {
             assert!(grip.bottom() <= swatch_button(plot, 0).y);
         }

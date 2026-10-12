@@ -665,6 +665,7 @@ fn the_handles_say_which_keys_step_them() {
         camera: None,
         conditions: Conditions {
             openable: false,
+            data: false,
             ..Conditions::ALIVE
         },
     };

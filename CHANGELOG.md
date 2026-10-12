@@ -33,6 +33,12 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
   *Trimmed* — is drawn only for a file read as data, and `e` does nothing
   on a photo. A photo's window is as stored and the handles move it; the
   reset puts it back.
+- The histogram's *Exposure* and *Curve* rows are drawn only for a photo,
+  and `d`, `f`, `t`, `--exposure` and `--tone-map` do nothing on a file
+  read as data, whatever its channels: the white handle does what the
+  exposure would, and a curve bent the values being read off. Data is
+  clipped at the top of its window on an HDR monitor too, as a
+  single-channel measurement already was.
 - A 16-bit TIFF of three colors with no profile is read as an sRGB
   photograph rather than as linear data, unless it carries GeoTIFF keys or
   a no-data value. 16-bit grayscale and floating-point TIFFs are read as

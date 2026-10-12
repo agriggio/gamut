@@ -609,13 +609,16 @@ pub enum When {
     /// The image on screen is read as data rather than as a photo: numbers
     /// windowed to what they hold, which is what the window rules are for.
     Data,
+    /// And read as a photo: light, which is what an exposure and a curve
+    /// are for.
+    Photo,
 }
 
 impl When {
     /// Every condition, for a test to hold them all up against the
     /// application.
     #[cfg(test)]
-    pub const ALL: [When; 17] = [
+    pub const ALL: [When; 18] = [
         When::RegionSelected,
         When::SeveralFiles,
         When::Animation,
@@ -633,6 +636,7 @@ impl When {
         When::Georeferenced,
         When::Geographic,
         When::Data,
+        When::Photo,
     ];
 
     /// The condition in a few words, as the popup's column reads it: a
@@ -656,6 +660,7 @@ impl When {
             When::Georeferenced => "a georeferenced file",
             When::Geographic => "a file placed in lat/long",
             When::Data => "an image read as data",
+            When::Photo => "an image read as a photo",
         }
     }
 
@@ -691,6 +696,7 @@ impl Conditions {
             When::Georeferenced => self.georeferenced,
             When::Geographic => self.geographic,
             When::Data => self.data,
+            When::Photo => !self.data && !self.nothing_open,
         }
     }
 }
@@ -1271,7 +1277,7 @@ pub static ROWS: &[Row] = &[
     },
     Row {
         section: Section::Display,
-        when: None,
+        when: Some(When::Photo),
         help: "Exposure down / up, a quarter stop",
         keys: Keys::Bound(&[
             Bound {
@@ -1329,7 +1335,7 @@ pub static ROWS: &[Row] = &[
     },
     Row {
         section: Section::Display,
-        when: None,
+        when: Some(When::Photo),
         help: "Toggle the curve on the highlights: clip, or roll off",
         keys: one!("display.tone-map", CycleToneMap, [key('t')]),
     },
@@ -2182,8 +2188,8 @@ impl App {
             ScaleUp => return self.rescale(ui::scale::step(self.ui_scale, true)),
             ScaleDown => return self.rescale(ui::scale::step(self.ui_scale, false)),
             ScaleReset => return self.rescale(ui::scale::DEFAULT),
-            // Refused by the display on a file with no exposure, so that
-            // the keys and the slider cannot drift.
+            // Refused by the display on data, which has no exposure, so
+            // that the keys and the slider cannot drift — see `When::Photo`.
             Exposure(stops) => {
                 return self.adjust(|current, _| current.display.adjust_exposure(stops));
             }
@@ -2214,8 +2220,9 @@ impl App {
                     current.display.step_white(by, axis, plot)
                 });
             }
-            // Refused under a false color, and by the display itself, so that
-            // the key and the button beside the histogram cannot drift.
+            // Refused under a false color and on data, by the display itself,
+            // so that the key and the button beside the histogram cannot
+            // drift — see `When::Photo`.
             CycleToneMap => {
                 return self.adjust(|current, _| {
                     let gray = current.image.is_gray();
@@ -2522,7 +2529,6 @@ impl App {
             openable: !self.openers.is_empty(),
             false_colored: current
                 .is_some_and(|current| current.display.false_colored(current.image.is_gray())),
-            measured_gray: current.is_some_and(|current| current.display.gray_measurement()),
             data: current.is_some_and(|current| Reading::of(&current.image) == Reading::Data),
             map_shown: current.is_some_and(|current| current.showing != Showing::Picture),
             picking: self.picking,
