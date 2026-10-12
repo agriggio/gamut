@@ -94,10 +94,11 @@ impl Section {
     /// How tall the section stands: its header, its plot, and what hangs
     /// under the plot. Fixed but for the Display section's row of false
     /// colors, which only a `gray` image has, and its row of windows, which
-    /// only an image read as `data` has, so that one file's column is laid
-    /// out where the last one's was, and a section is never shrunk to fit a
-    /// short window — the column scrolls instead.
-    pub const fn height(self, gray: bool, data: bool) -> f32 {
+    /// only an image read as `data` has, and the Image section's plots,
+    /// one to the stored channel, laid out as `image` says — so that one
+    /// file's column is laid out where the last one's was, and a section is
+    /// never shrunk to fit a short window — the column scrolls instead.
+    pub const fn height(self, gray: bool, data: bool, image: stored::Layout) -> f32 {
         let head = LABEL_HEIGHT + HEAD_GAP + PLOT_INSET;
         let band = PLOT_INSET + RAMP_GAP + RAMP_HEIGHT;
         match self {
@@ -120,14 +121,17 @@ impl Section {
             // A shorter plot and the row of stops under it: how much of the
             // lift is applied is the header's to say.
             Section::GainMap => head + SHORT_PLOT_HEIGHT + PLOT_INSET + EV_ROW,
-            // A shorter plot and the row of values under it.
-            Section::Image => head + SHORT_PLOT_HEIGHT + PLOT_INSET + EV_ROW,
+            // A plot to the stored channel, and the rows of values under
+            // them: see `stored::Layout`.
+            Section::Image => head + image.body_height(),
         }
     }
 
     /// The ground the bins stand on in the section laid out at `rect`: the
     /// whole width of the column, less the inset the ground is drawn out
-    /// into, which leaves the bins a point each.
+    /// into, which leaves the bins a point each. The Image section has a
+    /// plot to the stored channel, which `stored::plots` lays out; this is
+    /// its first, at the height a gray file's one plot has.
     pub fn plot(self, rect: Rect) -> Rect {
         let x = rect.x + PLOT_INSET;
         let y = rect.y + LABEL_HEIGHT + HEAD_GAP + PLOT_INSET;
@@ -135,7 +139,8 @@ impl Section {
         match self {
             Section::Output => Rect::new(x, y, width, PLOT_HEIGHT),
             Section::Display => display::plot_area(rect),
-            Section::GainMap | Section::Image => Rect::new(x, y, width, SHORT_PLOT_HEIGHT),
+            Section::GainMap => Rect::new(x, y, width, SHORT_PLOT_HEIGHT),
+            Section::Image => stored::first_plot(rect, stored::Layout::ONE),
         }
     }
 }
@@ -148,9 +153,10 @@ pub fn height(current: &Current) -> f32 {
         .filter(|section| section.applies(current))
         .collect();
     let (gray, data) = (current.image.is_gray(), is_data(current));
+    let image = stored::Layout::of(current);
     sections
         .iter()
-        .map(|section| section.height(gray, data))
+        .map(|section| section.height(gray, data, image))
         .sum::<f32>()
         + (sections.len().saturating_sub(1)) as f32 * SECTION_GAP
 }
@@ -161,11 +167,12 @@ pub fn height(current: &Current) -> f32 {
 pub fn layout(column: Rect, current: &Current) -> Vec<(Section, Rect)> {
     let mut y = column.y;
     let (gray, data) = (current.image.is_gray(), is_data(current));
+    let image = stored::Layout::of(current);
     Section::ALL
         .into_iter()
         .filter(|section| section.applies(current))
         .map(|section| {
-            let rect = Rect::new(column.x, y, column.width, section.height(gray, data));
+            let rect = Rect::new(column.x, y, column.width, section.height(gray, data, image));
             y += rect.height + SECTION_GAP;
             (section, rect)
         })

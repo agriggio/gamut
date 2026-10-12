@@ -18,6 +18,17 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
 
 ### Changed
 
+- The histogram's Image section plots each channel as the file stores it on
+  a plot of its own, one under the other, and no longer plots a luminance
+  line: the file stores none, and the one it drew weighted a wide-gamut
+  file's channels as though they were BT.709's. A photograph's channels
+  share one axis, as before; a file read as data has each channel on its
+  own range, trimmed of strays, with its own row of values under it.
+- Every statistic is now counted from every pixel rather than from a sample
+  of about two million: the extremes, the percentiles the *Full range* and
+  *Trimmed* windows read, the key the exposure is metered from, and every
+  plot. A stray value far off the rest of a measurement no longer leaves the
+  *Trimmed* window reading off a histogram it had emptied.
 - The histogram's row of window rules — *As stored*, *Full range*,
   *Trimmed* — is drawn only for a file read as data, and `e` does nothing
   on a photo. A photo's window is as stored and the handles move it; the

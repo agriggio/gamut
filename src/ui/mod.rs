@@ -55,6 +55,7 @@ use crate::image::exif::Exif;
 use crate::image::orient::Turn;
 use crate::image::region::{Grip, Region};
 use crate::image::sequence::Sequence;
+use crate::image::stats::Stored;
 use crate::image::{DecodedImage, Sample, Stats};
 use egui::Sense;
 pub use transport::Transport;
@@ -346,11 +347,12 @@ pub struct Face {
     /// section read, which `App::refresh_lift` and `App::measured` keep up
     /// with the lift.
     pub stats: Stats,
-    /// The image as the file stores it: no lift, and in its own primaries.
-    /// What the histogram's File section plots, set once when the image
-    /// arrives; the same as `stats` where showing the image moves no color
-    /// — see [`Stats::scan_as_stored`].
-    pub stored: Stats,
+    /// The image as the file stores it: each channel as stored, with no
+    /// lift and in the file's own primaries. What the histogram's Image
+    /// section plots, tallied once when the image arrives, in the same pass
+    /// as `stats` — see [`Stored`]. Shared, since it holds a tally per
+    /// channel and is cloned with the rest of the face.
+    pub stored: Arc<Stored>,
     pub display: Display,
     /// The precision it lost on its way to the device, which had no format
     /// that would hold it; `None` for the usual picture, which lost nothing.
@@ -365,10 +367,10 @@ impl Face {
     /// An image the file carries, as it first goes on screen: its own
     /// statistics, and a display found in them as any file's is.
     pub fn new(image: DecodedImage) -> Self {
-        let stats = Stats::scan(&image);
+        let (stats, stored) = Stats::scan_both(&image);
         Self {
             display: Display::for_image_with(&image, &stats, Default::default()),
-            stored: Stats::stored_beside(&image, &stats),
+            stored: Arc::new(stored),
             image: Arc::new(image),
             stats,
             reduced: None,

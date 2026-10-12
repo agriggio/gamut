@@ -421,15 +421,6 @@ impl DecodedImage {
         Reader::new(self, None).without_moves().read(x, y)
     }
 
-    /// Whether reading the picture to show it moves a color off where the
-    /// file's own curve puts it: a gain map lifts it, and a color file whose
-    /// primaries are not the working space's is carried into them. Where
-    /// neither does, the picture as stored and the picture as the display
-    /// starts from are one and the same, and are measured once.
-    pub fn color_moves(&self) -> bool {
-        self.gain_map.is_some() || (!self.is_gray() && self.color.primaries != Primaries::Bt709)
-    }
-
     /// Sanity check used by the loader, so a broken decoder fails loudly
     /// rather than reading past the end of a buffer on the upload path.
     pub fn validate(&self) -> Result<(), String> {
@@ -570,15 +561,9 @@ impl<'a> Reader<'a> {
         Self::with_curve(image, lift, curve)
     }
 
-    /// A reader for a walk over the picture as the file stores it: the
-    /// curve tabulated as [`Reader::tabulated`] has it, and nothing else —
+    /// This reader with whatever it would have moved a color by left out:
     /// no lift and no matrix, so that a wide-gamut color is read in the
     /// file's own primaries and a gain-mapped picture as its base.
-    pub fn as_stored(image: &'a DecodedImage) -> Self {
-        Self::tabulated(image, None).without_moves()
-    }
-
-    /// This reader with whatever it would have moved a color by left out.
     fn without_moves(self) -> Self {
         Self {
             lift: None,
@@ -607,22 +592,6 @@ impl<'a> Reader<'a> {
             matrix: (!channels.is_gray() && primaries != Primaries::Bt709)
                 .then(|| primaries.to_bt709()),
         }
-    }
-
-    pub fn channels(&self) -> Channels {
-        self.channels
-    }
-
-    /// What an integer sample is multiplied by to be a fraction of full
-    /// scale.
-    pub fn scale(&self) -> f32 {
-        self.scale
-    }
-
-    /// Whether the reader moves a color from where the curve alone would
-    /// put it: a lift, or a matrix.
-    pub fn moves_color(&self) -> bool {
-        self.lift.is_some() || self.matrix.is_some()
     }
 
     /// One pixel's components twice over: as stored — counts for integer

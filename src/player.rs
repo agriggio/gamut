@@ -27,6 +27,7 @@ use std::time::Duration;
 
 use crate::image::decode::{self, MAX_SEQUENCE_BYTES, Overrides};
 use crate::image::sequence::{FrameSource, MIN_DELAY};
+use crate::image::stats::Stored;
 use crate::image::{DecodedImage, Stats};
 use crate::loader::guard;
 
@@ -37,9 +38,8 @@ pub struct Frame {
     pub image: Arc<DecodedImage>,
     pub stats: Stats,
     /// The frame as the file stores it, for the histogram's plot of the
-    /// file: a second scan for a wide-gamut animation's every frame, made
-    /// here beside the first, ahead of the clock.
-    pub stored: Stats,
+    /// file: tallied in the same pass as `stats`, here, ahead of the clock.
+    pub stored: Arc<Stored>,
     /// How long it is shown for, never under [`MIN_DELAY`].
     pub delay: Duration,
 }
@@ -365,12 +365,11 @@ fn run(
         match guard("decoding a frame", || source.next()) {
             Ok(Some(frame)) => {
                 position += 1;
-                let stats = Stats::scan(&frame.image);
-                let stored = Stats::stored_beside(&frame.image, &stats);
+                let (stats, stored) = Stats::scan_both(&frame.image);
                 let frame = Arc::new(Frame {
                     image: Arc::new(frame.image),
                     stats,
-                    stored,
+                    stored: Arc::new(stored),
                     delay: frame.delay.max(MIN_DELAY),
                 });
                 let mut cache = lock(&shared.cache);
@@ -443,10 +442,10 @@ mod tests {
             ColorSpace::SRGB,
             AlphaMode::Opaque,
         );
-        let stats = Stats::scan(&image);
+        let (stats, stored) = Stats::scan_both(&image);
         Arc::new(Frame {
             image: Arc::new(image),
-            stored: stats.clone(),
+            stored: Arc::new(stored),
             stats,
             delay: MIN_DELAY,
         })

@@ -135,9 +135,15 @@ impl Counts {
     /// ends — a picture of black and white alone — is scaled to its fullest
     /// bin, and an empty one to the whole of the picture.
     pub(super) fn of(reference: &Plot) -> Self {
-        let planes = || std::iter::once(&reference.luma).chain(reference.color.iter().flatten());
+        Self::over(planes_of(reference))
+    }
+
+    /// The scale a set of planes sets, as [`Counts::of`] has a plot's set
+    /// it: the Image section's, which are one plot each.
+    pub(super) fn over<'a>(planes: impl Iterator<Item = &'a [u32; BINS]> + Clone) -> Self {
         let shares = |inside: bool| -> Vec<f32> {
-            planes()
+            planes
+                .clone()
                 .flat_map(|counts| {
                     let total = total(counts);
                     let bins = if inside { 1..BINS - 1 } else { 0..BINS };
@@ -160,15 +166,6 @@ impl Counts {
         Self { top }
     }
 
-    /// The scale of the two that cuts fewer bars off: the one two plots on
-    /// different axes share, set by whichever of them piles its pixels up
-    /// the most.
-    pub(super) fn wider(self, other: Self) -> Self {
-        Self {
-            top: self.top.max(other.top),
-        }
-    }
-
     /// How tall a bin holding `count` of a plane's `total` stands, from 0
     /// on the axis to 1 at the top of the plot, and past 1 where it is cut
     /// off there.
@@ -176,15 +173,25 @@ impl Counts {
         share_of(count, total) / self.top
     }
 
-    /// The fullest share a plane of `plot` holds at `bin`, where it stands
+    /// The fullest share any of `planes` holds at `bin`, where it stands
     /// past the top: what the header says of a bar cut off.
-    pub(super) fn cut_at(self, plot: &Plot, bin: usize) -> Option<f32> {
-        std::iter::once(&plot.luma)
-            .chain(plot.color.iter().flatten())
+    pub(super) fn cut_at<'a>(
+        self,
+        planes: impl IntoIterator<Item = &'a [u32; BINS]>,
+        bin: usize,
+    ) -> Option<f32> {
+        planes
+            .into_iter()
             .map(|counts| share_of(counts[bin], total(counts)))
             .filter(|&held| held > self.top)
             .max_by(f32::total_cmp)
     }
+}
+
+/// Every plane of `plot`: the luminance, then the color planes where it has
+/// them.
+pub(super) fn planes_of(plot: &Plot) -> impl Iterator<Item = &[u32; BINS]> + Clone {
+    std::iter::once(&plot.luma).chain(plot.color.iter().flatten())
 }
 
 /// Every count in a plane: the pixels it was counted from.
@@ -233,15 +240,54 @@ pub(super) fn bars(
     bars: Rect,
     rules: &[(usize, Color32)],
 ) {
+    // Luminance first, so that its line runs under the color planes'.
+    let planes: Vec<(&[u32; BINS], Color32)> =
+        std::iter::once((&plotted.luma, Color32::from(HISTOGRAM_LUMA.with_alpha(255))))
+            .chain(
+                plotted
+                    .color
+                    .iter()
+                    .flatten()
+                    .zip(HISTOGRAM_PLANES)
+                    .map(|(plane, ink)| (plane, Color32::from(ink))),
+            )
+            .collect();
+    draw(pass, ui, section, &planes, counts, bars, rules);
+}
+
+/// One plane on its own ground, in its own ink, as [`bars`] draws a plot's
+/// planes together: the Image section's plot of one stored channel.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn plane_bars(
+    pass: &Pass,
+    ui: &egui::Ui,
+    section: Section,
+    plane: &[u32; BINS],
+    ink: Color32,
+    counts: Counts,
+    bars: Rect,
+    rules: &[(usize, Color32)],
+) {
+    draw(pass, ui, section, &[(plane, ink)], counts, bars, rules);
+}
+
+/// The ground, `planes` over it, and `rules` over them.
+fn draw(
+    pass: &Pass,
+    ui: &egui::Ui,
+    section: Section,
+    planes: &[(&[u32; BINS], Color32)],
+    counts: Counts,
+    bars: Rect,
+    rules: &[(usize, Color32)],
+) {
     let painter = ui.painter();
     painter.rect_filled(
         egui::Rect::from(bars.inset(-PLOT_INSET, -PLOT_INSET)),
         PLOT_RADIUS,
         PLOT_BACKGROUND,
     );
-
-    let color: &[[u32; BINS]] = plotted.color.as_ref().map_or(&[], |planes| planes);
-    lines(pass, ui, &plotted.luma, color, counts, bars);
+    lines(pass, ui, planes, counts, bars);
     rule_over(pass, ui, section, bars, rules);
 }
 
@@ -339,17 +385,16 @@ fn rule_over(pass: &Pass, ui: &egui::Ui, section: Section, bars: Rect, rules: &[
     }
 }
 
-/// The plot's planes, at one column to a device pixel
+/// The plot's planes, in the order given, at one column to a device pixel
 /// and as tall as the fullest bin under it, so that a spike is not averaged
 /// away by its neighbors: each plane's area laid down in [`line_area`], each
 /// over the others', then each plane's top as a line in its own ink, the
-/// luminance plane's under the color planes'; and a cap in the accent along
-/// the top of a column cut off there.
+/// first plane's under the rest; and a cap in the accent along the top of a
+/// column cut off there.
 fn lines(
     pass: &Pass,
     ui: &egui::Ui,
-    luma: &[u32; BINS],
-    color: &[[u32; BINS]],
+    planes: &[(&[u32; BINS], Color32)],
     counts: Counts,
     bars: Rect,
 ) {
@@ -357,16 +402,6 @@ fn lines(
     let painter = ui
         .painter()
         .with_clip_rect(egui::Rect::from(bars.inset(-PLOT_INSET, -PLOT_INSET)));
-    // Luminance first, so that its line runs under the color planes'.
-    let planes: Vec<(&[u32; BINS], Color32)> =
-        std::iter::once((luma, Color32::from(HISTOGRAM_LUMA.with_alpha(255))))
-            .chain(
-                color
-                    .iter()
-                    .zip(HISTOGRAM_PLANES)
-                    .map(|(plane, ink)| (plane, Color32::from(ink))),
-            )
-            .collect();
     let columns: Vec<_> = grid.columns(bars.x, bars.width).collect();
     let heights: Vec<Vec<f32>> = planes
         .iter()
@@ -383,7 +418,7 @@ fn lines(
                 .collect()
         })
         .collect();
-    for (plane, (_, ink)) in heights.iter().zip(&planes) {
+    for (plane, (_, ink)) in heights.iter().zip(planes) {
         let area = line_area(*ink);
         for (column, &height) in columns.iter().zip(plane) {
             let top = grid.snap(bars.bottom() - height.min(1.0) * bars.height);
@@ -400,7 +435,7 @@ fn lines(
         }
     }
     let width = grid.device_pixels(LINE_PIXELS);
-    for (plane, (_, ink)) in heights.iter().zip(&planes) {
+    for (plane, (_, ink)) in heights.iter().zip(planes) {
         let points: Vec<_> = columns
             .iter()
             .zip(plane)
@@ -726,9 +761,9 @@ mod tests {
 
         // And the header says how much a cut bar holds, where the plane is
         // on screen, and nothing of a bar that is not cut.
-        let held = scale.cut_at(&plot, BINS / 2).expect("cut");
+        let held = scale.cut_at(planes_of(&plot), BINS / 2).expect("cut");
         assert!((held - 1_000_000.0 / total as f32).abs() < 1e-6, "{held}");
-        assert_eq!(scale.cut_at(&plot, 3), None);
+        assert_eq!(scale.cut_at(planes_of(&plot), 3), None);
     }
 
     /// The scale is a share of the picture, not a count: the same share

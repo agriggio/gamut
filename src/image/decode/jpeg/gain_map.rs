@@ -332,8 +332,9 @@ mod tests {
         // As the file stores it, the picture is the base, whatever the room:
         // what the histogram plots the file as.
         assert!(lifted.plot.max > 1.0);
-        let stored = Stats::scan_as_stored(&image).expect("a gain map moves color");
-        assert_eq!(stored.plot.max, 1.0);
+        let stored = crate::image::stats::Stored::scan(&image);
+        assert_eq!(stored.shared_range(), Some([0.0, 1.0]));
+        assert!(stored.planes.iter().all(|plane| plane.max <= 1.0));
     }
 
     /// The crate's own `apply_gainmap` over the same base and map, as the

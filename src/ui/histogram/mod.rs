@@ -61,8 +61,10 @@ const TOOLBAR_HEIGHT: f32 = CHIP_HEIGHT;
 /// with the panel's insets around them. What a window has to have room for
 /// before the toggle is alive — see [`super::PANELS_ROOM`]. The rest of the
 /// column scrolls under the row.
-pub const MIN_HEIGHT: f32 =
-    2.0 * PANEL_INSET + TOOLBAR_HEIGHT + HEADER_GAP + Section::Output.height(false, false);
+pub const MIN_HEIGHT: f32 = 2.0 * PANEL_INSET
+    + TOOLBAR_HEIGHT
+    + HEADER_GAP
+    + Section::Output.height(false, false, stored::Layout::ONE);
 
 /// The line a section opens with: its mark and name, what the pointer is
 /// reading at its stage, and the section's own button where it has one. As
@@ -395,15 +397,12 @@ impl Traced {
 struct Plots<'a> {
     pub output: &'a output::Binned,
     pub lift: Option<&'a Plot>,
-    /// The Image's, which is the stored scan's own where that stands on the
-    /// axis the section wants — see [`stored::plotted`].
-    pub image: &'a Plot,
-    /// The count axis the input's two plots — the Display's and the
-    /// Image's — share, and the ones the Output's and the gain map's each
-    /// stand on alone. The Image's stands alone too where its axis is not
-    /// the Display's, its bins then being of another width.
+    /// The Image's: a plot to the stored channel, and the count axis they
+    /// share — see [`stored::plotted`].
+    pub image: &'a stored::Plotted,
+    /// The count axes the Display's, the Output's and the gain map's plots
+    /// each stand on alone.
     pub counts: plot::Counts,
-    pub image_counts: plot::Counts,
     pub output_counts: plot::Counts,
     pub lift_counts: plot::Counts,
 }
@@ -432,6 +431,15 @@ fn marked(
 ) -> Traced {
     let mut traced = Traced::default();
     for &(section, rect) in layout {
+        // The Image section has a plot to the stored channel, and says
+        // which plane's bin the pointer is on itself.
+        if section == Section::Image {
+            if let Some((plane, bin)) = stored::hovered(rect, stored::Layout::of(current), cursor) {
+                traced.image = Some(stored::bin_mark(current, plots.image, plane, bin));
+                return traced;
+            }
+            continue;
+        }
         let bars = section.plot(rect);
         if let Some(bin) = hovered_bin(bars, cursor) {
             let (mut mark, plotted) = match section {
@@ -444,20 +452,16 @@ fn marked(
                     Some(&current.stats.plot),
                 ),
                 Section::GainMap => (gain_map::bin_mark(plots.lift, bin), plots.lift),
-                Section::Image => (
-                    stored::bin_mark(current, plots.image, bin),
-                    Some(plots.image),
-                ),
+                Section::Image => unreachable!("answered above"),
             };
             // A bar cut off at the top says how much it holds, which its
             // height no longer can.
             let counts = match section {
                 Section::Output => plots.output_counts,
                 Section::GainMap => plots.lift_counts,
-                Section::Display => plots.counts,
-                Section::Image => plots.image_counts,
+                Section::Display | Section::Image => plots.counts,
             };
-            let cut = plotted.and_then(|plotted| counts.cut_at(plotted, bin));
+            let cut = plotted.and_then(|plotted| counts.cut_at(plot::planes_of(plotted), bin));
             if let Some(words) = cut.and_then(share_words) {
                 mark.words = format!("{words} · {}", mark.words);
             }
@@ -473,7 +477,7 @@ fn marked(
             Section::Output => output::pixel_mark(current, headroom, plots.output, x, y),
             Section::Display => display::pixel_mark(current, headroom, x, y),
             Section::GainMap => gain_map::pixel_mark(current, plots.lift, x, y),
-            Section::Image => stored::pixel_mark(current, plots.image, x, y),
+            Section::Image => stored::pixel_mark(current, x, y),
         };
     }
     traced
@@ -609,13 +613,10 @@ fn column(pass: &mut Pass, ui: &mut egui::Ui, current: &Current) {
     let plots = Plots {
         output: &binned,
         lift: lift.as_deref(),
-        image: image.as_deref().unwrap_or(&current.stored.plot),
+        image: &image,
         counts,
-        image_counts: image.as_deref().map_or(counts, plot::Counts::of),
         output_counts: plot::Counts::of(&binned.plot),
-        lift_counts: lift
-            .as_deref()
-            .map_or(plot::Counts::of(&current.stored.plot), plot::Counts::of),
+        lift_counts: lift.as_deref().map_or(counts, plot::Counts::of),
     };
     let traced = marked(
         current,
@@ -643,25 +644,17 @@ fn column(pass: &mut Pass, ui: &mut egui::Ui, current: &Current) {
             Section::Output => output::show(pass, ui, current, rect, &plots, mark),
             Section::Display => display::show(pass, ui, current, rect, plots.counts, mark),
             Section::GainMap => gain_map::show(pass, ui, current, rect, &plots, mark),
-            Section::Image => stored::show(
-                pass,
-                ui,
-                current,
-                rect,
-                plots.image,
-                plots.image_counts,
-                mark,
-            ),
+            Section::Image => stored::show(pass, ui, current, rect, plots.image, mark),
         }
     }
 }
 
-/// The count axis the Display and Image plots share: the one that cuts off
-/// no more than a spike or two on either. Both are the input, which nothing
-/// set on the panel changes, so it holds still while the window, the
-/// exposure and the curve are dragged about.
+/// The count axis the Display plot stands on: the input, which nothing set
+/// on the panel changes, so it holds still while the window, the exposure
+/// and the curve are dragged about. The Image section's plots stand on one
+/// of their own, shared between them — see [`stored::Plotted`].
 fn input_counts(current: &Current) -> plot::Counts {
-    plot::Counts::of(&current.stored.plot).wider(plot::Counts::of(&current.stats.plot))
+    plot::Counts::of(&current.stats.plot)
 }
 
 /// A button on the panel at `rect`: its ground and ink by whether it is

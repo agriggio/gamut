@@ -110,13 +110,34 @@ into, and the side panel's width is worked out from it.
 
 ## What each section plots
 
-**Image** is `Face::stored`: `Stats::scan_as_stored`, the picture read with
-the curve resolved and nothing else — no lift, and the file's own primaries
-(`Reader::as_stored`). It is measured once, when the image arrives, on the
-loader's or the player's thread beside the scan the display starts from; a
-file whose reading moves no color — gray, or BT.709 with no gain map
-(`DecodedImage::color_moves`) — is not walked twice, and the stats are
-shared.
+**Image** is `Face::stored`, a `stats::Stored`: each of the file's channels
+as it stores them — no lift, the file's own primaries, and nothing the file
+does not hold, so no luminance, which is a weighting of the channels the
+display works out and, in the file's own primaries, not even that. It is a
+plot to the channel (`stored::plots`), one under the other in the order the
+file keeps them, each poured from the channel's tally (`stats::Plane::plot`):
+a bin to the code for integer samples, so the plot is exact, and a bin to a
+thousandth of an octave for floats. The tallies are made in the same pass as
+the scan the display starts from (`Stats::scan_both`), when the image
+arrives, on the loader's or the player's thread.
+
+Which range the plots span is the file's reading. A photograph's channels
+are compared against one another, so they share one axis: integer samples
+over the whole range they can hold, a raw's from black to the sensor's
+saturation, so that how far a picture stands short of clipping is the room
+to the right of it; light stored as floats in stops, read off every channel
+together as the Display's axis is read off the luminance. A file read as
+data may hold channels that are different quantities, so each has its own
+range and its own row of values under it (`Stored::shared`): the channel's
+exact extremes, or, where the trim the display's own percentile window uses
+would take a whole pixel or more off either end and the picture is a good
+deal narrower without it, the trimmed range (`stats::PLOT_TRIM`,
+`stats::WHOLE_FROM`), so that one undeclared sentinel does not put the
+whole of a measurement into one bin. What lies past either end piles into
+the end bin. A float tally's bins are too coarse for a measurement standing
+well off zero — a thousandth of an octave at 300 is wider than a bin over
+290..300 — so the fine bins of a float on a linear axis are counted from the
+pixels in a second pass instead (`stats::Binning`).
 
 **Gain map** is `GainMap::lift_plot`: the map's histogram in stops at the
 whole of the lift, evenly spaced, over the range the file describes the map
@@ -322,18 +343,15 @@ to the surface's room. The rules down the column are one pixel's path from
 the file to the screen.
 
 The Image section marks the pixel a channel at a time (`Mark::channels`):
-red, green and blue as the file holds them, and the luminance worked out
-from them as the plot's luminance plane is, each with a rule on its own
-plane in that plane's ink (`Plane::ink`) — and its number on a line of its own under the header, after a
-dot in the same ink, a cell to a channel so the numbers stay put as the
-pointer moves. Four numbers do not fit beside a heading at a float's
-decimals, which is why the line is its own. They are written as the bottom
-bar's Decimal format writes a pixel (`pixel::component`): counts for 8- and
-16-bit samples, the number for floats, and the luminance put back on the
-file's curve and scale so that it reads in the same units as the channels
-beside it.
-A file's channels land on its plot as its codes do, so each rule stands on
-the bar its channel was counted in.
+red, green and blue as the file holds them, or a gray file's one channel,
+each with a rule on its own plane's plot in that plane's ink (`Plane::ink`)
+and its number at the end of the header in the same ink, a cell to a
+channel so the numbers stay put as the pointer moves. They are written as
+the bottom bar's Decimal format writes a pixel (`pixel::component`): counts
+for 8- and 16-bit samples, the number for floats. A file's channels land on
+its plot as its codes do, so each rule stands on the bar its channel was
+counted in. A pointer on one of the section's plots marks that plane alone
+(`stored::hovered`), with the value its bin stands for.
 
 A pointer on one section's plot is reading that plot's axis and is on no
 pixel besides, so only that section marks anything, with the value its bin
@@ -706,12 +724,13 @@ nothing here smooths the plot.
 ### The count axes
 
 A bar's height is the share of its plane's pixels in its bin, against a top
-(`plot::Counts`). The input's two plots, the Display's and the Image's,
-share one (`histogram::input_counts`), so a bar of one height is the same
-share of the picture in each, and what the gain map's lift and the working
-space do to the file read as bars growing or shrinking between them. Both
-are the input, which nothing set on the panel changes, so their scale holds
-still while the window, the exposure and the curve are dragged about.
+(`plot::Counts`). The Display's stands on the input
+(`histogram::input_counts`), which nothing set on the panel changes, so its
+scale holds still while the window, the exposure and the curve are dragged
+about. The Image section's plots share one of their own
+(`stored::Plotted::counts`), so that a bar of one height is the same share
+of the picture on each channel's plot, and a channel that piles up where
+another spreads out reads as such.
 
 The Output's top is its own, worked out again from what goes out. A scale
 held to the input's is the wrong one for it: a display that stretches the

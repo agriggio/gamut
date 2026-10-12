@@ -1,11 +1,26 @@
 //! Value statistics, used to choose a sensible window for images whose
 //! numbers do not conveniently fill 0..1 — 12-bit sensor data stored in
-//! 16-bit containers, or HDR frames with a few very bright highlights.
+//! 16-bit containers, or HDR frames with a few very bright highlights — and
+//! the counts the histogram panel plots.
+//!
+//! Every pixel is counted, in one pass divided between the threads: the
+//! file's own channels into a tally of their stored values, which for
+//! integer samples is a bin to the code and so exact, and for floats a bin
+//! to every thousandth of an octave ([`Tally`]); the luminance, and the
+//! channels as the working space has them where that moves them, into the
+//! same float tallies. Everything else here — the extremes, the key, the
+//! percentiles, the fine bins on the plot's axis, the Image section's plot
+//! of each stored channel — is read off those tallies afterwards, which is a
+//! walk over some thousands of bins rather than over the picture again.
+//! Nothing is sampled: a tally of every pixel is what makes the extremes the
+//! file's own rather than a stride's, and it is cheaper than the sampled
+//! scan it replaces, since a tally is an index and an increment where the
+//! scan decoded, converted and took the logarithm of each pixel in turn.
 
 use std::sync::Arc;
 
-use super::gain_map::Table;
-use super::{Channels, DecodedImage, Reader, Referred, Sample, Samples, Transfer};
+use super::gain_map::{GainMap, Table};
+use super::{Channels, DecodedImage, Primaries, Referred, Sample, Samples, Transfer};
 
 /// Bins are plenty for percentile work and cheap to keep around; the UI draws
 /// this directly as a histogram.
@@ -21,10 +36,6 @@ pub const BINS: usize = 256;
 /// off it, and a stage that does nothing puts every one wholly back in it.
 pub const FINE_BINS: usize = (BINS - 1) * 16 + 1;
 
-/// At most this many pixels are examined; larger images are sampled on a
-/// stride. Enough for stable percentiles, fast enough to run on every load.
-const MAX_SAMPLED_PIXELS: usize = 1 << 21;
-
 /// Number of color components a pixel carries, alpha aside.
 pub const COLOR: usize = 3;
 
@@ -35,16 +46,6 @@ pub const COLOR: usize = 3;
 /// covers, and the brightest, which are the light sources the curve is
 /// for. A meter reads the scene between them.
 const KEY_TRIM: f64 = 0.05;
-
-/// The bins the lit pixels' luminance is counted in for the key, in stops:
-/// every finite positive `f32` has a logarithm in `LOG_FLOOR..LOG_CEIL`,
-/// and [`LOG_BINS_PER_STOP`] of them to the stop is finer than any meter
-/// reads. Fixed rather than fitted to the picture so that the range pass
-/// can bin as it goes.
-const LOG_FLOOR: f32 = -150.0;
-const LOG_CEIL: f32 = 128.0;
-const LOG_BINS_PER_STOP: usize = 8;
-const LOG_BINS: usize = (LOG_CEIL - LOG_FLOOR) as usize * LOG_BINS_PER_STOP;
 
 /// How a plot of the picture is spaced along its axis: what a position on
 /// [`Plot`]'s axis, and on [`Fine`]'s, stands for.
@@ -148,29 +149,27 @@ const FLOOR_TRIM: f64 = 0.001;
 
 /// The range a stops axis spans — its floor and its top, in whole stops —
 /// for a picture whose plotted channels reach `highest` and whose lit
-/// luminance is binned by its logarithm in `log_counts`, as the range pass
-/// bins it: the top is the first whole stop at or above the brightest
-/// channel, and the floor is the darkest lit stop after the bottom
-/// [`FLOOR_TRIM`] is left off, no more than [`STOPS_REACH`] under the top
-/// and at least a stop under it, so that the axis always has a span.
+/// pixels are tallied in `lit`: the top is the first whole stop at or above
+/// the brightest channel, and the floor is the darkest lit stop after the
+/// bottom [`FLOOR_TRIM`] is left off, no more than [`STOPS_REACH`] under the
+/// top and at least a stop under it, so that the axis always has a span.
 /// `None` where nothing reaches above zero, which has no top.
-fn stops_axis(highest: f32, log_counts: &[u32]) -> Option<(f32, f32)> {
+fn stops_axis(highest: f32, lit: &Lit) -> Option<(f32, f32)> {
     // Written so that a `highest` that is not a number has no top either.
     let top = highest.log2().ceil();
     if !top.is_finite() {
         return None;
     }
-    let total: u64 = log_counts.iter().map(|&count| u64::from(count)).sum();
-    let trim = (total as f64 * FLOOR_TRIM) as u64;
+    let trim = (lit.total as f64 * FLOOR_TRIM) as u64;
     let mut seen = 0u64;
-    let darkest = log_counts
+    let darkest = lit
+        .bins
         .iter()
-        .position(|&count| {
-            seen += u64::from(count);
-            count > 0 && seen > trim
+        .find(|bin| {
+            seen += bin.count;
+            seen > trim
         })
-        .map(|bin| LOG_FLOOR + bin as f32 / LOG_BINS_PER_STOP as f32)
-        .unwrap_or(f32::NEG_INFINITY);
+        .map_or(f32::NEG_INFINITY, |bin| bin.low);
     let floor = darkest.floor().max(top - STOPS_REACH).min(top - 1.0);
     Some((floor, top))
 }
@@ -219,7 +218,7 @@ pub struct Plot {
     /// What the bins span, on the file's own curve.
     pub min: f32,
     pub max: f32,
-    /// Counts over `min..max` for the luminance of each sampled pixel.
+    /// Counts over `min..max` for the luminance of each pixel.
     pub luma: [u32; BINS],
     /// Red, green and blue, for an image that carries color. Their range is
     /// what sets the axis; luminance is a weighted average of them and so
@@ -251,8 +250,7 @@ impl Plot {
     ///
     /// `None` where there is no bar to point at: an axis with no span, a
     /// value the scan would have thrown out as nodata, or one outside the
-    /// range it measured — which a strided scan can miss, and which the plot
-    /// therefore does not cover.
+    /// range the plot covers.
     pub fn bin_of(&self, axis: Axis, image: &DecodedImage, sample: &Sample) -> Option<usize> {
         self.bin_at(axis.place_of(image, sample)?)
     }
@@ -266,15 +264,7 @@ impl Plot {
     /// about a value off the axis has genuinely nowhere to stand, and one
     /// held at the edge would claim a bar that is not the pixel's.
     pub fn bin_at(&self, stored: f32) -> Option<usize> {
-        // Written so that a non-finite axis fails the test as well: every
-        // comparison against a NaN is false, and the positive form would let
-        // one through to divide by it.
-        let span = self.max - self.min;
-        if !span.is_finite() || span <= f32::MIN_POSITIVE {
-            return None;
-        }
-        let bin = (stored - self.min) * ((BINS - 1) as f32 / span) + 0.5;
-        (0.0..BINS as f32).contains(&bin).then_some(bin as usize)
+        bin_in([self.min, self.max], stored)
     }
 
     /// The share of the samples the display is throwing away at each end:
@@ -341,6 +331,21 @@ impl Plot {
     }
 }
 
+/// Which of [`BINS`] bins spread as sample points over `range` a value `at`
+/// on the same axis falls in: the bins are points from one end to the
+/// other, and a value goes to the nearest. `None` off either end, or on an
+/// axis with no span — written so that a non-finite axis fails the test
+/// as well, since every comparison against a NaN is false.
+pub fn bin_in(range: [f32; 2], at: f32) -> Option<usize> {
+    let [min, max] = range;
+    let span = max - min;
+    if !span.is_finite() || span <= f32::MIN_POSITIVE {
+        return None;
+    }
+    let bin = (at - min) * ((BINS - 1) as f32 / span) + 0.5;
+    (0.0..BINS as f32).contains(&bin).then_some(bin as usize)
+}
+
 /// The pixels [`Plot`] counts, counted again in [`FINE_BINS`] over the same
 /// axis, in the same pass and with the same rounding.
 ///
@@ -378,21 +383,6 @@ impl Fine {
             color: color.then(|| std::array::from_fn(|_| vec![0; FINE_BINS])),
             code: None,
         }
-    }
-
-    fn merge(mut self, other: &Self) -> Self {
-        fn add(into: &mut [u32], from: &[u32]) {
-            for (sum, count) in into.iter_mut().zip(from) {
-                *sum += count;
-            }
-        }
-        add(&mut self.luma, &other.luma);
-        if let (Some(planes), Some(others)) = (self.color.as_mut(), &other.color) {
-            for (plane, other) in planes.iter_mut().zip(others) {
-                add(plane, other);
-            }
-        }
-        self
     }
 
     /// The plot of what `through` makes of every value on this axis, binned
@@ -490,34 +480,7 @@ impl Fine {
                 if count == 0 {
                     continue;
                 }
-                let width = to - from;
-                // A stretch the stage flattens to a point — the run past a
-                // window's end — is the one bin it lands in.
-                if width <= 0.0 {
-                    spread[(from.round().clamp(0.0, last)) as usize] += f64::from(count);
-                    continue;
-                }
-                let first = (from + 0.5).floor().clamp(0.0, last) as usize;
-                let final_bin = (to + 0.5).floor().clamp(0.0, last) as usize;
-                for (bin, share) in spread
-                    .iter_mut()
-                    .enumerate()
-                    .take(final_bin + 1)
-                    .skip(first)
-                {
-                    // The end bins reach out past the axis, so that what
-                    // lands off it piles there.
-                    let left = if bin == 0 { from } else { bin as f32 - 0.5 };
-                    let right = if bin == BINS - 1 {
-                        to
-                    } else {
-                        bin as f32 + 0.5
-                    };
-                    let overlap = right.min(to) - left.max(from);
-                    if overlap > 0.0 {
-                        *share += f64::from(count) * f64::from(overlap / width);
-                    }
-                }
+                spread_over(&mut spread, from, to, f64::from(count));
             }
             *into = spread.map(|count| (count * SHARES).round() as u32);
         };
@@ -531,11 +494,1045 @@ impl Fine {
     }
 }
 
+/// `count` spread over the stretch `from..to` of bins, in bin units, where
+/// bin `k` is the stretch from `k - 0.5` to `k + 0.5` and the two end bins
+/// reach out past the axis, so that what lands off it piles into the end
+/// it went out of. A stretch flattened to a point — the run past a window's
+/// end — is the one bin it lands in.
+fn spread_over(into: &mut [f64], from: f32, to: f32, count: f64) {
+    let last = (into.len() - 1) as f32;
+    let width = to - from;
+    if width <= 0.0 {
+        into[(from.round().clamp(0.0, last)) as usize] += count;
+        return;
+    }
+    let first = (from + 0.5).floor().clamp(0.0, last) as usize;
+    let final_bin = (to + 0.5).floor().clamp(0.0, last) as usize;
+    for (bin, share) in into.iter_mut().enumerate().take(final_bin + 1).skip(first) {
+        let left = if bin == 0 { from } else { bin as f32 - 0.5 };
+        let right = if bin as f32 >= last {
+            to
+        } else {
+            bin as f32 + 0.5
+        };
+        let overlap = right.min(to) - left.max(from);
+        if overlap > 0.0 {
+            *share += count * f64::from(overlap / width);
+        }
+    }
+}
+
+/// `count` whole pixels spread over the stretch `from..to` of bins, as
+/// [`spread_over`] spreads a share, but kept whole: each bin gets the whole
+/// pixels its share comes to, and the pixels left over go one each to the
+/// bins with the largest remainders, so that the stretch holds exactly
+/// `count` afterwards. One pixel goes wholly to the bin it mostly lies in.
+fn spread_whole(into: &mut [u32], from: f32, to: f32, count: u32) {
+    let last = (into.len() - 1) as f32;
+    let width = to - from;
+    if width <= 0.0 || count == 0 {
+        into[(from.round().clamp(0.0, last)) as usize] += count;
+        return;
+    }
+    let first = (from + 0.5).floor().clamp(0.0, last) as usize;
+    let final_bin = (to + 0.5).floor().clamp(0.0, last) as usize;
+    if first == final_bin {
+        into[first] += count;
+        return;
+    }
+    let mut given = 0u32;
+    let mut remainders: Vec<(f64, usize)> = Vec::with_capacity(final_bin - first + 1);
+    for (bin, slot) in into.iter_mut().enumerate().take(final_bin + 1).skip(first) {
+        let left = if bin == 0 { from } else { bin as f32 - 0.5 };
+        let right = if bin as f32 >= last {
+            to
+        } else {
+            bin as f32 + 0.5
+        };
+        let overlap = (right.min(to) - left.max(from)).max(0.0);
+        let share = f64::from(count) * f64::from(overlap / width);
+        let whole = share.floor() as u32;
+        *slot += whole;
+        given += whole;
+        remainders.push((share - f64::from(whole), bin));
+    }
+    remainders.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+    for (_, bin) in remainders.into_iter().take((count - given) as usize) {
+        into[bin] += 1;
+    }
+}
+
 /// What [`Fine::rebinned`] counts a pixel as: sixteen shares, so that a
 /// pixel spread over two or three bins keeps a share in each. A plot is read
 /// by its bins against one another and against their sum, which the unit
 /// leaves alone.
 pub const SHARES: f64 = 16.0;
+
+// ---------------------------------------------------------------------------
+// Tallies: what one pass over the pixels counts.
+
+/// How finely a float is tallied: its exponent and this many bits of its
+/// mantissa, so that every value within a thousandth of an octave of
+/// another is counted with it. Finer than the fine bins of a plot anywhere
+/// on a stops axis, and about as fine at the top of a curve's.
+const MANTISSA_BITS: u32 = 10;
+/// The octaves a float is tallied over: `2^EXPONENT_LOW` up to but not
+/// including `2^EXPONENT_HIGH`, with a bin below the range for everything
+/// smaller, zero among it, and one above it for everything larger. Sixty-
+/// four octaves either side of one is more than any picture holds light
+/// over, and a measurement outside it is in the end bins, whose exact
+/// extremes are kept beside the tally.
+const EXPONENT_LOW: i32 = -32;
+const EXPONENT_HIGH: i32 = 32;
+const OCTAVES: usize = (EXPONENT_HIGH - EXPONENT_LOW) as usize;
+/// The bins one sign's magnitudes are tallied in: below the range, each
+/// octave's `2^MANTISSA_BITS` bins, and above it.
+const MAGNITUDES: usize = 2 + (OCTAVES << MANTISSA_BITS);
+/// Both signs: the negatives first, largest magnitude first, so that the
+/// bins run in value order from the most negative to the most positive.
+const KEY_BINS: usize = 2 * MAGNITUDES;
+
+/// Which magnitude bin a finite float with these `bits` falls in.
+#[inline]
+fn magnitude_of(bits: u32) -> usize {
+    let exponent = ((bits >> 23) & 0xFF) as i32 - 127;
+    if exponent < EXPONENT_LOW {
+        0
+    } else if exponent >= EXPONENT_HIGH {
+        MAGNITUDES - 1
+    } else {
+        let mantissa = (bits >> (23 - MANTISSA_BITS)) & ((1 << MANTISSA_BITS) - 1);
+        1 + (((exponent - EXPONENT_LOW) as usize) << MANTISSA_BITS) + mantissa as usize
+    }
+}
+
+/// The bin a finite `value` is tallied in.
+#[inline]
+fn key_of(value: f32) -> usize {
+    let bits = value.to_bits();
+    let magnitude = magnitude_of(bits);
+    if bits & 0x8000_0000 != 0 {
+        MAGNITUDES - 1 - magnitude
+    } else {
+        MAGNITUDES + magnitude
+    }
+}
+
+/// The values the magnitude bin `magnitude` spans, `low..high`.
+fn magnitude_edges(magnitude: usize) -> (f32, f32) {
+    if magnitude == 0 {
+        (0.0, (EXPONENT_LOW as f32).exp2())
+    } else if magnitude == MAGNITUDES - 1 {
+        ((EXPONENT_HIGH as f32).exp2(), f32::MAX)
+    } else {
+        let within = magnitude - 1;
+        let exponent = EXPONENT_LOW + (within >> MANTISSA_BITS) as i32;
+        let step = 1.0 / (1u32 << MANTISSA_BITS) as f32;
+        let fraction = (within & ((1 << MANTISSA_BITS) - 1)) as f32 * step;
+        let scale = (exponent as f32).exp2();
+        (scale * (1.0 + fraction), scale * (1.0 + fraction + step))
+    }
+}
+
+/// The values the tally bin `key` spans, `low..high`, in value order.
+fn key_edges(key: usize) -> (f32, f32) {
+    if key >= MAGNITUDES {
+        magnitude_edges(key - MAGNITUDES)
+    } else {
+        let (low, high) = magnitude_edges(MAGNITUDES - 1 - key);
+        (-high, -low)
+    }
+}
+
+/// The counts of one quantity over every pixel: a bin to the code for an
+/// integer channel as stored, which is exact, and a bin to every
+/// [`MANTISSA_BITS`] of an octave for a float — a stored float channel, a
+/// luminance, a channel the working space has moved — with the exact
+/// extremes kept beside the bins.
+#[derive(Clone, Debug)]
+enum Tally {
+    Codes {
+        /// A count to the code.
+        counts: Vec<u32>,
+        /// The code that is full scale, which a count is divided by to be a
+        /// fraction of it.
+        full: f32,
+    },
+    Keys {
+        /// A count to the [`key_of`] bin.
+        counts: Vec<u32>,
+        min: f32,
+        max: f32,
+    },
+}
+
+/// One bin of a tally with something in it: the values it spans, the one
+/// value it stands for — a code's own, or the middle of a float bin — and
+/// how many pixels are in it.
+#[derive(Clone, Copy, Debug)]
+struct Bin {
+    low: f32,
+    high: f32,
+    value: f32,
+    count: u32,
+}
+
+impl Tally {
+    fn codes(full: f32, codes: usize) -> Self {
+        Tally::Codes {
+            counts: vec![0; codes],
+            full,
+        }
+    }
+
+    fn keys() -> Self {
+        Tally::Keys {
+            counts: vec![0; KEY_BINS],
+            min: f32::INFINITY,
+            max: f32::NEG_INFINITY,
+        }
+    }
+
+    fn add(&mut self, other: &Self) {
+        fn add_counts(into: &mut [u32], from: &[u32]) {
+            for (sum, count) in into.iter_mut().zip(from) {
+                *sum += count;
+            }
+        }
+        match (&mut *self, other) {
+            (Tally::Codes { counts, .. }, Tally::Codes { counts: from, .. }) => {
+                add_counts(counts, from);
+            }
+            (
+                Tally::Keys { counts, min, max },
+                Tally::Keys {
+                    counts: from,
+                    min: low,
+                    max: high,
+                },
+            ) => {
+                add_counts(counts, from);
+                *min = min.min(*low);
+                *max = max.max(*high);
+            }
+            _ => unreachable!("a tally is merged with one of its own kind"),
+        }
+    }
+
+    /// Every pixel counted.
+    fn total(&self) -> u64 {
+        let counts = match self {
+            Tally::Codes { counts, .. } | Tally::Keys { counts, .. } => counts,
+        };
+        counts.iter().map(|&count| u64::from(count)).sum()
+    }
+
+    /// The smallest and largest value counted, in the tally's own units — a
+    /// fraction of full scale for codes — and infinities either way round
+    /// where nothing was.
+    fn extremes(&self) -> (f32, f32) {
+        match self {
+            Tally::Codes { counts, full } => {
+                let first = counts.iter().position(|&count| count > 0);
+                let last = counts.iter().rposition(|&count| count > 0);
+                match (first, last) {
+                    (Some(first), Some(last)) => (first as f32 / full, last as f32 / full),
+                    _ => (f32::INFINITY, f32::NEG_INFINITY),
+                }
+            }
+            Tally::Keys { min, max, .. } => (*min, *max),
+        }
+    }
+
+    /// The bins with anything in them, in value order.
+    fn bins(&self) -> impl Iterator<Item = Bin> + '_ {
+        /// The values a bin spans and the one it stands for, by its index.
+        type Edges<'a> = Box<dyn Fn(usize) -> (f32, f32, f32) + 'a>;
+        let (counts, edges): (&[u32], Edges) = match self {
+            Tally::Codes { counts, full } => (
+                counts,
+                Box::new(move |code| {
+                    let value = code as f32 / full;
+                    let half = 0.5 / full;
+                    (value - half, value + half, value)
+                }),
+            ),
+            Tally::Keys { counts, min, max } => (
+                counts,
+                Box::new(move |key| {
+                    // The bins at the ends reach to the exact extremes rather
+                    // than to the ends of the float's range.
+                    let (low, high) = key_edges(key);
+                    let (low, high) = (low.max(*min), high.min(*max).max(low));
+                    (low, high, (low + high) / 2.0)
+                }),
+            ),
+        };
+        counts
+            .iter()
+            .enumerate()
+            .filter(|(_, count)| **count > 0)
+            .map(move |(index, &count)| {
+                let (low, high, value) = edges(index);
+                Bin {
+                    low,
+                    high,
+                    value,
+                    count,
+                }
+            })
+    }
+
+    /// The value below which `fraction` of the pixels fall, `fraction` in
+    /// 0..=1, in the tally's own units: the low edge of the bin the
+    /// `fraction`th pixel is in, held within the extremes. Returns the
+    /// extremes themselves at the ends.
+    fn percentile(&self, fraction: f32) -> f32 {
+        let total = self.total();
+        let (min, max) = self.extremes();
+        // Written so that extremes that are not numbers fail the test too.
+        if total == 0 || max.partial_cmp(&min) != Some(std::cmp::Ordering::Greater) {
+            return if fraction <= 0.0 { min } else { max };
+        }
+        let target = (f64::from(fraction.clamp(0.0, 1.0)) * total as f64) as u64;
+        let mut running = 0u64;
+        for bin in self.bins() {
+            running += u64::from(bin.count);
+            if running >= target {
+                return match self {
+                    Tally::Codes { .. } => bin.value,
+                    Tally::Keys { .. } => bin.low.clamp(min, max),
+                };
+            }
+        }
+        max
+    }
+
+    /// Takes every pixel whose value `decode` makes `sentinel` of out of a
+    /// tally of codes: the no-data value, which is no measurement.
+    fn without(&mut self, sentinel: f32, decode: impl Fn(f32) -> f32) {
+        if let Tally::Codes { counts, full } = self {
+            for (code, count) in counts.iter_mut().enumerate() {
+                if decode(code as f32 / *full) == sentinel {
+                    *count = 0;
+                }
+            }
+        }
+    }
+
+    /// The counts of `self` with `other`'s taken off, bin for bin: the lit
+    /// pixels, where `other` is the tally of the transparent ones.
+    fn less(&self, other: &Self) -> Self {
+        let mut left = self.clone();
+        match (&mut left, other) {
+            (Tally::Codes { counts, .. }, Tally::Codes { counts: from, .. })
+            | (Tally::Keys { counts, .. }, Tally::Keys { counts: from, .. }) => {
+                for (count, taken) in counts.iter_mut().zip(from) {
+                    *count = count.saturating_sub(*taken);
+                }
+            }
+            _ => unreachable!("a tally is taken off one of its own kind"),
+        }
+        left
+    }
+
+    /// The tally's pixels poured into `bins` sample points over `range` on
+    /// an axis `place` puts a value on: a code wholly into the bin nearest
+    /// its own place, as the scan always binned a sample, and a float bin
+    /// spread over the stretch its edges come to, whole pixels at a time.
+    /// What lands off either end piles into the end bin, as a clamp would
+    /// have put it. A value `place` makes no number of is left out.
+    fn pour_whole(&self, into: &mut [u32], range: [f32; 2], place: impl Fn(f32) -> f32) {
+        let [low, high] = range;
+        let span = high - low;
+        if !(span.is_finite() && span > f32::MIN_POSITIVE) {
+            return;
+        }
+        let last = (into.len() - 1) as f32;
+        let scale = last / span;
+        let at = |value: f32| (place(value) - low) * scale;
+        for bin in self.bins() {
+            match self {
+                Tally::Codes { .. } => {
+                    let middle = at(bin.value);
+                    if middle.is_nan() {
+                        continue;
+                    }
+                    into[(middle + 0.5).floor().clamp(0.0, last) as usize] += bin.count;
+                }
+                Tally::Keys { .. } => {
+                    let (from, to) = (at(bin.low), at(bin.high));
+                    if from.is_nan() || to.is_nan() {
+                        continue;
+                    }
+                    let (from, to) = (from.min(to), from.max(to));
+                    if !(to - from).is_finite() {
+                        // Off an end entirely, as nothing is on a stops axis.
+                        let middle = if from.is_finite() { from } else { to };
+                        into[middle.clamp(0.0, last).round() as usize] += bin.count;
+                        continue;
+                    }
+                    spread_whole(into, from, to, bin.count);
+                }
+            }
+        }
+    }
+
+    /// The tally's pixels poured into [`BINS`] over `range` on an axis
+    /// `place` puts a value on, in [`SHARES`] of a pixel, every bin spread
+    /// over the stretch its edges come to — a code over the stretch to
+    /// halfway to its neighbors, so that codes on an axis wider than a bin
+    /// to the code do not comb, as [`Fine::rebinned`] spreads them — and
+    /// never narrower than a bin. What lands off either end piles into it.
+    fn pour_shares(&self, range: [f32; 2], place: impl Fn(f32) -> f32) -> [u32; BINS] {
+        let mut spread = [0.0f64; BINS];
+        let [low, high] = range;
+        let span = high - low;
+        if !(span.is_finite() && span > f32::MIN_POSITIVE) {
+            return [0; BINS];
+        }
+        let last = (BINS - 1) as f32;
+        let scale = last / span;
+        let at = |value: f32| (place(value) - low) * scale;
+        for bin in self.bins() {
+            let middle = at(bin.value);
+            if middle.is_nan() {
+                continue;
+            }
+            let (below, above) = (at(bin.low), at(bin.high));
+            let (mut from, mut to) = (below.min(above).min(middle), below.max(above).max(middle));
+            if !(to - from).is_finite() {
+                let bin_at = middle.clamp(0.0, last).round();
+                (from, to) = (bin_at - 0.5, bin_at + 0.5);
+            } else if to - from < 1.0 {
+                // Never narrower than a bin: a code or a float bin finer
+                // than the plot stands a bin wide where it lands, as a
+                // sample point does.
+                let widen = (1.0 - (to - from)) / 2.0;
+                (from, to) = (from - widen, to + widen);
+            }
+            spread_over(&mut spread, from, to, f64::from(bin.count));
+        }
+        spread.map(|count| (count * SHARES).round() as u32)
+    }
+}
+
+/// The lit pixels of a luminance tally — those that measured light, above
+/// zero and not transparent — bin by bin in value order, each with the
+/// stops its low edge stands at, and what they come to.
+struct Lit {
+    bins: Vec<LitBin>,
+    total: u64,
+}
+
+struct LitBin {
+    /// The low edge of the bin, in stops.
+    low: f32,
+    /// The mean logarithm of the bin: of its one value for a code, and of
+    /// the middle of its stretch in stops for a float bin.
+    log: f64,
+    count: u64,
+}
+
+impl Lit {
+    /// The lit bins of `luma`, whose values `decode` takes to linear light,
+    /// with the transparent pixels `clear` counts taken off where there are
+    /// any. Nothing below the tally's lowest octave is lit: zero is there,
+    /// and a value under one part in four billion measured as good as none.
+    fn of(luma: &Tally, clear: Option<&Tally>, decode: impl Fn(f32) -> f32) -> Self {
+        let lit = match clear {
+            Some(clear) => luma.less(clear),
+            None => luma.clone(),
+        };
+        let mut bins = Vec::new();
+        let mut total = 0u64;
+        for bin in lit.bins() {
+            let (low, high) = (decode(bin.low), decode(bin.high));
+            let value = decode(bin.value);
+            let is_lit = match &lit {
+                Tally::Codes { .. } => value > 0.0,
+                Tally::Keys { .. } => low > 0.0,
+            };
+            if !is_lit {
+                continue;
+            }
+            let log = match &lit {
+                Tally::Codes { .. } => f64::from(value.log2()),
+                Tally::Keys { .. } => (f64::from(low.log2()) + f64::from(high.log2())) / 2.0,
+            };
+            total += u64::from(bin.count);
+            bins.push(LitBin {
+                low: match &lit {
+                    Tally::Codes { .. } => value.log2(),
+                    Tally::Keys { .. } => low.log2(),
+                },
+                log,
+                count: u64::from(bin.count),
+            });
+        }
+        Self { bins, total }
+    }
+
+    /// The mean of the logarithms between the two trims: the darkest
+    /// [`KEY_TRIM`] of the pixels and the brightest are left out, by count,
+    /// and a bin the trim falls inside contributes the share of itself that
+    /// is kept, taken at the bin's own mean. `None` where nothing was lit.
+    fn trimmed_log_mean(&self) -> Option<f64> {
+        if self.total == 0 {
+            return None;
+        }
+        let total = self.total as f64;
+        let (keep_from, keep_to) = (total * KEY_TRIM, total * (1.0 - KEY_TRIM));
+        let mut below = 0.0;
+        let mut kept_sum = 0.0;
+        let mut kept_count = 0.0;
+        for bin in &self.bins {
+            let count = bin.count as f64;
+            let above = below + count;
+            let kept = (above.min(keep_to) - below.max(keep_from)).max(0.0);
+            if kept > 0.0 {
+                kept_sum += bin.log * kept;
+                kept_count += kept;
+            }
+            below = above;
+        }
+        // The trims leave nine tenths of the pixels between them whatever the
+        // count, so there is always something kept.
+        Some(kept_sum / kept_count)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The pass.
+
+/// A sample as a file stores it, read in the one pass over the pixels: a
+/// code for an integer, and the value itself for a float.
+trait Raw: Copy + Send + Sync {
+    /// Whether the samples are whole numbers, and so have codes.
+    const INTEGER: bool;
+    fn code(self) -> usize;
+    fn value(self) -> f32;
+}
+
+impl Raw for u8 {
+    const INTEGER: bool = true;
+    #[inline]
+    fn code(self) -> usize {
+        usize::from(self)
+    }
+    #[inline]
+    fn value(self) -> f32 {
+        f32::from(self)
+    }
+}
+
+impl Raw for u16 {
+    const INTEGER: bool = true;
+    #[inline]
+    fn code(self) -> usize {
+        usize::from(self)
+    }
+    #[inline]
+    fn value(self) -> f32 {
+        f32::from(self)
+    }
+}
+
+impl Raw for f32 {
+    const INTEGER: bool = false;
+    #[inline]
+    fn code(self) -> usize {
+        0
+    }
+    #[inline]
+    fn value(self) -> f32 {
+        self
+    }
+}
+
+/// What a pass does with one pixel, given its components as stored, decoded
+/// to linear in the file's own primaries, and as the working space has
+/// them — lifted and carried into BT.709, which is `linear` itself where
+/// nothing moves it — and whether the pixel is transparent.
+trait Visit<R: Raw>: Send {
+    fn pixel(&mut self, x: u32, y: u32, raw: &[R], linear: &[f32], shown: &[f32], clear: bool);
+    fn merge(self, other: Self) -> Self;
+}
+
+/// The pipeline every pixel is read through, set up once for the pass: the
+/// curve as a table over every code for integer samples, the lift and the
+/// matrix where the picture has them. The CPU twin of what the shader does
+/// to a texel before the window goes on, and of [`super::Reader::decode`],
+/// which reads one pixel the same way; a test holds the two together.
+struct Pass<'a> {
+    image: &'a DecodedImage,
+    channels: Channels,
+    count: usize,
+    colors: usize,
+    alpha: Option<usize>,
+    transfer: Transfer,
+    /// Each code decoded, for integer samples.
+    table: Vec<f32>,
+    lift: Option<(&'a GainMap, &'a Table)>,
+    matrix: Option<[[f32; 3]; 3]>,
+    nodata: Option<f32>,
+}
+
+impl<'a> Pass<'a> {
+    fn new(image: &'a DecodedImage, lift: Option<&'a Table>) -> Self {
+        let channels = image.channels();
+        let transfer = image.color.transfer;
+        let full = image.samples.full_scale();
+        let table = match image.samples {
+            Samples::U8 { .. } => (0..=u8::MAX as usize)
+                .map(|code| transfer.to_linear(code as f32 / full))
+                .collect(),
+            Samples::U16 { .. } => (0..=u16::MAX as usize)
+                .map(|code| transfer.to_linear(code as f32 / full))
+                .collect(),
+            Samples::F32 { .. } => Vec::new(),
+        };
+        let primaries = image.color.primaries;
+        Self {
+            image,
+            channels,
+            count: channels.count(),
+            colors: channels.color_count(),
+            alpha: channels.alpha_index(),
+            transfer,
+            table,
+            lift: lift.and_then(|table| Some((image.gain_map.as_deref()?, table))),
+            matrix: (!channels.is_gray() && primaries != Primaries::Bt709)
+                .then(|| primaries.to_bt709()),
+            nodata: image.nodata,
+        }
+    }
+
+    /// Whether the working space has the color anywhere but where the curve
+    /// alone would put it: a lift, or a matrix.
+    fn moves(&self) -> bool {
+        self.lift.is_some() || self.matrix.is_some()
+    }
+
+    #[inline]
+    fn is_data(&self, value: f32) -> bool {
+        value.is_finite() && self.nodata.is_none_or(|sentinel| value != sentinel)
+    }
+
+    /// The rows `rows` of `data`, each pixel handed to `visit`.
+    fn walk<R: Raw, V: Visit<R>>(&self, data: &[R], rows: std::ops::Range<u32>, visit: &mut V) {
+        let image = self.image;
+        let (width, height) = (image.width, image.height);
+        let count = self.count;
+        let colors = self.colors;
+        let transfer = self.transfer;
+        let linear_transfer = transfer.is_linear();
+        let table = &self.table[..];
+        let full = image.samples.full_scale();
+        let mut linear = [0.0f32; 4];
+        let mut shown = [0.0f32; 4];
+        for y in rows {
+            let row = y as usize * width as usize * count;
+            for x in 0..width {
+                let base = row + x as usize * count;
+                let raw = &data[base..base + count];
+                if R::INTEGER {
+                    for (slot, sample) in linear.iter_mut().zip(raw) {
+                        *slot = table[sample.code()];
+                    }
+                } else if linear_transfer {
+                    for (slot, sample) in linear.iter_mut().zip(raw) {
+                        *slot = sample.value();
+                    }
+                } else {
+                    for (slot, sample) in linear.iter_mut().zip(raw) {
+                        *slot = transfer.to_linear(sample.value());
+                    }
+                }
+                let clear = self.alpha.is_some_and(|index| {
+                    let alpha = if R::INTEGER {
+                        raw[index].code() as f32 / full
+                    } else {
+                        raw[index].value()
+                    };
+                    // Nothing, less than nothing, or not a number: none of
+                    // them is any coverage.
+                    alpha.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater)
+                });
+                shown[..count].copy_from_slice(&linear[..count]);
+                // The lift, in the base's own color space, before anything
+                // else, then the primaries: the order the shader takes.
+                if let Some((map, lift)) = self.lift {
+                    let gain = map.gain_at(lift, x, y, width, height);
+                    lift.apply(&mut shown[..colors], gain);
+                }
+                if let Some(matrix) = self.matrix {
+                    let color = [shown[0], shown[1], shown[2]];
+                    for (slot, row) in shown.iter_mut().zip(matrix) {
+                        *slot = row[0] * color[0] + row[1] * color[1] + row[2] * color[2];
+                    }
+                }
+                visit.pixel(x, y, raw, &linear[..count], &shown[..count], clear);
+            }
+        }
+    }
+
+    /// The whole picture walked for `visit`, the rows divided between
+    /// rayon's threads and each band's visitor merged into one. Every pixel
+    /// is counted on its own, so a band's numbers depend on nothing outside
+    /// it, and the bands fold together into exactly what one thread would
+    /// have counted.
+    fn run<V>(&self, make: impl Fn() -> V + Sync) -> V
+    where
+        V: Visit<u8> + Visit<u16> + Visit<f32>,
+    {
+        match &self.image.samples {
+            Samples::U8 { data, .. } => self.run_on::<u8, V>(data, make),
+            Samples::U16 { data, .. } => self.run_on::<u16, V>(data, make),
+            Samples::F32 { data, .. } => self.run_on::<f32, V>(data, make),
+        }
+    }
+
+    fn run_on<R: Raw, V: Visit<R>>(&self, data: &[R], make: impl Fn() -> V + Sync) -> V {
+        let height = self.image.height;
+        let bands = bands_for(self.image.width, height);
+        if bands <= 1 {
+            let mut visitor = make();
+            self.walk(data, 0..height, &mut visitor);
+            return visitor;
+        }
+        let rows = height.div_ceil(bands);
+        let bands = height.div_ceil(rows);
+        let mut results: Vec<Option<V>> = (0..bands).map(|_| None).collect();
+        rayon_core::scope(|scope| {
+            for (index, slot) in results.iter_mut().enumerate() {
+                let first = index as u32 * rows;
+                let last = (first + rows).min(height);
+                let make = &make;
+                scope.spawn(move |_| {
+                    let mut visitor = make();
+                    self.walk(data, first..last, &mut visitor);
+                    *slot = Some(visitor);
+                });
+            }
+        });
+        results
+            .into_iter()
+            .map(|result| result.expect("every band was walked"))
+            .reduce(V::merge)
+            .expect("at least one band")
+    }
+}
+
+/// Pixels below which a pass is not worth dividing: handing bands to the
+/// pool costs more than a picture this small takes to walk.
+const PARALLEL_FROM: usize = 1 << 16;
+
+/// The fewest pixels a band is given, so that a picture just over
+/// [`PARALLEL_FROM`] goes to two or three threads rather than thirty-two.
+const BAND_PIXELS: usize = 1 << 15;
+
+/// How many ways to cut the walk: one for a picture too small to be worth
+/// the threads, otherwise one per thread the pool will run at once, and
+/// never more than there are rows to give them.
+fn bands_for(width: u32, height: u32) -> u32 {
+    let pixels = width as usize * height as usize;
+    if pixels < PARALLEL_FROM {
+        return 1;
+    }
+    (pixels / BAND_PIXELS)
+        .clamp(1, rayon_core::current_num_threads().max(1))
+        .min(height as usize) as u32
+}
+
+/// Everything the first pass counts: the stored channels, the luminance,
+/// the channels as the working space has them where it moves them, and the
+/// extremes.
+struct Tallies {
+    /// The color channels as stored, one each.
+    stored: Vec<Tally>,
+    /// The luminance in linear light, as the working space has it: `None`
+    /// on a gray picture nothing moves, whose luminance is its one stored
+    /// channel.
+    luma: Option<Tally>,
+    /// The luminance of the transparent pixels alone, on a picture with
+    /// alpha: taken off `luma` — or off the stored channel standing for it
+    /// — for what was lit. Of the same kind as the tally it is taken off.
+    clear: Option<Tally>,
+    /// The three channels as the working space has them, on a color picture
+    /// it moves.
+    planes: Option<[Tally; COLOR]>,
+    /// How many pixels measured a luminance, and its extremes, where `luma`
+    /// is tallied; and the highest any plotted channel reaches in the
+    /// working space.
+    counted: u64,
+    min: f32,
+    max: f32,
+    peak: f32,
+}
+
+impl Tallies {
+    fn new(pass: &Pass) -> Self {
+        let image = pass.image;
+        let moves = pass.moves();
+        let gray = pass.channels.is_gray();
+        let tally = || match &image.samples {
+            Samples::U8 { .. } => Tally::codes(f32::from(u8::MAX), 1 << 8),
+            Samples::U16 { .. } => Tally::codes(f32::from(u16::MAX), 1 << 16),
+            Samples::F32 { .. } => Tally::keys(),
+        };
+        let luma = (!gray || moves).then(Tally::keys);
+        let clear = pass.alpha.map(|_| match &luma {
+            Some(_) => Tally::keys(),
+            None => tally(),
+        });
+        Self {
+            stored: (0..pass.colors).map(|_| tally()).collect(),
+            luma,
+            clear,
+            planes: (!gray && moves).then(|| std::array::from_fn(|_| Tally::keys())),
+            counted: 0,
+            min: f32::INFINITY,
+            max: f32::NEG_INFINITY,
+            peak: f32::NEG_INFINITY,
+        }
+    }
+}
+
+/// The pass's visitor: what it needs of the pass to count, and what it has
+/// counted.
+struct Counting<'a> {
+    pass: &'a Pass<'a>,
+    tallies: Tallies,
+}
+
+#[inline]
+fn add_key(tally: &mut Tally, value: f32) {
+    if let Tally::Keys { counts, min, max } = tally {
+        counts[key_of(value)] += 1;
+        *min = min.min(value);
+        *max = max.max(value);
+    }
+}
+
+#[inline]
+fn add_code(tally: &mut Tally, code: usize) {
+    if let Tally::Codes { counts, .. } = tally {
+        counts[code] += 1;
+    }
+}
+
+impl<R: Raw> Visit<R> for Counting<'_> {
+    #[inline]
+    fn pixel(&mut self, _x: u32, _y: u32, raw: &[R], linear: &[f32], shown: &[f32], clear: bool) {
+        let pass = self.pass;
+        let tallies = &mut self.tallies;
+        let colors = pass.colors;
+        // The channels as stored. An integer's code goes in whatever it
+        // decodes to — the no-data code is taken out afterwards — where a
+        // float is checked as it goes.
+        if R::INTEGER {
+            for (tally, sample) in tallies.stored.iter_mut().zip(raw) {
+                add_code(tally, sample.code());
+            }
+        } else {
+            for (channel, (tally, sample)) in tallies.stored.iter_mut().zip(raw).enumerate() {
+                if pass.is_data(linear[channel]) {
+                    add_key(tally, sample.value());
+                }
+            }
+        }
+        // The channels as the working space has them, where it moves them.
+        if let Some(planes) = tallies.planes.as_mut() {
+            for (plane, &value) in planes.iter_mut().zip(shown) {
+                if pass.is_data(value) {
+                    add_key(plane, value);
+                }
+            }
+        }
+        match tallies.luma.as_mut() {
+            Some(luma) => {
+                for &value in &shown[..colors] {
+                    if pass.is_data(value) {
+                        tallies.peak = tallies.peak.max(value);
+                    }
+                }
+                let value = luminance(shown, pass.channels);
+                if pass.is_data(value) {
+                    tallies.counted += 1;
+                    tallies.min = tallies.min.min(value);
+                    tallies.max = tallies.max.max(value);
+                    add_key(luma, value);
+                    if clear && let Some(tally) = tallies.clear.as_mut() {
+                        add_key(tally, value);
+                    }
+                }
+            }
+            // A gray picture nothing moves: its stored channel is its
+            // luminance, and only the transparent pixels need counting
+            // beside it.
+            None => {
+                if clear && let Some(tally) = tallies.clear.as_mut() {
+                    if R::INTEGER {
+                        add_code(tally, raw[0].code());
+                    } else if pass.is_data(linear[0]) {
+                        add_key(tally, raw[0].value());
+                    }
+                }
+            }
+        }
+    }
+
+    fn merge(mut self, other: Self) -> Self {
+        let (mine, theirs) = (&mut self.tallies, other.tallies);
+        for (tally, other) in mine.stored.iter_mut().zip(&theirs.stored) {
+            tally.add(other);
+        }
+        if let (Some(tally), Some(other)) = (mine.luma.as_mut(), &theirs.luma) {
+            tally.add(other);
+        }
+        if let (Some(tally), Some(other)) = (mine.clear.as_mut(), &theirs.clear) {
+            tally.add(other);
+        }
+        if let (Some(planes), Some(others)) = (mine.planes.as_mut(), &theirs.planes) {
+            for (plane, other) in planes.iter_mut().zip(others) {
+                plane.add(other);
+            }
+        }
+        mine.counted += theirs.counted;
+        mine.min = mine.min.min(theirs.min);
+        mine.max = mine.max.max(theirs.max);
+        mine.peak = mine.peak.max(theirs.peak);
+        self
+    }
+}
+
+/// The second pass, for floats on a linear axis: each plotted plane
+/// counted into [`FINE_BINS`] over the axis it was given, a pixel wholly
+/// into the bin nearest its value, as the fine bins of every other picture
+/// come out. A float tally's bins are a thousandth of an octave wide, which
+/// over a measurement standing well off zero — temperatures in kelvin,
+/// heights above the sea — is wider than a fine bin over the range it
+/// spans, and a plot poured from them would comb; these are the fine bins
+/// counted from the pixels instead.
+struct Binning<'a> {
+    pass: &'a Pass<'a>,
+    /// The luminance's axis, and its bins.
+    axis: Axis,
+    range: [f32; 2],
+    luma: Option<Vec<u32>>,
+    /// The plotted color planes on the luminance's axis, where the picture
+    /// has them: the channels as the working space has them.
+    planes: Option<[Vec<u32>; COLOR]>,
+    /// Each stored channel on its own range, as the Image section plots it.
+    stored: Vec<([f32; 2], Vec<u32>)>,
+}
+
+impl Binning<'_> {
+    #[inline]
+    fn bin(range: [f32; 2], at: f32) -> Option<usize> {
+        let [low, high] = range;
+        let position = (at - low) * ((FINE_BINS - 1) as f32 / (high - low)) + 0.5;
+        if position.is_nan() {
+            return None;
+        }
+        Some(position.clamp(0.0, (FINE_BINS - 1) as f32) as usize)
+    }
+}
+
+impl<R: Raw> Visit<R> for Binning<'_> {
+    #[inline]
+    fn pixel(&mut self, _x: u32, _y: u32, raw: &[R], linear: &[f32], shown: &[f32], _clear: bool) {
+        let pass = self.pass;
+        let axis = self.axis;
+        for (channel, (range, bins)) in self.stored.iter_mut().enumerate() {
+            if pass.is_data(linear[channel])
+                && let Some(bin) = Self::bin(*range, axis.place_stored(raw[channel].value()))
+            {
+                bins[bin] += 1;
+            }
+        }
+        if let Some(planes) = self.planes.as_mut() {
+            for (bins, &value) in planes.iter_mut().zip(shown) {
+                if pass.is_data(value)
+                    && let Some(bin) = Self::bin(self.range, axis.place(value))
+                {
+                    bins[bin] += 1;
+                }
+            }
+        }
+        if let Some(bins) = self.luma.as_mut() {
+            let value = luminance(shown, pass.channels);
+            if pass.is_data(value)
+                && let Some(bin) = Self::bin(self.range, axis.place(value))
+            {
+                bins[bin] += 1;
+            }
+        }
+    }
+
+    fn merge(mut self, other: Self) -> Self {
+        fn add(into: &mut [u32], from: &[u32]) {
+            for (sum, count) in into.iter_mut().zip(from) {
+                *sum += count;
+            }
+        }
+        if let (Some(mine), Some(theirs)) = (self.luma.as_mut(), &other.luma) {
+            add(mine, theirs);
+        }
+        if let (Some(mine), Some(theirs)) = (self.planes.as_mut(), &other.planes) {
+            for (mine, theirs) in mine.iter_mut().zip(theirs) {
+                add(mine, theirs);
+            }
+        }
+        for ((_, mine), (_, theirs)) in self.stored.iter_mut().zip(&other.stored) {
+            add(mine, theirs);
+        }
+        self
+    }
+}
+
+/// What the one pass over the pixels counted, with the no-data code taken
+/// out, from which [`Stats`] and [`Stored`] are both read.
+struct Scan<'a> {
+    pass: Pass<'a>,
+    tallies: Tallies,
+}
+
+impl<'a> Scan<'a> {
+    fn of(image: &'a DecodedImage, lift: Option<&'a Table>) -> Self {
+        let pass = Pass::new(image, lift);
+        let counting = pass.run(|| Counting {
+            pass: &pass,
+            tallies: Tallies::new(&pass),
+        });
+        let mut tallies = counting.tallies;
+        if let Some(sentinel) = pass.nodata {
+            let transfer = pass.transfer;
+            for tally in &mut tallies.stored {
+                tally.without(sentinel, |fraction| transfer.to_linear(fraction));
+            }
+            if let Some(clear) = tallies.clear.as_mut() {
+                clear.without(sentinel, |fraction| transfer.to_linear(fraction));
+            }
+        }
+        Self { pass, tallies }
+    }
+
+    /// Whether the samples are floats, which have no codes.
+    fn floats(&self) -> bool {
+        matches!(self.pass.image.samples, Samples::F32 { .. })
+    }
+
+    /// Whether a second pass counts the fine bins from the pixels rather
+    /// than from the tallies: floats on an axis that is not in stops.
+    fn rebins(&self, axis: Axis) -> bool {
+        self.floats() && axis != Axis::Stops
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Stats: the picture as the display starts from it.
 
 #[derive(Clone, Debug)]
 pub struct Stats {
@@ -549,9 +1546,9 @@ pub struct Stats {
     /// into BT.709 is past it — which is what a surface that stops at white
     /// clips, and what [`super::display::Display::exceeds_white`] asks.
     pub peak: f32,
-    /// Counts over `min..max`, in linear units, for percentiles.
-    pub histogram: [u32; BINS],
-    pub counted: u32,
+    /// How many pixels measured a luminance: every one that is a number
+    /// and not the no-data value.
+    pub counted: u64,
     /// The key of the scene, in the file's own units: the geometric mean of
     /// the luminance — the mean of its logarithm, taken back out — over the
     /// pixels that measured any light at all, less the darkest and the
@@ -565,14 +1562,20 @@ pub struct Stats {
     /// How the plot and the fine bins are spaced: what a position on
     /// their axis stands for.
     pub axis: Axis,
-    /// The same pixels binned for drawing. See [`Plot`] for why it is a
-    /// second scan rather than the same one.
+    /// The same pixels binned for drawing. See [`Plot`] for why it is on
+    /// another axis than the extremes.
     pub plot: Plot,
     /// The same pixels on the same axis in finer bins, for what a stage
     /// after the file makes of them. Shared, since a clone of the stats is
     /// made at every arrival and is otherwise a copy of 64 KiB; what is
     /// rebinned from it is cached by the address of this.
     pub fine: Arc<Fine>,
+    /// The luminance tallied, for the percentiles. Shared for the same
+    /// reason.
+    luma: Arc<Tally>,
+    /// Where the tally is of a gray picture's codes rather than of its
+    /// luminance in linear light, the curve a code is decoded through.
+    luma_curve: Option<Transfer>,
 }
 
 impl Stats {
@@ -585,257 +1588,226 @@ impl Stats {
     /// relative luminance, which is what an exposure control should track.
     /// Color images additionally get per-channel counts, which the UI draws
     /// as a four-channel histogram.
-    ///
-    /// Two passes over the pixels, each divided by rows between rayon's
-    /// threads: the range first, then the counts, which cannot be binned
-    /// until the range is known. Every pixel is measured on its own, so a
-    /// band's numbers depend on nothing outside it, and the bands fold
-    /// together into exactly what one thread would have counted.
     pub fn scan(image: &DecodedImage) -> Self {
         Self::scan_with(image, None)
     }
 
     /// [`Stats::scan`], with the picture lifted through `lift` where it has
     /// a gain map: what the screen shows on a surface with room above
-    /// white, which is what the histogram is to describe. With no table,
-    /// or no map, the base is what is measured.
+    /// white, where the base is what it shows on one without. Every pixel's
+    /// luminance and channels are read through the lift, so the extremes,
+    /// the key and the plot are of the lifted picture.
     pub fn scan_with(image: &DecodedImage, lift: Option<&Table>) -> Self {
-        let stride = Self::stride(image);
-        let reader = Reader::tabulated(image, lift);
-        Self::scan_in(image, &reader, stride, Values::bands_for(image, stride))
+        Self::from_scan(&Scan::of(image, lift))
     }
 
-    /// The picture as the file stores it, rather than as the display starts
-    /// from it: no lift, and a wide-gamut file's color in its own primaries
-    /// rather than carried into the working space's. What the histogram's
-    /// plot of the file is, so that a P3 red is at the top of the file's
-    /// range there and past it only further up the panel, where the working
-    /// space has taken it.
-    ///
-    /// `None` where the reader would move no color — a gray file, or a
-    /// BT.709 one with no gain map — since the picture as stored is then
-    /// what [`Stats::scan`] measured, and is not worth a second walk.
-    ///
-    /// A second walk over the picture for every other file, and for every
-    /// frame of a wide-gamut animation as it is decoded; on a thread of its
-    /// own either way, beside the scan it doubles.
-    pub fn scan_as_stored(image: &DecodedImage) -> Option<Self> {
-        if !image.color_moves() {
-            return None;
-        }
-        let stride = Self::stride(image);
-        let reader = Reader::as_stored(image);
-        Some(Self::scan_in(
-            image,
-            &reader,
-            stride,
-            Values::bands_for(image, stride),
-        ))
+    /// [`Stats::scan`] and the [`Stored`] from the one pass over the
+    /// pixels, which is what a file arriving asks for.
+    pub fn scan_both(image: &DecodedImage) -> (Self, Stored) {
+        let scan = Scan::of(image, None);
+        (Self::from_scan(&scan), Stored::from_scan(&scan))
     }
 
-    /// The picture as the file stores it, beside `shown`, the scan of it as
-    /// it is shown: [`Stats::scan_as_stored`] where that is anything else,
-    /// and `shown` itself where it is not.
-    pub fn stored_beside(image: &DecodedImage, shown: &Stats) -> Self {
-        Self::scan_as_stored(image).unwrap_or_else(|| shown.clone())
-    }
+    fn from_scan(scan: &Scan) -> Self {
+        let pass = &scan.pass;
+        let image = pass.image;
+        let transfer = pass.transfer;
+        let gray = pass.channels.is_gray();
+        let moves = pass.moves();
+        let tallies = &scan.tallies;
+        let color = !gray;
 
-    /// [`Stats::scan`] through `reader` over a given number of bands, so
-    /// that a test can hold a divided scan against the same one undivided.
-    fn scan_in(image: &DecodedImage, reader: &Reader, stride: usize, bands: usize) -> Self {
-        let channels = image.samples.channels();
-        let values = Values::new(image, reader, stride);
-        let transfer = image.color.transfer;
-        let nodata = image.nodata;
-        let is_data =
-            move |value: f32| value.is_finite() && nodata.is_none_or(|sentinel| value != sentinel);
-
-        let color = !channels.is_gray();
-        let plotted = if color { COLOR } else { 1 };
-        let alpha = channels.alpha_index();
-        let mut axis = Axis::of(image);
-        let Range {
-            min,
-            max,
-            peak,
-            axis_min,
-            axis_max,
-            log_counts,
-            log_sums,
-        } = values
-            .bands(bands, |band| {
-                let mut range = Range::new(transfer);
-                band.for_each(|encoded, linear| {
-                    let value = luminance(linear, channels);
-                    if is_data(value) {
-                        range.min = range.min.min(value);
-                        range.max = range.max.max(value);
-                        let lit = value > 0.0 && alpha.is_none_or(|index| encoded[index] > 0.0);
-                        if lit {
-                            let log = value.log2();
-                            let bin = ((log - LOG_FLOOR) * LOG_BINS_PER_STOP as f32) as usize;
-                            let bin = bin.min(LOG_BINS - 1);
-                            range.log_counts[bin] += 1;
-                            range.log_sums[bin] += f64::from(log);
-                        }
-                    }
-                    // The axis spans the channels that get plotted, in the
-                    // units they are plotted in; the peak is the highest of
-                    // them in linear ones.
-                    for (stored, decoded) in encoded[..plotted].iter().zip(linear) {
-                        if is_data(*decoded) {
-                            range.axis_min = range.axis_min.min(*stored);
-                            range.axis_max = range.axis_max.max(*stored);
-                            range.peak = range.peak.max(*decoded);
-                        }
-                    }
-                });
-                range
-            })
-            .into_iter()
-            .fold(Range::new(transfer), Range::merge);
-
-        if !min.is_finite() || !max.is_finite() {
+        // The luminance: tallied in linear light, or a gray picture's one
+        // stored channel, decoded.
+        let (luma, luma_curve) = match &tallies.luma {
+            Some(luma) => (luma, None),
+            None => (&tallies.stored[0], Some(transfer)),
+        };
+        let decode = |value: f32| match luma_curve {
+            Some(transfer) => transfer.to_linear(value),
+            None => value,
+        };
+        let (min, max, counted) = match &tallies.luma {
+            Some(_) => (tallies.min, tallies.max, tallies.counted),
+            None => {
+                let (min, max) = luma.extremes();
+                (decode(min), decode(max), luma.total())
+            }
+        };
+        let empty = |axis| Self {
+            min: 0.0,
+            max: 1.0,
+            peak: 1.0,
+            counted: 0,
+            key: None,
+            axis,
+            plot: Plot::empty(),
+            fine: Arc::new(Fine::empty(0.0, 1.0, color)),
+            luma: Arc::new(luma.clone()),
+            luma_curve,
+        };
+        if counted == 0 || !min.is_finite() || !max.is_finite() {
             // Nothing measurable at all; fall back to unit range so
             // the rest of the pipeline still has something usable.
-            return Self {
-                min: 0.0,
-                max: 1.0,
-                peak: 1.0,
-                histogram: [0; BINS],
-                counted: 0,
-                key: None,
-                axis: Axis::Curve(transfer),
-                plot: Plot::empty(),
-                fine: Arc::new(Fine::empty(0.0, 1.0, color)),
-            };
+            return empty(Axis::Curve(transfer));
         }
 
-        // A stops axis is read off what was measured, from the darkest
-        // the picture holds to say anything about up to its brightest; a
-        // picture with nothing above zero has no top for one, and is
-        // plotted on the linear axis its samples are in.
-        let (axis_min, axis_max) = match axis {
-            Axis::Stops => match stops_axis(axis_max, &log_counts) {
-                Some(range) => range,
-                None => {
-                    axis = Axis::Curve(transfer);
-                    (axis_min, axis_max)
-                }
-            },
-            Axis::Curve(_) => (axis_min, axis_max),
+        // The plotted planes: the channels as the working space has them,
+        // which are the stored channels decoded where nothing moves them.
+        // Each with where it stands — as stored, placed on the axis as a
+        // stored value is, or in linear light, placed as a value is.
+        let plotted: Vec<(&Tally, Placed)> = match (&tallies.planes, gray) {
+            (Some(planes), _) => planes.iter().map(|plane| (plane, Placed::Linear)).collect(),
+            (None, false) => tallies
+                .stored
+                .iter()
+                .map(|channel| (channel, Placed::Stored))
+                .collect(),
+            (None, true) => Vec::new(),
         };
+        // The highest any plotted channel reaches, in linear light.
+        let peak = if tallies.luma.is_some() && (moves || color) {
+            tallies.peak
+        } else if color {
+            plotted
+                .iter()
+                .map(|(tally, _)| transfer.to_linear(tally.extremes().1))
+                .fold(f32::NEG_INFINITY, f32::max)
+        } else {
+            max
+        };
+        let peak = if peak.is_finite() { peak } else { max };
 
-        let span = max - min;
-        // A span at or below the smallest normal float is treated as flat:
-        // dividing by a subnormal gives an infinite scale, which then bins
-        // every sample into the two ends. The clamps downstream keep it from
-        // going out of range, but the plot it draws is a lie.
-        let scale = (span > f32::MIN_POSITIVE).then(|| (BINS - 1) as f32 / span);
+        let lit = Lit::of(luma, tallies.clear.as_ref(), decode);
+        let key = lit.trimmed_log_mean().map(|log| log.exp2() as f32);
 
-        let axis_span = axis_max - axis_min;
-        // A flat image spans nothing to plot against; leaving the counts at
-        // zero draws an empty panel rather than one misleading spike.
-        let fine_scale =
-            (axis_span > f32::MIN_POSITIVE).then(|| (FINE_BINS - 1) as f32 / axis_span);
-        let mut counts = Counts::new(color, axis_min, axis_max);
-        if scale.is_some() || fine_scale.is_some() {
-            counts = values
-                .bands(bands, |band| {
-                    let mut counts = Counts::new(color, axis_min, axis_max);
-                    band.for_each(|encoded, linear| {
-                        let value = luminance(linear, channels);
-                        let is_data_value = is_data(value);
-                        if let Some(scale) = scale
-                            && is_data_value
-                        {
-                            // Rounded, not truncated: bins are sample points
-                            // spread from `min` to `max`, which is how
-                            // `percentile` reads them back, and what lands a
-                            // code on its own bin without a rounding error
-                            // stealing the boundary.
-                            let bin = ((value - min) * scale + 0.5) as usize;
-                            counts.histogram[bin.min(BINS - 1)] += 1;
-                            counts.counted += 1;
-                        }
-                        if let Some(fine_scale) = fine_scale {
-                            // Rounded, as the luminance is: a fine bin is
-                            // the sample point at its middle. A value under
-                            // a stops axis's floor — minus infinity, for no
-                            // light at all — is the first bin, which is
-                            // where the cast saturates to.
-                            let bin = |fine: &mut [u32], stored: f32| {
-                                let index = ((stored - axis_min) * fine_scale + 0.5) as usize;
-                                fine[index.min(FINE_BINS - 1)] += 1;
-                            };
-                            if is_data_value {
-                                // Luminance is a linear quantity; it goes
-                                // onto the axis the same way the samples
-                                // themselves did.
-                                bin(&mut counts.fine.luma, axis.place(value));
-                            }
-                            if let Some(fine) = counts.fine.color.as_mut() {
-                                for (plane, (stored, decoded)) in
-                                    encoded[..COLOR].iter().zip(linear).enumerate()
-                                {
-                                    if is_data(*decoded) {
-                                        bin(&mut fine[plane], axis.place_stored(*stored));
-                                    }
-                                }
-                            }
-                        }
-                    });
-                    counts
-                })
-                .into_iter()
-                .fold(counts, Counts::merge);
+        // The axis: a curved file's starts at the range such a file
+        // nominally holds and only widens; a linear one's is whatever is
+        // measured over the plotted channels; and a stops axis is read off
+        // the lit pixels, from the darkest the picture holds to say anything
+        // about up to its brightest.
+        let mut axis = Axis::of(image);
+        let (axis_min, axis_max) = {
+            let (mut low, mut high) = if transfer.is_linear() {
+                (f32::INFINITY, f32::NEG_INFINITY)
+            } else {
+                (0.0, 1.0)
+            };
+            let on_axis = |tally: &Tally, placed: Placed| {
+                let (min, max) = tally.extremes();
+                match placed {
+                    Placed::Stored => (min, max),
+                    Placed::Linear => (encode(transfer, min), encode(transfer, max)),
+                }
+            };
+            let channels: Vec<(f32, f32)> = if gray {
+                let (min, max) = match &tallies.luma {
+                    Some(luma) => on_axis(luma, Placed::Linear),
+                    None => luma.extremes(),
+                };
+                vec![(min, max)]
+            } else {
+                plotted
+                    .iter()
+                    .map(|(tally, placed)| on_axis(tally, *placed))
+                    .collect()
+            };
+            for (min, max) in channels {
+                if min.is_finite() && max.is_finite() {
+                    low = low.min(min);
+                    high = high.max(max);
+                }
+            }
+            match axis {
+                Axis::Stops => match stops_axis(peak, &lit) {
+                    Some(range) => range,
+                    None => {
+                        axis = Axis::Curve(transfer);
+                        (low, high)
+                    }
+                },
+                Axis::Curve(_) => (low, high),
+            }
+        };
+        if !(axis_min.is_finite() && axis_max.is_finite()) {
+            return empty(axis);
         }
 
-        counts.fine.code = match &image.samples {
+        let mut fine = Fine::empty(axis_min, axis_max, color);
+        fine.code = match &image.samples {
             Samples::U8 { .. } => Some(1.0 / f32::from(u8::MAX)),
             Samples::U16 { .. } => Some(1.0 / f32::from(u16::MAX)),
             Samples::F32 { .. } => None,
         };
-        let key = trimmed_log_mean(&log_counts, &log_sums).map(|log| log.exp2() as f32);
+        if scan.rebins(axis) {
+            // Counted from the pixels, on the axis now known.
+            let binning = pass.run(|| Binning {
+                pass,
+                axis,
+                range: [axis_min, axis_max],
+                luma: Some(vec![0; FINE_BINS]),
+                planes: color.then(|| std::array::from_fn(|_| vec![0; FINE_BINS])),
+                stored: Vec::new(),
+            });
+            fine.luma = binning.luma.expect("asked for");
+            fine.color = binning.planes;
+        } else {
+            let range = [axis_min, axis_max];
+            match &tallies.luma {
+                Some(tally) => tally.pour_whole(&mut fine.luma, range, |value| axis.place(value)),
+                None => luma.pour_whole(&mut fine.luma, range, |value| axis.place_stored(value)),
+            }
+            if let Some(planes) = fine.color.as_mut() {
+                for (bins, (tally, placed)) in planes.iter_mut().zip(&plotted) {
+                    match placed {
+                        Placed::Stored => {
+                            tally.pour_whole(bins, range, |value| axis.place_stored(value));
+                        }
+                        Placed::Linear => tally.pour_whole(bins, range, |value| axis.place(value)),
+                    }
+                }
+            }
+        }
 
         Self {
             min,
             max,
-            peak: if peak.is_finite() { peak } else { max },
-            histogram: counts.histogram,
-            counted: counts.counted,
+            peak,
+            counted,
             key,
             axis,
             // The plot is the fine bins on the same axis, spread as any
             // other stage's plot of them is, so that a quantized file's codes
             // do not comb against bins of another width.
-            plot: counts.fine.rebinned([axis_min, axis_max], |value| value),
-            fine: Arc::new(counts.fine),
+            plot: fine.rebinned([axis_min, axis_max], |value| value),
+            fine: Arc::new(fine),
+            luma: Arc::new(luma.clone()),
+            luma_curve,
         }
     }
 
-    fn stride(image: &DecodedImage) -> usize {
-        let pixels = image.width as usize * image.height as usize;
-        pixels.div_ceil(MAX_SAMPLED_PIXELS).max(1)
-    }
-
-    /// The value below which `fraction` of the samples fall, `fraction` in
-    /// 0..=1. Returns `min`/`max` at the extremes.
+    /// The value below which `fraction` of the pixels' luminance falls,
+    /// `fraction` in 0..=1, in linear working-space units. Returns
+    /// `min`/`max` at the extremes.
     pub fn percentile(&self, fraction: f32) -> f32 {
         if self.counted == 0 || self.max <= self.min {
             return if fraction <= 0.0 { self.min } else { self.max };
         }
-        let target = (fraction.clamp(0.0, 1.0) * self.counted as f32) as u32;
-        let mut running = 0u32;
-        for (index, count) in self.histogram.iter().enumerate() {
-            running += count;
-            if running >= target {
-                let position = index as f32 / (BINS - 1) as f32;
-                return self.min + position * (self.max - self.min);
-            }
-        }
-        self.max
+        let value = self.luma.percentile(fraction);
+        let value = match self.luma_curve {
+            Some(transfer) => transfer.to_linear(value),
+            None => value,
+        };
+        value.clamp(self.min, self.max)
     }
+}
+
+/// Which side of the file's curve a tally's values are on: as stored, a
+/// fraction of full scale or the float itself, or decoded to linear light.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Placed {
+    Stored,
+    Linear,
 }
 
 /// Gray uses its one channel; color collapses to relative luminance,
@@ -858,254 +1830,225 @@ fn encode(transfer: Transfer, value: f32) -> f32 {
     }
 }
 
-/// What the first pass measures: the extremes of the luminance and the
-/// highest channel, in linear units, and the plotted channels' extremes on
-/// the file's own curve.
-#[derive(Clone)]
-struct Range {
-    min: f32,
-    max: f32,
-    peak: f32,
-    axis_min: f32,
-    axis_max: f32,
-    /// The lit pixels' luminance binned by its logarithm, [`LOG_BINS`]
-    /// wide, and the logarithms themselves summed bin by bin — wide, since
-    /// two million of them are added up — so that the key can be read
-    /// between the two trims without a second walk. See [`Stats::key`].
-    log_counts: Vec<u32>,
-    log_sums: Vec<f64>,
+// ---------------------------------------------------------------------------
+// Stored: the picture as the file stores it.
+
+/// The picture as the file stores it: each color channel tallied as stored
+/// — no lift, and in the file's own primaries — with its exact extremes and
+/// the range it is plotted over. What the histogram's Image section plots,
+/// a plot to the channel; luminance is not here, since the file stores
+/// none, and a weighting of channels in the file's own primaries would not
+/// be one.
+#[derive(Clone, Debug)]
+pub struct Stored {
+    /// How the plots are spaced: the file's own curve, or stops for light
+    /// stored linear as floats, as [`Stats::axis`] is.
+    pub axis: Axis,
+    /// One per color channel: one for gray, three for color, in the order
+    /// the file keeps them.
+    pub planes: Vec<Plane>,
+    /// Whether every plane is plotted over the same range — a photograph's
+    /// channels, which are compared against one another — or each over its
+    /// own, as a measurement's are, whose channels may be different
+    /// quantities.
+    pub shared: bool,
 }
 
-impl Range {
-    /// Nothing seen yet. A curved file's axis starts at the range such a
-    /// file nominally holds, and only widens; a linear one's is whatever is
-    /// measured. See [`Plot`].
-    fn new(transfer: Transfer) -> Self {
-        let (axis_min, axis_max) = if transfer.is_linear() {
-            (f32::INFINITY, f32::NEG_INFINITY)
-        } else {
-            (0.0, 1.0)
-        };
-        Self {
-            min: f32::INFINITY,
-            max: f32::NEG_INFINITY,
-            peak: f32::NEG_INFINITY,
-            axis_min,
-            axis_max,
-            log_counts: vec![0; LOG_BINS],
-            log_sums: vec![0.0; LOG_BINS],
-        }
-    }
-
-    fn merge(self, other: Self) -> Self {
-        Self {
-            min: self.min.min(other.min),
-            max: self.max.max(other.max),
-            peak: self.peak.max(other.peak),
-            axis_min: self.axis_min.min(other.axis_min),
-            axis_max: self.axis_max.max(other.axis_max),
-            log_counts: self
-                .log_counts
-                .iter()
-                .zip(&other.log_counts)
-                .map(|(mine, theirs)| mine + theirs)
-                .collect(),
-            log_sums: self
-                .log_sums
-                .iter()
-                .zip(&other.log_sums)
-                .map(|(mine, theirs)| mine + theirs)
-                .collect(),
-        }
-    }
+/// One stored channel: its exact extremes as stored — a fraction of full
+/// scale for integer samples, the value itself for floats — the range of
+/// the axis its plot spans, and the tally the plot is poured from.
+#[derive(Clone, Debug)]
+pub struct Plane {
+    /// The exact extremes, of every pixel: what a readout of them is to
+    /// read, and what the tests hold the tally to.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "a readout of the extremes is to come")
+    )]
+    pub min: f32,
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "a readout of the extremes is to come")
+    )]
+    pub max: f32,
+    /// What the plot spans, on the axis.
+    pub range: [f32; 2],
+    tally: Tally,
+    /// The channel counted from the pixels into [`FINE_BINS`] over `range`
+    /// by the second pass, where the tally's bins are too coarse for the
+    /// range: floats on a linear axis.
+    binned: Option<Vec<u32>>,
 }
 
-/// The mean of the binned logarithms between the two trims: the darkest
-/// [`KEY_TRIM`] of the pixels and the brightest are left out, by count, and
-/// a bin the trim falls inside contributes the share of itself that is
-/// kept, taken at the bin's own mean. `None` where nothing was lit.
-fn trimmed_log_mean(counts: &[u32], sums: &[f64]) -> Option<f64> {
-    let total: u64 = counts.iter().map(|&count| u64::from(count)).sum();
-    if total == 0 {
-        return None;
-    }
-    let total = total as f64;
-    let (keep_from, keep_to) = (total * KEY_TRIM, total * (1.0 - KEY_TRIM));
-    let mut below = 0.0;
-    let mut kept_sum = 0.0;
-    let mut kept_count = 0.0;
-    for (&count, &sum) in counts.iter().zip(sums) {
-        if count == 0 {
-            continue;
-        }
-        let count = f64::from(count);
-        let above = below + count;
-        let kept = (above.min(keep_to) - below.max(keep_from)).max(0.0);
-        if kept > 0.0 {
-            kept_sum += sum * (kept / count);
-            kept_count += kept;
-        }
-        below = above;
-    }
-    // The trims leave nine tenths of the pixels between them whatever the
-    // count, so there is always something kept.
-    Some(kept_sum / kept_count)
-}
-
-/// What the second pass counts: the bins of [`Stats`], of its [`Plot`] and
-/// of its [`Fine`].
-struct Counts {
-    histogram: [u32; BINS],
-    counted: u32,
-    fine: Fine,
-}
-
-impl Counts {
-    fn new(color: bool, axis_min: f32, axis_max: f32) -> Self {
-        Self {
-            histogram: [0; BINS],
-            counted: 0,
-            fine: Fine::empty(axis_min, axis_max, color),
-        }
-    }
-
-    fn merge(mut self, other: Self) -> Self {
-        fn add(into: &mut [u32; BINS], from: &[u32; BINS]) {
-            for (sum, count) in into.iter_mut().zip(from) {
-                *sum += count;
-            }
-        }
-        add(&mut self.histogram, &other.histogram);
-        self.counted += other.counted;
-        self.fine = self.fine.merge(&other.fine);
-        self
-    }
-}
-
-/// Sampled pixels below which a pass is not worth dividing: handing bands to
-/// the pool costs more than a picture this small takes to walk.
-const PARALLEL_FROM: usize = 1 << 16;
-
-/// The fewest sampled pixels a band is given, so that a picture just over
-/// [`PARALLEL_FROM`] goes to two or three threads rather than thirty-two.
-const BAND_PIXELS: usize = 1 << 15;
-
-/// Iterator over each sampled pixel, as stored and as decoded.
-#[derive(Clone)]
-struct Values<'a> {
-    /// The pipeline every pixel is read through, set up once for the scan.
-    reader: &'a Reader<'a>,
-    transfer: Transfer,
-    stride: usize,
-    /// The rows this walk covers, as a range of pixel indices: the whole
-    /// image, or one band of it.
-    pixels: std::ops::Range<usize>,
-    width: usize,
-}
-
-impl<'a> Values<'a> {
-    fn new(image: &'a DecodedImage, reader: &'a Reader<'a>, stride: usize) -> Self {
-        let width = image.width as usize;
-        Self {
-            reader,
-            transfer: image.color.transfer,
-            stride,
-            pixels: 0..width * image.height as usize,
-            width,
-        }
-    }
-
-    /// How many ways to cut the walk: one for a picture too small to be
-    /// worth the threads, otherwise one per thread the pool will run at
-    /// once, and never more than there are rows to give them.
-    fn bands_for(image: &DecodedImage, stride: usize) -> usize {
-        let height = image.height as usize;
-        let sampled = image.width as usize * height / stride.max(1);
-        if image.width == 0 || height == 0 || sampled < PARALLEL_FROM {
-            return 1;
-        }
-        (sampled / BAND_PIXELS)
-            .clamp(1, rayon_core::current_num_threads().max(1))
-            .min(height)
-    }
-
-    /// The walk cut into `bands` bands of whole rows, and `pass` run over
-    /// each on rayon's pool. The results come back in row order, but nothing
-    /// a band measures depends on its neighbors, so the order does not
-    /// matter.
-    ///
-    /// A band walks its own rows on the whole image's stride, in the whole
-    /// image's phase, so that the bands together land on exactly the pixels
-    /// one walk would have. What the scan measures then does not depend on
-    /// how many threads the machine has.
-    fn bands<T: Send>(&self, bands: usize, pass: impl Fn(Values<'a>) -> T + Sync) -> Vec<T> {
-        let height = self.pixels.len() / self.width.max(1);
-        let bands = bands.clamp(1, height.max(1));
-        if bands == 1 {
-            return vec![pass(self.clone())];
-        }
-
-        // Whole rows each, so rounding up the rows can leave fewer bands
-        // than asked for; the count follows the rows, not the other way.
-        let rows = height.div_ceil(bands);
-        let bands = height.div_ceil(rows);
-        let mut results: Vec<Option<T>> = (0..bands).map(|_| None).collect();
-        rayon_core::scope(|scope| {
-            for (index, slot) in results.iter_mut().enumerate() {
-                let first = self.pixels.start + index * rows * self.width;
-                let last = (first + rows * self.width).min(self.pixels.end);
-                let band = Values {
-                    pixels: first..last,
-                    ..self.clone()
+impl Plane {
+    /// The plane's plot over its range on `axis`, in [`SHARES`] of a pixel.
+    pub fn plot(&self, axis: Axis) -> [u32; BINS] {
+        match &self.binned {
+            Some(binned) => {
+                let fine = Fine {
+                    min: self.range[0],
+                    max: self.range[1],
+                    luma: binned.clone(),
+                    color: None,
+                    code: None,
                 };
-                let pass = &pass;
-                scope.spawn(move |_| *slot = Some(pass(band)));
+                fine.rebinned(self.range, |value| value).luma
             }
-        });
-        results
-            .into_iter()
-            .map(|result| result.expect("every band was walked"))
-            .collect()
+            None => self
+                .tally
+                .pour_shares(self.range, |value| axis.place_stored(value)),
+        }
     }
 
-    /// Calls `visit` with one pixel's components twice over: first on the
-    /// file's own curve, normalized to 0..1 for integer samples, then
-    /// decoded to the linear working space — lifted and carried into its
-    /// primaries by the reader, with the stored side put back on the curve
-    /// to match where either moved it, so that the color channels are
-    /// plotted where the file would have stored what the screen shows:
-    /// past the top of the file's own range where the lift or the matrix
-    /// takes them, and below the bottom where the matrix does. Alpha is
-    /// included where the image has one, since callers slice down to what
-    /// they want.
-    fn for_each(self, mut visit: impl FnMut(&[f32], &[f32])) {
-        let reader = self.reader;
-        let channels = reader.channels();
-        let count = channels.count();
-        let colors = channels.color_count();
-        let scale = reader.scale();
-        let moved = reader.moves_color();
-        let mut stored = [0.0f32; 4];
-        // From the first pixel of the band the whole image's stride would
-        // land on, not from the band's own first pixel.
-        let first = self
-            .pixels
-            .start
-            .next_multiple_of(self.stride.max(1))
-            .min(self.pixels.end);
-        for pixel in (first..self.pixels.end).step_by(self.stride) {
-            let (x, y) = ((pixel % self.width) as u32, (pixel / self.width) as u32);
-            let (raw, linear) = reader.decode(x, y);
-            for (slot, value) in stored.iter_mut().zip(&raw[..count]) {
-                *slot = *value * scale;
-            }
-            if moved {
-                for (stored, linear) in stored.iter_mut().zip(&linear).take(colors) {
-                    *stored = self.transfer.to_encoded(*linear);
+    /// Which bin of the plot a value at `place` on the axis falls in, or
+    /// `None` off the range.
+    pub fn bin_at(&self, place: f32) -> Option<usize> {
+        bin_in(self.range, place)
+    }
+}
+
+/// The share of a measurement's pixels left off each end of the range a
+/// channel is plotted over, so that one stray value — a sentinel nobody
+/// declared, a spike — does not put the whole of the picture into one bin:
+/// the trims the display's own percentile window uses, so that the plot's
+/// range is the one that window would put on it.
+const PLOT_TRIM: f32 = 0.001;
+
+/// How much of the exact range the trimmed one has to cover for the exact
+/// one to be plotted instead: a picture with no strays in it is plotted
+/// whole.
+const WHOLE_FROM: f32 = 0.9;
+
+impl Stored {
+    /// Tallies `image` as stored, in one pass over every pixel. A file
+    /// arriving is tallied by [`Stats::scan_both`], which hands both back
+    /// from the one pass; this is for a test that wants the stored side
+    /// alone.
+    #[cfg(test)]
+    pub fn scan(image: &DecodedImage) -> Self {
+        Self::from_scan(&Scan::of(image, None))
+    }
+
+    fn from_scan(scan: &Scan) -> Self {
+        let pass = &scan.pass;
+        let image = pass.image;
+        let transfer = pass.transfer;
+        let floats = scan.floats();
+        let data = image.referred == Referred::Measured;
+        let mut axis = Axis::of(image);
+        let tallies = &scan.tallies;
+        let extremes: Vec<(f32, f32)> = tallies.stored.iter().map(Tally::extremes).collect();
+        let highest = extremes
+            .iter()
+            .map(|(_, max)| *max)
+            .fold(f32::NEG_INFINITY, f32::max);
+
+        // The ranges: light in stops shares an axis read off every channel
+        // together; a photograph's integer channels share the whole range
+        // their samples can hold, a raw's from black to the sensor's
+        // saturation, so that how far a picture stands short of clipping is
+        // the room to the right of it; a photograph stored as curved floats
+        // the range such a file holds, widened by what runs over; and a
+        // measurement's channels each their own, trimmed of strays.
+        let shared: Option<[f32; 2]> = match axis {
+            Axis::Stops => {
+                // Every channel's lit pixels together, for the floor.
+                let mut pooled = Tally::keys();
+                for tally in &tallies.stored {
+                    pooled.add(tally);
+                }
+                match stops_axis(highest, &Lit::of(&pooled, None, |value| value)) {
+                    Some((floor, top)) => Some([floor, top]),
+                    None => {
+                        axis = Axis::Curve(transfer);
+                        None
+                    }
                 }
             }
-            visit(&stored[..count], &linear[..count]);
+            Axis::Curve(_) if data => None,
+            Axis::Curve(_) if !floats => Some([0.0, 1.0]),
+            Axis::Curve(_) => {
+                let lowest = extremes
+                    .iter()
+                    .map(|(min, _)| *min)
+                    .fold(f32::INFINITY, f32::min);
+                Some([lowest.min(0.0), highest.max(1.0)])
+            }
+        };
+        let own = |tally: &Tally, (min, max): (f32, f32)| -> [f32; 2] {
+            if !(min.is_finite() && max.is_finite()) {
+                return [0.0, 1.0];
+            }
+            // Trimmed only where the trim is a whole pixel or more: on a
+            // picture of a few pixels every one is the picture.
+            let trims = (f64::from(PLOT_TRIM) * tally.total() as f64) as u64 >= 1;
+            if data && trims {
+                let (low, high) = (
+                    tally.percentile(PLOT_TRIM),
+                    tally.percentile(1.0 - PLOT_TRIM),
+                );
+                if high > low && high - low < WHOLE_FROM * (max - min) {
+                    return [low, high];
+                }
+            }
+            [min, max]
+        };
+        let ranges: Vec<[f32; 2]> = tallies
+            .stored
+            .iter()
+            .zip(&extremes)
+            .map(|(tally, &extremes)| match shared {
+                Some(range) => range,
+                None => own(tally, extremes),
+            })
+            .collect();
+
+        let binned: Vec<Option<Vec<u32>>> = if scan.rebins(axis) {
+            let binning = pass.run(|| Binning {
+                pass,
+                axis,
+                range: [0.0, 1.0],
+                luma: None,
+                planes: None,
+                stored: ranges
+                    .iter()
+                    .map(|&range| (range, vec![0; FINE_BINS]))
+                    .collect(),
+            });
+            binning
+                .stored
+                .into_iter()
+                .map(|(_, bins)| Some(bins))
+                .collect()
+        } else {
+            tallies.stored.iter().map(|_| None).collect()
+        };
+
+        let planes = tallies
+            .stored
+            .iter()
+            .zip(extremes)
+            .zip(ranges)
+            .zip(binned)
+            .map(|(((tally, (min, max)), range), binned)| Plane {
+                min,
+                max,
+                range,
+                tally: tally.clone(),
+                binned,
+            })
+            .collect();
+        Self {
+            axis,
+            planes,
+            shared: shared.is_some(),
         }
+    }
+
+    /// The range every plane is plotted over where they share one.
+    pub fn shared_range(&self) -> Option<[f32; 2]> {
+        self.shared
+            .then(|| self.planes.first().map_or([0.0, 1.0], |plane| plane.range))
     }
 }
 
@@ -1235,7 +2178,23 @@ mod tests {
             opens_on: None,
         };
         let key = Stats::scan(&element).key.unwrap();
-        assert!((key - 0.5).abs() < 1e-6, "{key}");
+        assert!((key - 0.5).abs() < 1e-3, "{key}");
+
+        // A transparent pixel with a color in it, on straight alpha, is
+        // not lit either: it is taken off the lit pixels bin for bin.
+        let mut data = vec![0.9, 0.9, 0.9, 0.0];
+        data.extend([0.5, 0.5, 0.5, 1.0]);
+        let straight = DecodedImage {
+            samples: Samples::F32 {
+                channels: Channels::Rgba,
+                data,
+            },
+            width: 2,
+            alpha: AlphaMode::Straight,
+            ..element
+        };
+        let key = Stats::scan(&straight).key.unwrap();
+        assert!((key - 0.5).abs() < 1e-3, "{key}");
 
         assert_eq!(Stats::scan(&linear_gray_f32(vec![0.0; 4])).key, None);
     }
@@ -1271,6 +2230,24 @@ mod tests {
         assert!(stats.percentile(0.999) < 0.5, "{}", stats.percentile(0.999));
     }
 
+    /// A stray far off the rest of a float measurement — a sentinel nobody
+    /// declared, a spike — is in the extremes and nowhere else: the
+    /// percentiles are read off the tally of every value, not off bins
+    /// spread between the extremes, which one stray would leave empty but
+    /// for the one everything else piled into.
+    #[test]
+    fn percentiles_are_exact_however_far_a_stray_is() {
+        let mut data: Vec<f32> = (0..10_000).map(|i| 290.0 + i as f32 / 1000.0).collect();
+        data.push(1e30);
+        data.push(-9999.0);
+        let stats = Stats::scan(&measured(linear_gray_f32(data)));
+        assert_eq!(stats.min, -9999.0);
+        assert_eq!(stats.max, 1e30);
+        let (low, high) = (stats.percentile(0.001), stats.percentile(0.999));
+        assert!((low - 290.0).abs() < 0.5, "{low}");
+        assert!((high - 300.0).abs() < 0.5, "{high}");
+    }
+
     #[test]
     fn a_flat_image_gives_a_degenerate_but_usable_range() {
         let stats = Stats::scan(&linear_gray(vec![500; 16]));
@@ -1291,16 +2268,9 @@ mod tests {
         assert!((decoded - 0.2140).abs() < 1e-3, "{decoded}");
     }
 
-    /// Dividing the scan between threads must not change a count. Held
-    /// against the same scan on one band, over an image with a stride of
-    /// one so that every pixel is looked at, and again on a stride so that
-    /// the bands are shown to keep its phase; both fold to exactly what a
-    /// plain walk would have — bins, extremes and the pixel count.
-    #[test]
-    fn a_divided_scan_agrees_with_a_plain_one() {
-        let (width, height) = (97u32, 61u32);
-        // Something with structure in every band: a gradient across, a ramp
-        // down, and a stripe of nodata-free NaNs the scan has to skip.
+    /// Something with structure in every band: a gradient across, a ramp
+    /// down, and a stripe of NaNs the scan has to skip.
+    fn structured(width: u32, height: u32) -> DecodedImage {
         let mut data = Vec::with_capacity((width * height * 3) as usize);
         for y in 0..height {
             for x in 0..width {
@@ -1312,7 +2282,7 @@ mod tests {
                 }
             }
         }
-        let image = DecodedImage {
+        DecodedImage {
             width,
             height,
             samples: Samples::F32 {
@@ -1327,26 +2297,242 @@ mod tests {
             gain_map: None,
             depth: None,
             opens_on: None,
-        };
+        }
+    }
 
-        for stride in [1, 5] {
-            let reader = Reader::tabulated(&image, None);
-            let plain = Stats::scan_in(&image, &reader, stride, 1);
-            assert!(plain.counted > 0);
-            for bands in [2, 7, 60, 200] {
-                let divided = Stats::scan_in(&image, &reader, stride, bands);
-                assert_eq!(divided.min, plain.min, "stride {stride}, {bands} bands");
-                assert_eq!(divided.max, plain.max, "stride {stride}, {bands} bands");
-                assert_eq!(divided.plot.min, plain.plot.min);
-                assert_eq!(divided.plot.max, plain.plot.max);
-                assert_eq!(divided.counted, plain.counted, "{bands} bands");
-                assert_eq!(divided.histogram, plain.histogram, "{bands} bands");
-                assert_eq!(divided.plot.luma, plain.plot.luma, "{bands} bands");
-                assert_eq!(divided.plot.color, plain.plot.color, "{bands} bands");
-                assert_eq!(divided.fine.luma, plain.fine.luma, "{bands} bands");
-                assert_eq!(divided.fine.color, plain.fine.color, "{bands} bands");
+    /// Dividing the scan between threads must not change a count: a
+    /// picture large enough to be divided folds to exactly what the same
+    /// picture walked on one thread counts — bins, extremes and the pixel
+    /// count — however many threads there are.
+    #[test]
+    fn a_divided_scan_agrees_with_a_plain_one() {
+        let image = structured(400, 200);
+        assert!(bands_for(image.width, image.height) > 1 || rayon_core::current_num_threads() == 1);
+        let pass = Pass::new(&image, None);
+        let Samples::F32 { data, .. } = &image.samples else {
+            unreachable!()
+        };
+        let mut plain = Counting {
+            pass: &pass,
+            tallies: Tallies::new(&pass),
+        };
+        pass.walk(data, 0..image.height, &mut plain);
+        let divided = pass.run(|| Counting {
+            pass: &pass,
+            tallies: Tallies::new(&pass),
+        });
+        let (plain, divided) = (plain.tallies, divided.tallies);
+        assert_eq!(plain.counted, divided.counted);
+        assert_eq!(plain.min, divided.min);
+        assert_eq!(plain.max, divided.max);
+        assert_eq!(plain.peak, divided.peak);
+        for (mine, theirs) in plain.stored.iter().zip(&divided.stored) {
+            assert_eq!(mine.total(), theirs.total());
+            assert_eq!(mine.extremes(), theirs.extremes());
+            assert_eq!(mine.percentile(0.37), theirs.percentile(0.37));
+        }
+        let (mine, theirs) = (plain.luma.unwrap(), divided.luma.unwrap());
+        assert_eq!(mine.total(), theirs.total());
+        assert_eq!(mine.percentile(0.5), theirs.percentile(0.5));
+
+        let (stats, stored) = Stats::scan_both(&image);
+        assert_eq!(stats.counted, divided.counted);
+        assert_eq!(stored.planes.len(), 3);
+    }
+
+    /// The twin: the one pass reads every pixel through the same table,
+    /// lift and matrix as [`DecodedImage::sample`] reads one, so what it
+    /// counts is what a walk over the pixels through the reader counts,
+    /// for every kind of sample, primaries and alpha, with and without a
+    /// lift.
+    #[test]
+    fn the_pass_agrees_with_the_reader_on_every_pixel() {
+        use crate::image::gain_map::{GainMap, Lift};
+        let (width, height) = (13u32, 7u32);
+        let pixels = (width * height) as usize;
+        let mut seed = 0x9E37_79B9u32;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed
+        };
+        let layouts = [
+            Channels::Gray,
+            Channels::GrayAlpha,
+            Channels::Rgb,
+            Channels::Rgba,
+        ];
+        let primaries = [Primaries::Bt709, Primaries::DisplayP3, Primaries::Bt2020];
+        let transfers = [Transfer::Srgb, Transfer::Linear];
+        for channels in layouts {
+            for primaries in primaries {
+                for transfer in transfers {
+                    for lifted in [false, true] {
+                        for depth in 0..3 {
+                            let count = channels.count() * pixels;
+                            let samples = match depth {
+                                0 => Samples::U8 {
+                                    channels,
+                                    data: (0..count).map(|_| next() as u8).collect(),
+                                },
+                                1 => Samples::U16 {
+                                    channels,
+                                    data: (0..count).map(|_| (next() >> 16) as u16).collect(),
+                                },
+                                _ => Samples::F32 {
+                                    channels,
+                                    data: (0..count)
+                                        .map(|_| (next() >> 8) as f32 / (1u32 << 24) as f32 * 1.5)
+                                        .collect(),
+                                },
+                            };
+                            let mut image = DecodedImage {
+                                width,
+                                height,
+                                samples,
+                                color: ColorSpace {
+                                    transfer,
+                                    primaries,
+                                },
+                                alpha: if channels.alpha_index().is_some() {
+                                    AlphaMode::Premultiplied
+                                } else {
+                                    AlphaMode::Opaque
+                                },
+                                referred: Referred::Display,
+                                exposure: None,
+                                nodata: None,
+                                gain_map: None,
+                                depth: None,
+                                opens_on: None,
+                            };
+                            let table = lifted.then(|| {
+                                let map = GainMap {
+                                    width: 3,
+                                    height: 2,
+                                    channels: 1,
+                                    data: vec![0, 64, 128, 192, 255, 32],
+                                    lift: Lift::Apple { headroom: 4.0 },
+                                };
+                                let table = map.table(1.0);
+                                image.gain_map = Some(Arc::new(map));
+                                table
+                            });
+                            let stats = Stats::scan_with(&image, table.as_ref());
+                            let label = format!(
+                                "{channels:?} {primaries:?} {transfer:?} lift {lifted} depth {depth}"
+                            );
+
+                            // The reference: every pixel through the reader.
+                            let (mut min, mut max, mut peak) =
+                                (f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
+                            let mut lumas = Vec::with_capacity(pixels);
+                            let mut logs = Vec::new();
+                            for y in 0..height {
+                                for x in 0..width {
+                                    let sample = image.sample(x, y, table.as_ref()).unwrap();
+                                    let linear = sample.linear();
+                                    let value = luminance(linear, channels);
+                                    min = min.min(value);
+                                    max = max.max(value);
+                                    lumas.push(value);
+                                    for &channel in &linear[..channels.color_count()] {
+                                        peak = peak.max(channel);
+                                    }
+                                    if value > 0.0 && sample.alpha > 0.0 {
+                                        logs.push(f64::from(value.log2()));
+                                    }
+                                }
+                            }
+                            let close = |a: f32, b: f32| (a - b).abs() <= 1e-5 * a.abs().max(1.0);
+                            assert!(close(stats.min, min), "{label}: min {} vs {min}", stats.min);
+                            assert!(close(stats.max, max), "{label}: max {} vs {max}", stats.max);
+                            assert!(
+                                close(stats.peak, peak),
+                                "{label}: peak {} vs {peak}",
+                                stats.peak
+                            );
+                            assert_eq!(stats.counted as usize, pixels, "{label}");
+                            lumas.sort_by(f32::total_cmp);
+                            for fraction in [0.1f32, 0.5, 0.9] {
+                                // The pixel the `fraction`th one is, counted
+                                // from one, as the percentile counts them.
+                                let target = (fraction * pixels as f32) as usize;
+                                let at = lumas[target.saturating_sub(1).min(pixels - 1)];
+                                let got = stats.percentile(fraction);
+                                // Within a tally bin of the sorted value, which
+                                // is a thousandth of an octave, or a code.
+                                assert!(
+                                    (got - at).abs() <= 2e-3 * at.abs().max(1e-3) + 1.0 / 255.0,
+                                    "{label}: percentile {fraction}: {got} vs {at}"
+                                );
+                            }
+                            if !logs.is_empty() {
+                                logs.sort_by(f64::total_cmp);
+                                let trim = (logs.len() as f64 * KEY_TRIM) as usize;
+                                let kept = &logs[trim..logs.len() - trim];
+                                let expected = kept.iter().sum::<f64>() / kept.len() as f64;
+                                let key = stats.key.unwrap_or_else(|| panic!("{label}: a key"));
+                                assert!(
+                                    (f64::from(key.log2()) - expected).abs() < 0.05,
+                                    "{label}: key {key} vs {}",
+                                    expected.exp2()
+                                );
+                            }
+                        }
+                    }
+                }
             }
         }
+    }
+
+    /// The tally's bins are in value order, each spanning the values that
+    /// fall in it and no others, from the most negative to the most
+    /// positive, with the end bins reaching past the range.
+    #[test]
+    fn a_tally_bins_every_float_in_value_order() {
+        let values = [
+            -1e30,
+            -300.0,
+            -1.5,
+            -1.0,
+            -0.999,
+            -1e-20,
+            -0.0,
+            0.0,
+            1e-20,
+            0.5,
+            0.999,
+            1.0,
+            1.0009,
+            1.5,
+            290.0,
+            300.0,
+            1e30,
+            f32::MAX,
+        ];
+        let mut last = 0;
+        for (index, &value) in values.iter().enumerate() {
+            let key = key_of(value);
+            assert!(key < KEY_BINS, "{value}");
+            if index > 0 {
+                assert!(key >= last, "{value} is tallied before the value below it");
+            }
+            last = key;
+            let (low, high) = key_edges(key);
+            assert!(low <= value && value <= high, "{value} in {low}..{high}");
+            if key > 0 {
+                let (_, below) = key_edges(key - 1);
+                assert!(below <= low, "{value}: the bin below ends at {below}");
+            }
+        }
+        // Distinct values a thousandth of an octave apart are distinct bins.
+        assert_ne!(key_of(1.0), key_of(1.001));
+        assert_eq!(key_of(1.0), key_of(1.0005));
+        // The exact edges of 1.
+        assert_eq!(key_edges(key_of(1.0)).0, 1.0);
+        assert_eq!(key_edges(key_of(0.25)).0, 0.25);
     }
 
     /// A wide-gamut file is measured in the working space, as the shader
@@ -1398,15 +2584,18 @@ mod tests {
 
         // As the file stores it, the P3 red is at the top of the file's own
         // range and its green at the bottom, and nothing is past either.
-        let stored = Stats::scan_as_stored(&red(Primaries::DisplayP3)).expect("P3 moves color");
-        assert_eq!((stored.plot.min, stored.plot.max), (0.0, 1.0));
-        let planes = stored.plot.color.expect("three planes");
-        assert_eq!(planes[0][BINS - 1], ONE, "red at the top");
-        assert_eq!(planes[1][0], ONE, "green at the bottom");
-        // And a BT.709 file is stored as it is shown, so is not scanned
-        // again.
-        assert!(Stats::scan_as_stored(&red(Primaries::Bt709)).is_none());
-        assert!(Stats::scan_as_stored(&srgb_gray_u8(vec![0, 255])).is_none());
+        let stored = Stored::scan(&red(Primaries::DisplayP3));
+        assert_eq!(stored.shared_range(), Some([0.0, 1.0]));
+        assert_eq!(stored.planes.len(), 3);
+        let plots: Vec<[u32; BINS]> = stored
+            .planes
+            .iter()
+            .map(|plane| plane.plot(stored.axis))
+            .collect();
+        assert_eq!(plots[0][BINS - 1], ONE, "red at the top");
+        assert_eq!(plots[1][0], ONE, "green at the bottom");
+        assert_eq!((stored.planes[0].min, stored.planes[0].max), (1.0, 1.0));
+        assert_eq!((stored.planes[1].min, stored.planes[1].max), (0.0, 0.0));
     }
 
     /// Every pixel's marker lands on a bar that actually has the pixel in it.
@@ -1555,6 +2744,7 @@ mod tests {
         }
         assert!(near(stats.plot.luma.iter().sum::<u32>()));
         assert_eq!(stats.counted, 2);
+        assert_eq!(stats.fine.luma.iter().sum::<u32>(), 2, "whole pixels");
     }
 
     #[test]
@@ -1582,6 +2772,10 @@ mod tests {
                 .plot
                 .color
                 .is_none()
+        );
+        assert_eq!(
+            Stored::scan(&linear_gray(vec![0, 1000, 4095])).planes.len(),
+            1
         );
     }
 
@@ -1623,6 +2817,14 @@ mod tests {
         assert_eq!(stats.axis.place(0.0), f32::NEG_INFINITY);
         assert_eq!(stats.axis.place(-1.0), f32::NEG_INFINITY);
         assert_eq!(stats.axis.value(3.0), 8.0);
+
+        // The file as stored stands on the same axis.
+        let stored = Stored::scan(&linear_gray_f32(vec![0.0, 0.25, 1.0, 256.0]));
+        assert_eq!(stored.axis, Axis::Stops);
+        assert_eq!(stored.shared_range(), Some([-2.0, 8.0]));
+        let plotted = stored.planes[0].plot(stored.axis);
+        assert_eq!(plotted[0], 2 * ONE);
+        assert_eq!(plotted[BINS - 1], ONE);
 
         // The linear axis stays what it was for a measurement, and a
         // graded linear float is light.
@@ -1920,5 +3122,107 @@ mod tests {
         let stats = Stats::scan(&image);
         assert!((stats.min - 0.25).abs() < 1e-6);
         assert!((stats.max - 0.75).abs() < 1e-6);
+        assert_eq!(stats.counted, 2);
+    }
+
+    /// The no-data value is no measurement: an integer file's code for it is
+    /// taken out of every tally, and a float's value out of every count, so
+    /// the extremes, the percentiles and the plots are of the data alone.
+    #[test]
+    fn the_no_data_value_is_left_out_everywhere() {
+        let mut image = linear_gray(vec![0, 1000, 2000, 4095]);
+        image.nodata = Some(0.0);
+        let (stats, stored) = Stats::scan_both(&image);
+        assert!((stats.min - 1000.0 / 65535.0).abs() < 1e-6, "{}", stats.min);
+        assert_eq!(stats.counted, 3);
+        assert!((stored.planes[0].min - 1000.0 / 65535.0).abs() < 1e-6);
+
+        let mut floats = measured(linear_gray_f32(vec![-9999.0, 1.0, 2.0, 3.0]));
+        floats.nodata = Some(-9999.0);
+        let (stats, stored) = Stats::scan_both(&floats);
+        assert_eq!((stats.min, stats.max), (1.0, 3.0));
+        assert_eq!(stats.counted, 3);
+        assert_eq!((stored.planes[0].min, stored.planes[0].max), (1.0, 3.0));
+        assert_eq!(stored.planes[0].range, [1.0, 3.0]);
+    }
+
+    /// A photograph's integer channels share the whole range their samples
+    /// can hold; a measurement's each get their own, trimmed of strays
+    /// where there are any and the whole of it where there are not; and
+    /// light in stops shares one axis read off every channel.
+    #[test]
+    fn stored_channels_are_plotted_over_the_range_their_reading_asks_for() {
+        let raw = DecodedImage {
+            samples: Samples::U16 {
+                channels: Channels::Rgb,
+                data: vec![100, 2000, 300, 4000, 50, 900],
+            },
+            width: 2,
+            height: 1,
+            color: ColorSpace {
+                transfer: Transfer::Linear,
+                primaries: Primaries::Bt2020,
+            },
+            referred: Referred::Display,
+            ..linear_gray(vec![0])
+        };
+        let stored = Stored::scan(&raw);
+        assert!(stored.shared);
+        assert_eq!(stored.shared_range(), Some([0.0, 1.0]));
+        assert_eq!(stored.planes.len(), 3);
+        let full = f32::from(u16::MAX);
+        assert_eq!(stored.planes[0].min, 100.0 / full);
+        assert_eq!(stored.planes[0].max, 4000.0 / full);
+        assert_eq!(stored.planes[2].max, 900.0 / full);
+
+        // The same numbers read as data: each channel its own range.
+        let data = measured(raw);
+        let stored = Stored::scan(&data);
+        assert!(!stored.shared);
+        assert_eq!(stored.planes[0].range, [100.0 / full, 4000.0 / full]);
+        assert_eq!(stored.planes[1].range, [50.0 / full, 2000.0 / full]);
+        assert_eq!(stored.planes[2].range, [300.0 / full, 900.0 / full]);
+        let plotted = stored.planes[2].plot(stored.axis);
+        assert!(plotted[0] > 0 && plotted[BINS - 1] > 0, "{plotted:?}");
+
+        // A measurement with a stray: plotted over the trimmed range, the
+        // stray piled into the end bin, the extremes still exact.
+        let mut values: Vec<f32> = (0..2000).map(|i| 290.0 + i as f32 / 200.0).collect();
+        values.push(1e9);
+        let stored = Stored::scan(&measured(linear_gray_f32(values)));
+        let plane = &stored.planes[0];
+        assert_eq!(plane.max, 1e9);
+        assert!(plane.range[1] < 301.0, "{:?}", plane.range);
+        assert!(
+            plane.range[0] >= 290.0 && plane.range[0] < 291.0,
+            "{:?}",
+            plane.range
+        );
+        let plotted = plane.plot(stored.axis);
+        assert!(plotted[BINS - 1] >= ONE, "the stray is at the end");
+        // Over the range the bins are filled from the pixels rather than
+        // from the tally, so the ramp is even rather than combed.
+        assert!(smooth(&plotted, 0.5), "{plotted:?}");
+        // And one with no strays is plotted whole.
+        let whole = Stored::scan(&measured(linear_gray_f32(vec![290.0, 295.0, 300.0])));
+        assert_eq!(whole.planes[0].range, [290.0, 300.0]);
+    }
+
+    /// A pixel poured whole stays whole: a count spread over a stretch of
+    /// bins comes out as exactly that count, however the shares round.
+    #[test]
+    fn whole_pixels_are_spread_without_loss() {
+        for count in [1u32, 2, 3, 7, 100] {
+            for (from, to) in [(0.3f32, 2.7f32), (5.0, 5.0), (-3.0, 1.2), (250.4, 260.0)] {
+                let mut bins = vec![0u32; BINS];
+                spread_whole(&mut bins, from, to, count);
+                assert_eq!(bins.iter().sum::<u32>(), count, "{count} over {from}..{to}");
+            }
+        }
+        let mut bins = vec![0u32; 8];
+        spread_whole(&mut bins, 1.9, 3.1, 1);
+        assert_eq!(bins[2] + bins[3], 1);
+        spread_whole(&mut bins, 1.9, 2.4, 1);
+        assert_eq!(bins[2], 2, "mostly in bin 2");
     }
 }

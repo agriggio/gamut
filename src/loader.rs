@@ -26,6 +26,7 @@ use crate::clipboard;
 use crate::image::decode::{self, CameraJpeg, Overrides, Rendering};
 use crate::image::exif::Exif;
 use crate::image::sequence::Sequence;
+use crate::image::stats::Stored;
 use crate::image::{DecodedImage, Stats};
 use crate::render::{GpuImage, Upload};
 use crate::timing;
@@ -117,8 +118,8 @@ pub struct Ready {
     pub image: DecodedImage,
     pub stats: Stats,
     /// The picture as the file stores it, for the histogram's plot of the
-    /// file: see [`Stats::scan_as_stored`].
-    pub stored: Stats,
+    /// file: see [`Stored`].
+    pub stored: Stored,
     /// What the file says about the photograph, for the info panel. Read
     /// here rather than on the event loop because it is one more parse of a
     /// file whoever wrote it chose the bytes of, and this is the thread with
@@ -438,11 +439,7 @@ fn read(request: Request, upload: Option<&Upload>, canceled: &AtomicBool) -> Opt
 
     let scanned = decoded.and_then(
         |(image, decoding, exif, sequence, page, rendering, camera_jpeg, format)| {
-            let (stats, stored) = guard("scanning", || {
-                let stats = Stats::scan(&image);
-                let stored = Stats::stored_beside(&image, &stats);
-                Ok((stats, stored))
-            })?;
+            let (stats, stored) = guard("scanning", || Ok(Stats::scan_both(&image)))?;
             Ok((
                 image,
                 decoding,

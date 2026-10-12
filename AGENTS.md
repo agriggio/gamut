@@ -248,7 +248,11 @@ image/         the data model, nothing GPU
   sequence.rs    what a file holds beyond one image: Sequence (still, animation,
                  pages), Frame, and the FrameSource a decoder's frames come
                  through, each composited whole by the decoder
-  stats.rs       the scan an image gets on load: min/max, histogram, plot; scan_with lifts a gain-mapped picture as the screen shows it
+  stats.rs       the one pass over every pixel an image gets on load: Tally, a bin to the code or
+                 to a thousandth of an octave; Stats (min/max, key, percentiles, plot, fine bins)
+                 as the display starts from the picture, scan_with lifting a gain-mapped one as
+                 the screen shows it; Stored, each channel as the file holds it, for the
+                 histogram's Image section; scan_both for the two from the one pass
   auxiliary.rs   Auxiliary, the kinds of image a picture carries beside it, and Showing, which
                  of a file's images is on screen; DecodedImage::auxiliary makes one a picture
   depth/         a depth map beside the picture, for the readout: mod.rs its codes, the Scale

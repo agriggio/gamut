@@ -250,7 +250,7 @@ BT.709 comes to a channel above white or below zero there: a P3 red is 1.22
 in red and −0.04 in green. On an SDR surface the compositor clips both,
 which loses the color as clipping a highlight loses it, and the program
 reads it as the same loss. `Stats::scan` measures the picture in the working
-space — `Values::to_working_space`, the lift and then the matrix, with the
+space — `stats::Pass::walk`, the lift and then the matrix, with the
 plotted channels put back on the file's own curve — so the histogram's red
 plane stands past white and its green below black; `Stats::peak` carries
 the highest channel, which is what `Display::exceeds_white` asks, since the
@@ -258,10 +258,11 @@ luminance alone never passes white for a pure red of any gamut; `Plot::clipped`
 counts the share; and `judge` marks the pixels after the same matrix.
 `DecodedImage::sample` carries the matrix in `Sample::linear` for the same
 reason, so that the histogram's marker lands in the bar the scan counted the
-pixel in. The file as it stores the color is measured too, with no matrix
-and no lift (`Stats::scan_as_stored`), for the histogram's Image section, so
-that the panel shows the P3 red at the top of the file's own range there
-and past it only above, where the working space has taken it. On an HDR surface nothing is lost, so `tone_map`'s headroom arm in
+pixel in. The file's channels as it stores them are tallied in the same
+pass, with no matrix and no lift (`stats::Stored`), for the histogram's
+Image section, so that the panel shows the P3 red at the top of the file's
+own range there and past it only above, where the working space has taken
+it. On an HDR surface nothing is lost, so `tone_map`'s headroom arm in
 `shaders/composite.wgsl` passes the color through untouched, the negatives
 with it — scRGB is defined to carry them, and the `Rgba16Float` target holds
 them — and the HDR10 arm takes the color to BT.2020, which holds P3 and
