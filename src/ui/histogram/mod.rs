@@ -315,12 +315,14 @@ struct Mark {
 }
 
 /// One of a pixel's channels as a section marks it: which plane it is, the
-/// bin of that plane its value is in, and the value written out.
+/// bin of that plane its value is in, the value written out, and where the
+/// value stands among the plane's pixels, as a fraction of them.
 #[derive(Clone, Debug, PartialEq)]
 struct Channel {
     pub plane: Plane,
     pub bin: Option<usize>,
     pub words: String,
+    pub rank: Option<f32>,
 }
 
 /// A plane of the plot, and so the ink a channel of the pixel is marked in:
@@ -435,7 +437,7 @@ fn marked(
         // which plane's bin the pointer is on itself.
         if section == Section::Image {
             if let Some((plane, bin)) = stored::hovered(rect, stored::Layout::of(current), cursor) {
-                traced.image = Some(stored::bin_mark(current, plots.image, plane, bin));
+                traced.image = Some(stored::bin_mark(current, plane, bin));
                 return traced;
             }
             continue;
@@ -518,6 +520,27 @@ fn trimmed(decimal: String) -> String {
     }
     let trimmed = decimal.trim_end_matches('0').trim_end_matches('.');
     if trimmed == "-0" { "0" } else { trimmed }.to_string()
+}
+
+/// Where a value stands among a plane's pixels, `rank` a fraction of them,
+/// as the words beside the pointer's rule write it: a percentile, in whole
+/// ones through the middle and to a tenth at either end, where the tail a
+/// whole one would round away is what a reader is looking for, and held
+/// short of 0 and 100 there unless it is exactly either.
+fn percentile_words(rank: f32) -> String {
+    let percent = rank.clamp(0.0, 1.0) * 100.0;
+    let number = if percent == 0.0 || percent == 100.0 {
+        format!("{percent:.0}")
+    } else if percent < 0.1 {
+        "<0.1".to_string()
+    } else if percent > 99.9 {
+        ">99.9".to_string()
+    } else if (1.0..=99.0).contains(&percent) {
+        format!("{percent:.0}")
+    } else {
+        format!("{percent:.1}")
+    };
+    format!("{number}%")
 }
 
 /// A share of the picture as the pointer's words write it — the share a

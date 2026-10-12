@@ -197,11 +197,19 @@ fn plane_of(current: &Current, index: usize) -> Plane {
 /// [`component`] writes them. On an axis in stops the value is stops of
 /// the file's own 1, and the number is what stands there.
 fn stored_words(current: &Current, place: f32) -> String {
-    let stored = match current.stored.axis {
+    component(
+        stored_at(current, place) * current.image.samples.full_scale(),
+        float(current),
+    )
+}
+
+/// The value as stored standing at `place` on a plane's axis: a fraction
+/// of full scale for integer samples, the number itself for floats.
+fn stored_at(current: &Current, place: f32) -> f32 {
+    match current.stored.axis {
         Axis::Stops => place.exp2(),
         Axis::Curve(_) => place,
-    };
-    component(stored * current.image.samples.full_scale(), float(current))
+    }
 }
 
 /// The value at the middle of `bin` on the axis `range` spans.
@@ -263,18 +271,12 @@ fn ends_words(stored: f32, float: bool) -> String {
 
 /// What the section says with the pointer on the `plane`th plot at `bin`:
 /// the value the bin stands for, in the units the file keeps its samples
-/// in, in the plane's own color, and ahead of it the share of the picture a
-/// bar cut off at the top of the plot holds, which its height no longer
-/// can.
-pub(super) fn bin_mark(current: &Current, plotted: &Plotted, plane: usize, bin: usize) -> Mark {
+/// in, in the plane's own color.
+pub(super) fn bin_mark(current: &Current, plane: usize, bin: usize) -> Mark {
     let stored = &current.stored.planes[plane];
-    let mut words = stored_words(current, bin_value_in(stored.range, bin));
-    let cut = plotted
-        .counts
-        .cut_at(std::iter::once(&plotted.planes[plane]), bin);
-    if let Some(share) = cut.and_then(share_words) {
-        words = format!("{share} · {words}");
-    }
+    let place = bin_value_in(stored.range, bin);
+    let words = stored_words(current, place);
+    let rank = stored.rank(stored_at(current, place));
     Mark {
         bin: Some(bin),
         words: words.clone(),
@@ -282,6 +284,7 @@ pub(super) fn bin_mark(current: &Current, plotted: &Plotted, plane: usize, bin: 
             plane: plane_of(current, plane),
             bin: Some(bin),
             words,
+            rank,
         }],
     }
 }
@@ -304,6 +307,7 @@ pub(super) fn pixel_mark(current: &Current, x: u32, y: u32) -> Option<Mark> {
             plane: plane_of(current, index),
             bin: plane.bin_at(stored.axis.place_stored(value * scale)),
             words: component(value, float(current)),
+            rank: plane.rank(value * scale),
         })
         .collect();
     Some(Mark {
@@ -328,18 +332,21 @@ pub(super) fn show(
     let rects = plots(rect, layout);
     for (index, (bars, counts)) in rects.iter().zip(&plotted.planes).enumerate() {
         let plane = plane_of(current, index);
-        // The pixel's rule on this plane, in the plane's color; and the
-        // accent's one rule where the pointer is on this plot instead.
-        let rules: Vec<(usize, Color32)> = match mark {
-            Some(mark) if !mark.channels.is_empty() => mark
+        // The pixel's rule on this plane, in the plane's color, with where
+        // its value stands among the plane's pixels beside it.
+        let marked: Vec<&Channel> = match mark {
+            Some(mark) => mark
                 .channels
                 .iter()
-                .filter(|channel| channel.plane == plane)
-                .filter_map(|channel| Some((channel.bin?, plane.ink())))
+                .filter(|channel| channel.plane == plane && channel.bin.is_some())
                 .collect(),
-            _ => Vec::new(),
+            None => Vec::new(),
         };
-        plane_bars(
+        let rules: Vec<(usize, Color32)> = marked
+            .iter()
+            .filter_map(|channel| Some((channel.bin?, plane.ink())))
+            .collect();
+        let stands = plane_bars(
             pass,
             ui,
             Section::Image,
@@ -349,6 +356,11 @@ pub(super) fn show(
             *bars,
             &rules,
         );
+        for (channel, across) in marked.iter().zip(stands) {
+            if let Some(rank) = channel.rank {
+                plot::rule_label(ui, *bars, across, &percentile_words(rank), plane.ink());
+            }
+        }
         // The row of values under this plot, where each plane has its own
         // axis.
         if !layout.shared

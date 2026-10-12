@@ -127,6 +127,20 @@ fn a_clipped_share_is_written_to_be_read_at_a_glance() {
     assert_eq!(share_words(1.0).as_deref(), Some("100%"));
 }
 
+/// A percentile is whole through the middle, to a tenth at either end
+/// where a tail is what is looked for, and never 0 or 100 unless it is
+/// exactly so.
+#[test]
+fn a_percentile_is_written_whole_but_at_the_tails() {
+    assert_eq!(percentile_words(0.0), "0%");
+    assert_eq!(percentile_words(0.0004), "<0.1%");
+    assert_eq!(percentile_words(0.0042), "0.4%");
+    assert_eq!(percentile_words(0.42), "42%");
+    assert_eq!(percentile_words(0.995), "99.5%");
+    assert_eq!(percentile_words(0.9999), ">99.9%");
+    assert_eq!(percentile_words(1.0), "100%");
+}
+
 /// The ends of an axis and the value under the pointer are written with
 /// no more digits than they need: `1`, not `1.0000`.
 #[test]
@@ -769,11 +783,12 @@ fn the_output_piles_what_the_screen_clips_at_white() {
     assert_eq!(unknown.room, 4.0);
 }
 
-/// A bar cut off at the top of its plot says what share of the picture it
-/// holds, ahead of its value, with the pointer on it; a bar under the top
-/// says only its value.
+/// The Image section says only the value of the bar the pointer is on,
+/// even one cut off at the top of its plot, and ranks it among the
+/// channel's pixels for the words beside the rule: those below it and half
+/// of those at it.
 #[test]
-fn a_bar_cut_off_says_its_share() {
+fn a_bar_on_the_image_plot_says_its_value_and_ranks_it() {
     // Every code once, and as many pixels again at one of them.
     let data: Vec<u8> = (0..512u32)
         .map(|x| if x < 256 { x as u8 } else { 200 })
@@ -801,7 +816,7 @@ fn a_bar_cut_off_says_its_share() {
         lift_counts: input_counts(&current),
     };
     let bars = Section::Image.plot(rect_of(&layout, Section::Image));
-    let words_at = |value: u8| {
+    let mark_at = |value: u8| {
         let bin = current.stored.planes[0]
             .bin_at(f32::from(value) / 255.0)
             .expect("on the axis");
@@ -816,10 +831,13 @@ fn a_bar_cut_off_says_its_share() {
         )
         .image
         .expect("marked")
-        .words
     };
-    assert_eq!(words_at(200), "50% · 200");
-    assert_eq!(words_at(100), "100");
+    let spike = mark_at(200);
+    assert_eq!(spike.words, "200");
+    assert_eq!(spike.channels[0].rank, Some((200.0 + 257.0 / 2.0) / 512.0));
+    let lone = mark_at(100);
+    assert_eq!(lone.words, "100");
+    assert_eq!(lone.channels[0].rank, Some(100.5 / 512.0));
 }
 
 /// The input's scale holds still while the display is set, and the

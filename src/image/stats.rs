@@ -808,6 +808,31 @@ impl Tally {
         max
     }
 
+    /// Where `value`, in the tally's own units, stands among the pixels, as a
+    /// fraction of them: those below it and half of those in its own bin,
+    /// so that a value every pixel shares stands in the middle rather than
+    /// at either end. `None` where nothing was counted, or for a value that
+    /// is not a number.
+    fn rank(&self, value: f32) -> Option<f32> {
+        if value.is_nan() {
+            return None;
+        }
+        let (counts, at) = match self {
+            Tally::Codes { counts, full } => {
+                let code = (value * full).round().clamp(0.0, (counts.len() - 1) as f32);
+                (counts, code as usize)
+            }
+            Tally::Keys { counts, .. } => (counts, key_of(value)),
+        };
+        let total = self.total();
+        if total == 0 {
+            return None;
+        }
+        let below: u64 = counts[..at].iter().map(|&count| u64::from(count)).sum();
+        let within = u64::from(counts[at]);
+        Some(((below as f64 + within as f64 / 2.0) / total as f64) as f32)
+    }
+
     /// Takes every pixel whose value `decode` makes `sentinel` of out of a
     /// tally of codes: the no-data value, which is no measurement.
     fn without(&mut self, sentinel: f32, decode: impl Fn(f32) -> f32) {
@@ -1905,6 +1930,13 @@ impl Plane {
     pub fn bin_at(&self, place: f32) -> Option<usize> {
         bin_in(self.range, place)
     }
+
+    /// Where a value as stored — a fraction of full scale for integer
+    /// samples, the value itself for floats — stands among the channel's
+    /// pixels, as a fraction of them: see [`Tally::rank`].
+    pub fn rank(&self, stored: f32) -> Option<f32> {
+        self.tally.rank(stored)
+    }
 }
 
 /// The share of a measurement's pixels left off each end of the range a
@@ -2485,6 +2517,37 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A value's rank is the share of the pixels below it and half of
+    /// those it shares its bin with: an even spread of codes ranks each at
+    /// its own middle, a value every pixel shares in the middle of all of
+    /// them, and a float between the pixels' values after those below it.
+    #[test]
+    fn a_tally_ranks_a_value_among_its_pixels() {
+        let mut codes = Tally::codes(255.0, 256);
+        if let Tally::Codes { counts, .. } = &mut codes {
+            for code in [0, 64, 128, 255] {
+                counts[code] = 1;
+            }
+        }
+        assert_eq!(codes.rank(0.0), Some(0.125));
+        assert_eq!(codes.rank(64.0 / 255.0), Some(0.375));
+        assert_eq!(codes.rank(100.0 / 255.0), Some(0.5));
+        assert_eq!(codes.rank(1.0), Some(0.875));
+        assert_eq!(codes.rank(f32::NAN), None);
+        assert_eq!(Tally::codes(255.0, 256).rank(0.5), None);
+
+        let mut keys = Tally::keys();
+        if let Tally::Keys { counts, .. } = &mut keys {
+            for value in [-2.0, 0.5, 0.5, 300.0] {
+                counts[key_of(value)] += 1;
+            }
+        }
+        assert_eq!(keys.rank(-5.0), Some(0.0));
+        assert_eq!(keys.rank(0.5), Some(0.5));
+        assert_eq!(keys.rank(1.0), Some(0.75));
+        assert_eq!(keys.rank(1e30), Some(1.0));
     }
 
     /// The tally's bins are in value order, each spanning the values that

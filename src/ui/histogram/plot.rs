@@ -267,11 +267,12 @@ pub(super) fn plane_bars(
     counts: Counts,
     bars: Rect,
     rules: &[(usize, Color32)],
-) {
-    draw(pass, ui, section, &[(plane, ink)], counts, bars, rules);
+) -> Vec<f32> {
+    draw(pass, ui, section, &[(plane, ink)], counts, bars, rules)
 }
 
-/// The ground, `planes` over it, and `rules` over them.
+/// The ground, `planes` over it, and `rules` over them; where each rule
+/// stands this frame, as [`rule_over`] has it.
 fn draw(
     pass: &Pass,
     ui: &egui::Ui,
@@ -280,7 +281,7 @@ fn draw(
     counts: Counts,
     bars: Rect,
     rules: &[(usize, Color32)],
-) {
+) -> Vec<f32> {
     let painter = ui.painter();
     painter.rect_filled(
         egui::Rect::from(bars.inset(-PLOT_INSET, -PLOT_INSET)),
@@ -288,7 +289,7 @@ fn draw(
         PLOT_BACKGROUND,
     );
     lines(pass, ui, planes, counts, bars);
-    rule_over(pass, ui, section, bars, rules);
+    rule_over(pass, ui, section, bars, rules)
 }
 
 /// How long a rule takes to follow the pointer to its next bin, in seconds:
@@ -349,8 +350,16 @@ fn glided(ui: &egui::Ui, id: egui::Id, target: f32) -> f32 {
     shown
 }
 
-/// The pointer's rule across `bars` in `section`, each a bin and its ink.
-fn rule_over(pass: &Pass, ui: &egui::Ui, section: Section, bars: Rect, rules: &[(usize, Color32)]) {
+/// The pointer's rule across `bars` in `section`, each a bin and its ink;
+/// where each stands this frame on its way there, a fraction of the way
+/// along the axis, in the order given.
+fn rule_over(
+    pass: &Pass,
+    ui: &egui::Ui,
+    section: Section,
+    bars: Rect,
+    rules: &[(usize, Color32)],
+) -> Vec<f32> {
     let grid = pass.grid;
     let painter = ui.painter();
     // The pointer's rule: over the bins it is picking one of, and under
@@ -366,6 +375,7 @@ fn rule_over(pass: &Pass, ui: &egui::Ui, section: Section, bars: Rect, rules: &[
     // across the picture is followed by rules moving down the column rather
     // than by rules flickering from place to place. A rule is known by its
     // section and its ink, which is its plane, or the accent.
+    let mut stands = Vec::with_capacity(rules.len());
     for &(bin, ink) in rules {
         let across = glided(
             ui,
@@ -382,8 +392,50 @@ fn rule_over(pass: &Pass, ui: &egui::Ui, section: Section, bars: Rect, rules: &[
             0.0,
             ink,
         );
+        stands.push(across);
     }
+    stands
 }
+
+/// `words` beside a rule standing `across` the plot `bars`, in `ink`: at
+/// the top of the plot, after the rule where they fit and before it where
+/// they would run past the plot's end, as the white mark's label is. Over a
+/// fade of the plot's ground, so that a line the words cross does not run
+/// through them.
+pub(super) fn rule_label(ui: &egui::Ui, bars: Rect, across: f32, words: &str, ink: Color32) {
+    let painter = ui
+        .painter()
+        .with_clip_rect(egui::Rect::from(bars.inset(-PLOT_INSET, -PLOT_INSET)));
+    let galley = painter.layout_no_wrap(
+        words.to_owned(),
+        FontId::proportional(CLIP_TEXT),
+        Color32::PLACEHOLDER,
+    );
+    let size = galley.size();
+    let x = bars.x + across * bars.width;
+    let left = if x + RULE_LABEL_GAP + size.x <= bars.right() - CLIP_INSET {
+        x + RULE_LABEL_GAP
+    } else {
+        x - RULE_LABEL_GAP - size.x
+    };
+    let at = pos2(left, bars.y + CLIP_INSET);
+    let fade = egui::Shadow {
+        offset: [0, 0],
+        blur: RULE_LABEL_FADE,
+        spread: 0,
+        color: Color32::from(PLOT_BACKGROUND.with_alpha(RULE_LABEL_FADE_ALPHA)),
+    };
+    painter.add(fade.as_shape(egui::Rect::from_min_size(at, size), 0.0));
+    painter.galley(at, galley, ink);
+}
+
+/// The room between a rule and the words beside it.
+const RULE_LABEL_GAP: f32 = 3.0;
+
+/// The fade of the plot's ground under the words beside a rule: how far it
+/// feathers out past them, and how much of what is under them it hides.
+const RULE_LABEL_FADE: u8 = 6;
+const RULE_LABEL_FADE_ALPHA: u8 = 230;
 
 /// The plot's planes, in the order given, at one column to a device pixel
 /// and as tall as the fullest bin under it, so that a spike is not averaged
