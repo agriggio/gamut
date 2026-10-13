@@ -9,6 +9,7 @@
 use std::ops::Range;
 
 use crate::gestures::{Button, Kind};
+use crate::image::decode::Reading;
 use crate::image::region::{Grip, Region};
 
 use super::chooser::Step;
@@ -93,13 +94,13 @@ controls! {
     /// there is no state for it to be showing and no press of it that puts
     /// the interface back — see [`crate::app::input::Action::Dismiss`].
     Maximize,
-    /// The two plane toggles, the switch between a linear and a logarithmic
-    /// count axis, and the button that puts the rendering back, down the left
-    /// of the histogram panel.
-    Luma,
-    Planes,
-    Log,
+    /// The button that puts the rendering back, at the head of the
+    /// histogram panel.
     Reset,
+    /// The pair at the head of that panel, and in the information panel's
+    /// Image section, that reads the file as a photo or as data: the one
+    /// in force lit. Dead while a map is shown in the picture's place.
+    Reading(Reading) = Reading::Photo,
     /// The toggle beside the band at the foot of that strip, which paints
     /// the clipped pixels on the picture in the two colors the plot's
     /// corners count.
@@ -134,6 +135,11 @@ controls! {
     /// is, and drawn only for a picture that carries one. `G` does the
     /// same.
     GainMap,
+    /// The button in the histogram's Gain map section that does what
+    /// [`Control::GainMap`] does: lit while the map is on screen. A kind of
+    /// its own rather than the same one, so that each of the two names
+    /// itself once to whatever reads the interface by name.
+    ShowGainMap,
     /// The button at the foot of the right strip, which opens the help
     /// popup — every key, what it does and when — and closes it while it
     /// is up. `?` and `/` do the same.
@@ -282,11 +288,10 @@ impl Control {
             Control::Loupe => "Loupe".to_string(),
             Control::Zoom => "Zoom".to_string(),
             Control::Maximize => "Maximize".to_string(),
-            Control::Luma => "Luminance plane".to_string(),
-            Control::Planes => "Color planes".to_string(),
-            Control::Log => "Logarithmic counts".to_string(),
             Control::Marks => "Clipped pixels".to_string(),
             Control::Reset => "Reset".to_string(),
+            Control::Reading(Reading::Photo) => "Read as photo".to_string(),
+            Control::Reading(Reading::Data) => "Read as data".to_string(),
             Control::Ramp(index) => format!("False color {index}"),
             Control::Window(index) => format!("Window {index}"),
             Control::Curve(index) => format!("Curve {index}"),
@@ -296,6 +301,7 @@ impl Control {
             Control::CameraJpeg => "Camera JPEG".to_string(),
             Control::Depth => "Depth".to_string(),
             Control::GainMap => "Gain map".to_string(),
+            Control::ShowGainMap => "Show gain map".to_string(),
             Control::Help => "Help".to_string(),
             Control::PixelFormat => "Pixel format".to_string(),
             Control::Dismiss => "Dismiss".to_string(),

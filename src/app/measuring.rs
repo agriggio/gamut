@@ -242,6 +242,7 @@ mod tests {
                 lift: Lift::Apple { headroom: 4.0 },
             })),
             depth: None,
+            opens_on: None,
         })
     }
 

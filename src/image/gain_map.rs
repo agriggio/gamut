@@ -31,6 +31,8 @@
 use std::sync::Arc;
 
 use crate::image::color::{ColorSpace, Transfer};
+use crate::image::display::AutoWindow;
+use crate::image::stats::{BINS, COLOR, Plot};
 use crate::image::{AlphaMode, Channels, DecodedImage, Referred, Samples};
 use ultrahdr_rs::GainMapMetadata;
 use ultrahdr_rs::gainmap::apply::GainMapLut;
@@ -76,10 +78,11 @@ impl GainMap {
     /// How much of the lift a display with `headroom` — the ratio of its
     /// peak to its white, 1 for a monitor in SDR mode — gets: the standard's
     /// weight, where the display's headroom sits between the base's and the
-    /// alternate's, from none of it to all of it.
+    /// alternate's, from none of it to all of it. An infinite `headroom`
+    /// is a display whose room is not known, which gets all of it.
     pub fn weight(&self, headroom: f32) -> f32 {
         let stops = self.stops();
-        if stops.is_nan() || stops <= 0.0 || !headroom.is_finite() {
+        if stops.is_nan() || stops <= 0.0 || headroom.is_nan() {
             return 0.0;
         }
         let base = match &self.lift {
@@ -166,6 +169,7 @@ impl GainMap {
             AlphaMode::Opaque,
         );
         image.referred = Referred::Measured;
+        image.opens_on = Some(AutoWindow::MinMax);
         image
     }
 
@@ -193,6 +197,153 @@ impl GainMap {
                     .filter(|(_, held)| **held)
                     .map(move |(value, _)| stops[channel * 256 + value])
             })
+            .filter(|stops| stops.is_finite())
+            .fold(None, |range: Option<[f32; 2]>, stops| {
+                Some(range.map_or([stops, stops], |[low, high]| {
+                    [low.min(stops), high.max(stops)]
+                }))
+            })
+    }
+
+    /// How many stops of the whole lift `weight` of it is: what is on
+    /// screen of it, which the information panel and the histogram both
+    /// say.
+    pub fn applied_stops(&self, weight: f32) -> f32 {
+        weight.clamp(0.0, 1.0) * self.stops()
+    }
+
+    /// How far the map lifts the base pixel `(x, y)` of a `width` by
+    /// `height` base at the whole of the lift, in stops, a channel each: the
+    /// map read as [`GainMap::gain_at`] reads it for the screen. The same
+    /// three for a luminance map.
+    pub fn stops_at(&self, x: u32, y: u32, width: u32, height: u32) -> [f32; 3] {
+        self.gain_at(&self.table(1.0), x, y, width, height)
+            .map(f32::log2)
+    }
+
+    /// The map's histogram: how much of the picture is lifted how far, in
+    /// stops at the whole of the lift, evenly spaced, over the range the
+    /// map is described for — its lowest code to its highest
+    /// ([`GainMap::described_range`]) — as a graded file is plotted over the
+    /// range its codes can hold rather than stretched to what it uses. Where
+    /// the picture does not reach an end of that range, the plot says so by
+    /// leaving the stretch empty.
+    ///
+    /// Each code stands for a stretch of stops, from halfway to the code
+    /// below to halfway to the code above, and its count is spread over the
+    /// bins that stretch covers, in proportion. A code dropped into the one
+    /// bin its middle falls in would comb: the map's 256 codes land unevenly
+    /// on bins in stops wherever the map reads its codes through a curve, as
+    /// a gamma other than one and Apple's Rec. 709 encoding do, or holds
+    /// fewer of them than there are bins. Spread, each bin holds what the
+    /// codes say of it, and the plot is the distribution the map describes.
+    ///
+    /// A map with a channel each has a plane each, and its luminance plane
+    /// is the mean of the three, as a pixel's luminance is a mean of its
+    /// channels. `None` for a map with no pixels or no lift.
+    ///
+    /// A walk over the map, on a stride past [`MAX_PLOTTED`] values; the
+    /// caller keeps the answer.
+    pub fn lift_plot(&self) -> Option<Plot> {
+        self.lift_range()?;
+        let [low, high] = self.described_range()?;
+        let span = high - low;
+        if span.partial_cmp(&f32::MIN_POSITIVE) != Some(std::cmp::Ordering::Greater) {
+            return None;
+        }
+        let stops = self.stops_table();
+        let channels = self.channels.max(1) as usize;
+        let color = channels >= COLOR;
+        // The stretch of stops each code of each channel stands for.
+        let stretch = |channel: usize, code: usize| -> (f32, f32) {
+            let at = |code: usize| stops[channel * 256 + code];
+            let below = if code == 0 {
+                at(0)
+            } else {
+                (at(code - 1) + at(code)) / 2.0
+            };
+            let above = if code == 255 {
+                at(255)
+            } else {
+                (at(code) + at(code + 1)) / 2.0
+            };
+            (below.min(above), below.max(above))
+        };
+        // Bins as the positions `Plot::bin_at` rounds to: bin `k` is the
+        // stretch of the axis within half a bin of its own value.
+        let scale = (BINS - 1) as f32 / span;
+        let spread = |into: &mut [f64; BINS], (from, to): (f32, f32), count: f64| {
+            let (from, to) = ((from - low) * scale + 0.5, (to - low) * scale + 0.5);
+            let (from, to) = (from.clamp(0.0, BINS as f32), to.clamp(0.0, BINS as f32));
+            let width = to - from;
+            if width <= 1e-6 {
+                into[(from as usize).min(BINS - 1)] += count;
+                return;
+            }
+            let mut bin = from.floor() as usize;
+            while bin < BINS && (bin as f32) < to {
+                let overlap = to.min(bin as f32 + 1.0) - from.max(bin as f32);
+                if overlap > 0.0 {
+                    into[bin] += count * f64::from(overlap / width);
+                }
+                bin += 1;
+            }
+        };
+
+        let pixels = self.data.len() / channels;
+        let stride = pixels.div_ceil(MAX_PLOTTED).max(1);
+        // Counted by code first, so that a channel's spreading is done once
+        // a code rather than once a pixel; the luminance of a map with three
+        // is the one thing that has to be spread pixel by pixel.
+        let mut codes = [[0u64; 256]; COLOR];
+        let mut luma = [0f64; BINS];
+        for values in self.data.chunks_exact(channels).step_by(stride) {
+            for (channel, &value) in values.iter().enumerate().take(COLOR) {
+                codes[channel][value as usize] += 1;
+            }
+            if color {
+                let mut mean = (0.0, 0.0);
+                for (channel, &value) in values.iter().enumerate().take(COLOR) {
+                    let (from, to) = stretch(channel, value as usize);
+                    mean = (mean.0 + from / COLOR as f32, mean.1 + to / COLOR as f32);
+                }
+                spread(&mut luma, mean, 1.0);
+            }
+        }
+        let plane = |channel: usize| {
+            let mut bins = [0f64; BINS];
+            for (code, &count) in codes[channel].iter().enumerate() {
+                if count > 0 {
+                    spread(&mut bins, stretch(channel, code), count as f64);
+                }
+            }
+            bins
+        };
+        if !color {
+            luma = plane(0);
+        }
+        // Back to whole counts, which is what a plot holds, in sixteenths of
+        // a pixel, so that a code spread thin over several bins rounds to
+        // something in each rather than vanishing. The plot is drawn by its
+        // bins' heights against each other, which the unit leaves alone.
+        let whole = |bins: [f64; BINS]| bins.map(|count| (count * SHARES).round() as u32);
+        Some(Plot {
+            min: low,
+            max: high,
+            luma: whole(luma),
+            color: color.then(|| [whole(plane(0)), whole(plane(1)), whole(plane(2))]),
+        })
+    }
+
+    /// The least and the most any code of the map can lift the base by, in
+    /// stops, at the whole of the lift: the range the file describes its map
+    /// over, from its lowest code to its highest, whatever this picture's
+    /// map holds of it. `None` where no code says anything finite.
+    pub fn described_range(&self) -> Option<[f32; 2]> {
+        let channels = if self.channels >= 3 { COLOR } else { 1 };
+        self.stops_table()[..channels * 256]
+            .iter()
+            .copied()
             .filter(|stops| stops.is_finite())
             .fold(None, |range: Option<[f32; 2]>, stops| {
                 Some(range.map_or([stops, stops], |[low, high]| {
@@ -295,6 +446,14 @@ impl Table {
     }
 }
 
+/// The most of a map's pixels [`GainMap::lift_plot`] counts before it walks
+/// the map on a stride, as the picture's own scan does.
+const MAX_PLOTTED: usize = 1 << 21;
+
+/// What [`GainMap::lift_plot`] counts a pixel as: sixteen shares, so that
+/// a code spread over several bins keeps a share in each.
+const SHARES: f64 = 16.0;
+
 /// A gain map shared between the picture, the GPU's copy of it and the
 /// threads that read it.
 pub type Shared = Arc<GainMap>;
@@ -358,6 +517,7 @@ mod tests {
         assert_eq!(two_stops.weight(4.0), 1.0);
         assert_eq!(two_stops.weight(16.0), 1.0);
         assert_eq!(two_stops.weight(f32::NAN), 0.0);
+        assert_eq!(two_stops.weight(f32::INFINITY), 1.0, "room not known");
 
         let apple = map(Lift::Apple { headroom: 4.0 });
         assert_eq!(apple.weight(1.0), 0.0);
@@ -459,6 +619,119 @@ mod tests {
         assert!((data[2] - 3.0).abs() < 1e-3);
         let [low, high] = color.lift_range().expect("a range");
         assert!(low.abs() < 1e-5 && (high - 3.0).abs() < 1e-3);
+    }
+
+    /// Shown, the map opens on its full range, and a reset puts it back
+    /// there: its strongest lift is a handful of pixels, which a trim would
+    /// clip to the top of the window with the lift under them.
+    #[test]
+    fn the_map_shown_opens_on_its_full_range() {
+        use crate::image::display::{Display, Startup};
+        use crate::image::stats::Stats;
+        let mut data = vec![0; 2000];
+        data.push(255);
+        let map = GainMap {
+            width: 2001,
+            height: 1,
+            channels: 1,
+            data,
+            lift: Lift::Iso(iso(2.0)),
+        };
+        let image = map.image();
+        let stats = Stats::scan(&image);
+        let mut display = Display::for_image_with(&image, &stats, Startup::default());
+        assert_eq!(display.auto(), AutoWindow::MinMax);
+        assert!((display.window_high() - 2.0).abs() < 1e-3);
+        display.put_white(1.0);
+        display.reset(&stats, &image);
+        assert_eq!(display.auto(), AutoWindow::MinMax);
+        assert!((display.window_high() - 2.0).abs() < 1e-3);
+    }
+
+    /// The lift's histogram counts the unlifted pixel at nothing and the
+    /// lifted one at the whole of the lift, and a map with a channel each
+    /// has a plane each, its luminance their mean. A pixel's own lift reads
+    /// the same stops.
+    #[test]
+    fn the_lift_is_plotted_and_read_in_stops() {
+        let gray = map(Lift::Iso(iso(2.0)));
+        let plot = gray.lift_plot().expect("a lift to plot");
+        assert_eq!(plot.min, 0.0);
+        assert!((plot.max - 2.0).abs() < 1e-3, "{}", plot.max);
+        // Each end code stands for half a step, spread inside the axis, and
+        // is counted in sixteenths.
+        assert_eq!(plot.luma.iter().sum::<u32>(), 2 * SHARES as u32);
+        assert!(plot.luma[0] > 0);
+        assert!(plot.luma[BINS - 1] > 0);
+        assert!(plot.color.is_none());
+
+        // The base is twice the map's width: its first two pixels read the
+        // map's first value, and its last its second.
+        assert!(gray.stops_at(0, 0, 4, 1)[0].abs() < 1e-5);
+        assert!((gray.stops_at(3, 0, 4, 1)[0] - 2.0).abs() < 1e-3);
+        assert!((gray.applied_stops(0.5) - 1.0).abs() < 1e-6);
+        assert_eq!(gray.applied_stops(2.0), gray.stops());
+
+        let color = GainMap {
+            width: 1,
+            height: 1,
+            channels: 3,
+            data: vec![0, 0, 255],
+            lift: Lift::Iso(iso(3.0)),
+        };
+        let plot = color.lift_plot().expect("a lift to plot");
+        let planes = plot.color.expect("a plane a channel");
+        assert!(planes[0][0] > 0);
+        assert!(planes[1][0] > 0);
+        assert!(planes[2][BINS - 1] > 0);
+        // The mean of 0, 0 and 3 stops is one, a third of the way along.
+        assert!(plot.luma[plot.bin_at(1.0).expect("on the axis")] > 0);
+
+        // The axis runs over the range the map is described for, whatever of
+        // it the picture's map holds.
+        let mut darkening = iso(2.0);
+        darkening.gain_map_min = [-1.0; 3];
+        let partway = GainMap {
+            width: 3,
+            height: 1,
+            channels: 1,
+            data: vec![200, 220, 255],
+            lift: Lift::Iso(darkening),
+        };
+        let plot = partway.lift_plot().expect("a lift to plot");
+        assert!(
+            (plot.min + 1.0).abs() < 1e-3,
+            "the darkening its codes describe, which this map does not use: {}",
+            plot.min
+        );
+        assert!((plot.max - 2.0).abs() < 1e-3);
+        let low = plot.bin_at(1.0).expect("on the axis");
+        assert!(
+            plot.luma[..low].iter().all(|count| *count == 0),
+            "nothing below the codes the map holds"
+        );
+
+        // Every code of a map read through a curve still fills the stretch
+        // it stands for: no empty bin between two the map holds, the comb
+        // a bin to a code would leave on an axis in stops.
+        let apple = GainMap {
+            width: 256,
+            height: 1,
+            channels: 1,
+            data: (0..=255).collect(),
+            lift: Lift::Apple { headroom: 4.5 },
+        };
+        let plot = apple.lift_plot().expect("a lift to plot");
+        let first = plot.luma.iter().position(|count| *count > 0).unwrap();
+        let last = plot.luma.iter().rposition(|count| *count > 0).unwrap();
+        assert!(
+            plot.luma[first..=last].iter().all(|count| *count > 0),
+            "{:?}",
+            &plot.luma[..]
+        );
+
+        // A map that lifts nothing has nothing to plot.
+        assert!(map(Lift::Iso(iso(0.0))).lift_plot().is_none());
     }
 
     /// The map is sampled bilinearly at the base pixel's place in it, as

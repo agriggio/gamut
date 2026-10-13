@@ -351,6 +351,14 @@ pub struct DecodedImage {
     /// depth map: read by the pointer's readout and by nothing else. See
     /// [`depth`].
     pub depth: Option<depth::Shared>,
+    /// The window the image opens on where it is not the one its
+    /// [`Referred`] gives it: a gain map shown in the picture's place opens
+    /// on its full range, its every value being one its metadata defines,
+    /// with nothing stray for a trim to throw out and its strongest lift in
+    /// the tail a trim would clip. See [`AutoWindow::default_for`].
+    ///
+    /// [`AutoWindow::default_for`]: display::AutoWindow::default_for
+    pub opens_on: Option<display::AutoWindow>,
 }
 
 impl DecodedImage {
@@ -375,6 +383,7 @@ impl DecodedImage {
             nodata: None,
             gain_map: None,
             depth: None,
+            opens_on: None,
         }
     }
 
@@ -402,6 +411,14 @@ impl DecodedImage {
     /// every pixel through it, which is the same arithmetic.
     pub fn sample(&self, x: u32, y: u32, lift: Option<&gain_map::Table>) -> Option<Sample> {
         Reader::new(self, lift).read(x, y)
+    }
+
+    /// The pixel at `(x, y)` as the file stores it: the curve resolved and
+    /// nothing else — no lift, and the file's own primaries rather than the
+    /// working space's. What the histogram's plot of the file reads a pixel
+    /// as, to mark the bar the scan of the file as stored counted it in.
+    pub fn sample_as_stored(&self, x: u32, y: u32) -> Option<Sample> {
+        Reader::new(self, None).without_moves().read(x, y)
     }
 
     /// Sanity check used by the loader, so a broken decoder fails loudly
@@ -544,6 +561,17 @@ impl<'a> Reader<'a> {
         Self::with_curve(image, lift, curve)
     }
 
+    /// This reader with whatever it would have moved a color by left out:
+    /// no lift and no matrix, so that a wide-gamut color is read in the
+    /// file's own primaries and a gain-mapped picture as its base.
+    fn without_moves(self) -> Self {
+        Self {
+            lift: None,
+            matrix: None,
+            ..self
+        }
+    }
+
     fn with_curve(
         image: &'a DecodedImage,
         lift: Option<&'a gain_map::Table>,
@@ -564,22 +592,6 @@ impl<'a> Reader<'a> {
             matrix: (!channels.is_gray() && primaries != Primaries::Bt709)
                 .then(|| primaries.to_bt709()),
         }
-    }
-
-    pub fn channels(&self) -> Channels {
-        self.channels
-    }
-
-    /// What an integer sample is multiplied by to be a fraction of full
-    /// scale.
-    pub fn scale(&self) -> f32 {
-        self.scale
-    }
-
-    /// Whether the reader moves a color from where the curve alone would
-    /// put it: a lift, or a matrix.
-    pub fn moves_color(&self) -> bool {
-        self.lift.is_some() || self.matrix.is_some()
     }
 
     /// One pixel's components twice over: as stored — counts for integer
@@ -757,6 +769,7 @@ mod tests {
             nodata: None,
             gain_map: None,
             depth: None,
+            opens_on: None,
         }
     }
 
@@ -826,6 +839,7 @@ mod tests {
             nodata: None,
             gain_map: None,
             depth: None,
+            opens_on: None,
         };
 
         let sample = image.sample(0, 0, None).expect("inside the image");

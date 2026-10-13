@@ -26,6 +26,7 @@ use crate::clipboard;
 use crate::image::decode::{self, CameraJpeg, Overrides, Rendering};
 use crate::image::exif::Exif;
 use crate::image::sequence::Sequence;
+use crate::image::stats::Stored;
 use crate::image::{DecodedImage, Stats};
 use crate::render::{GpuImage, Upload};
 use crate::timing;
@@ -50,6 +51,11 @@ pub enum Reload {
     /// picture is displayed starts over, since an exposure set for linear
     /// sensor counts means nothing to a JPEG.
     Rendering,
+    /// The file already on screen, read as a photo or as data where it was
+    /// the other: the same picture under another reading, so where the
+    /// viewer is looking stays and the display starts over, a window and an
+    /// exposure set under one reading meaning nothing under the other.
+    Reading,
 }
 
 /// Where a read's bytes come from.
@@ -111,6 +117,9 @@ pub struct Opened {
 pub struct Ready {
     pub image: DecodedImage,
     pub stats: Stats,
+    /// The picture as the file stores it, for the histogram's plot of the
+    /// file: see [`Stored`].
+    pub stored: Stored,
     /// What the file says about the photograph, for the info panel. Read
     /// here rather than on the event loop because it is one more parse of a
     /// file whoever wrote it chose the bytes of, and this is the thread with
@@ -430,11 +439,11 @@ fn read(request: Request, upload: Option<&Upload>, canceled: &AtomicBool) -> Opt
 
     let scanned = decoded.and_then(
         |(image, decoding, exif, sequence, page, rendering, camera_jpeg, format)| {
-            let stats = guard("scanning", || Ok(Stats::scan(&image)))?;
+            let (stats, stored) = guard("scanning", || Ok(Stats::scan_both(&image)))?;
             Ok((
                 image,
                 decoding,
-                stats,
+                (stats, stored),
                 exif,
                 sequence,
                 page,
@@ -449,7 +458,17 @@ fn read(request: Request, upload: Option<&Upload>, canceled: &AtomicBool) -> Opt
     }
 
     let outcome = scanned.and_then(
-        |(image, decoding, stats, exif, sequence, page, rendering, camera_jpeg, format)| {
+        |(
+            image,
+            decoding,
+            (stats, stored),
+            exif,
+            sequence,
+            page,
+            rendering,
+            camera_jpeg,
+            format,
+        )| {
             // Measured once the pixels are ready to hand over, so that the time
             // reported is everything this thread did to them — the header, the
             // decode, the scan, the metadata — with the decoder's own share
@@ -470,6 +489,7 @@ fn read(request: Request, upload: Option<&Upload>, canceled: &AtomicBool) -> Opt
             Ok(Ready {
                 image,
                 stats,
+                stored,
                 exif,
                 gpu,
                 sequence,

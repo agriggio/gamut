@@ -674,10 +674,10 @@ const FIXTURES: &[Fixture] = &[
     },
     Fixture {
         file: "tiff-rgb16.tif",
-        covers: "TIFF truecolor, 16-bit",
+        covers: "TIFF truecolor, 16-bit — guessed a photograph",
         channels: Channels::Rgb,
         kind: Kind::U16,
-        color: LINEAR,
+        color: SRGB,
         alpha: AlphaMode::Opaque,
         tone: Tone::Color,
         coverage: Coverage::Opaque,
@@ -2392,6 +2392,7 @@ fn a_frame_is_finished_the_way_a_still_is() {
     let overrides = Overrides {
         transfer: Some(crate::image::Transfer::Linear),
         primaries: None,
+        reading: None,
         gain_map: true,
     };
     let path = directory().join("gif-animated.gif");

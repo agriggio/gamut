@@ -6,6 +6,8 @@
 use egui::{CursorIcon, Sense, WidgetInfo, WidgetType};
 
 use super::*;
+use crate::ui::Command;
+use crate::ui::slider::{HANDLE_WIDTH, Hand, handle};
 
 /// The band under the plot as the levels track it is: a handle at the value
 /// that comes out black and another at the value that comes out white, each
@@ -22,8 +24,8 @@ use super::*;
 /// The handles stand at the values that come out black and white — exposure
 /// included, since those are the two ends of the band's black run and its
 /// white run — and each puts its own value where it is dragged to, the
-/// exposure left as it is: [`Display::put_black`] and
-/// [`Display::put_white`]. A handle is dragged to the pointer rather
+/// exposure left as it is: [`crate::image::display::Display::put_black`] and
+/// [`crate::image::display::Display::put_white`]. A handle is dragged to the pointer rather
 /// than by it, so a drag has no memory to lose: wherever the pointer is
 /// along the axis is where the handle goes, and a hand that runs off the
 /// end of the band puts the handle at the end.
@@ -47,7 +49,7 @@ pub(super) fn track(
     if span <= 0.0 {
         return None;
     }
-    let transfer = current.image.color.transfer;
+    let axis = current.stats.axis;
     let display = &current.display;
     let (black, white) = display.displayed_bounds();
     if !(black.is_finite() && white.is_finite()) {
@@ -55,13 +57,15 @@ pub(super) fn track(
     }
 
     // Along the band from 0 at its left end to 1 at its right, which is the
-    // plot's own axis: encoded, so that a handle stands under the bin its
-    // value was counted in.
-    let along = |value: f32| (transfer.to_encoded(value) - axis_min) / span;
+    // plot's own axis, so that a handle stands under the bin its value was
+    // counted in. A black at no light is below every floor of an axis in
+    // stops — minus infinity along — and stands at the band's left end,
+    // hollow, as a handle out past either end does.
+    let along = |value: f32| (axis.place(value) - axis_min) / span;
     let at = |t: f32| bars.x + t.clamp(0.0, 1.0) * bars.width;
     let value_at = |x: f32| {
         let t = ((x - bars.x) / bars.width).clamp(0.0, 1.0);
-        transfer.to_linear(axis_min + t * span)
+        axis.value(axis_min + t * span)
     };
     // The least a window can be: a bin, so that the two handles cannot be
     // dragged through each other into a window the shader would divide by.
@@ -90,13 +94,13 @@ pub(super) fn track(
     if black_handle.dragged()
         && let Some(pointer) = black_handle.interact_pointer_pos()
     {
-        let ceiling = transfer.to_linear(transfer.to_encoded(white) - least);
+        let ceiling = axis.value(axis.place(white) - least);
         pass.commands
             .push(Command::BlackPoint(value_at(pointer.x).min(ceiling)));
     } else if white_handle.dragged()
         && let Some(pointer) = white_handle.interact_pointer_pos()
     {
-        let floor = transfer.to_linear(transfer.to_encoded(black) + least);
+        let floor = axis.value(axis.place(black) + least);
         pass.commands
             .push(Command::WhitePoint(value_at(pointer.x).max(floor)));
     } else if between.dragged() {
@@ -106,10 +110,18 @@ pub(super) fn track(
         // goes, as the handles only go as far as the band: a window slid
         // off what is plotted makes nothing black or nothing white, which
         // is a lift and not a place to look. A window already wider than
-        // the plot has nowhere to slide to.
+        // the plot has nowhere to slide to. A black at no light, below
+        // every floor of an axis in stops, has no room to its left and
+        // slides nowhere: no light moved along by any distance is still no
+        // light, and the slide is the white's alone.
+        let (black_place, white_place) = (axis.place(black), axis.place(white));
         let room = (
-            axis_min - transfer.to_encoded(black),
-            axis_max - transfer.to_encoded(white),
+            if black_place.is_finite() {
+                axis_min - black_place
+            } else {
+                0.0
+            },
+            axis_max - white_place,
         );
         let moved = if room.0 <= room.1 {
             (between.drag_delta().x / bars.width * span).clamp(room.0, room.1)
@@ -119,7 +131,7 @@ pub(super) fn track(
         // Short of the rounding an end that is already at the plot's edge
         // comes back from the encoding with.
         if moved.abs() > span * 1e-5 {
-            let slid = |value: f32| transfer.to_linear(transfer.to_encoded(value) + moved);
+            let slid = |value: f32| axis.value(axis.place(value) + moved);
             pass.commands.push(Command::Slide {
                 black: slid(black),
                 white: slid(white),
@@ -132,18 +144,18 @@ pub(super) fn track(
     if on_black {
         said = Some(format!(
             "Black at {}",
-            axis_words(current, transfer.to_encoded(black))
+            axis_words(current, axis.place(black))
         ));
     } else if on_white {
         said = Some(format!(
             "White at {}",
-            axis_words(current, transfer.to_encoded(white))
+            axis_words(current, axis.place(white))
         ));
     } else if on_band {
         said = Some(format!(
             "{} \u{2013} {}",
-            axis_words(current, transfer.to_encoded(black)),
-            axis_words(current, transfer.to_encoded(white))
+            axis_words(current, axis.place(black)),
+            axis_words(current, axis.place(white))
         ));
     }
     if on_black || on_white {
@@ -168,7 +180,7 @@ pub(super) fn track(
             band.height + 2.0 * HANDLE_REACH,
         ));
         let hand = if on { Hand::On } else { Hand::Off };
-        handle(painter, theme, grid, mark, hand, t, theme.panel_background);
+        handle(painter, theme, grid, mark, hand, t, theme.bar_background);
     }
     said
 }

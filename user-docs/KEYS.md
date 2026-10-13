@@ -542,7 +542,7 @@ that is not a paste; open it as an argument instead.
 | `Shift+S` | White point up | `display.white.up` |
 | `e` | Cycle the window rule: as stored (0–1) → full range → trimmed (the central 99.8%) | `display.window` |
 | `t` | Toggle the curve on the highlights: clip, or roll off | `display.tone-map` |
-| `w` | Mark the clipped pixels, or stop: red where a channel has reached white, blue where one has reached black | `display.marks` |
+| `w` | Mark clipped pixels, or stop: red where a channel has reached white, blue where one has reached black | `display.marks` |
 | `o` | Turn the room above white off and on, where the monitor is in HDR mode | `display.hdr` |
 | `v` | Show a raw as the camera's JPEG of it, or as the picture developed from the sensor | `display.camera-jpeg` |
 | `Shift+D` | Show a picture's depth map in its place, or the picture again | `display.depth` |
@@ -614,10 +614,11 @@ Each press moves its end by a twentieth of the window's width as the
 histogram draws it, and no further than the histogram's axis goes.
 
 Moving either end by hand takes the window out of whichever rule it was
-on; `e` cycles back into them, and the *As stored* button on the histogram
-panel puts a graded file's window back at 0 to 1. The exposure is a push on
-top of whatever the window is, and neither handle touches it. Exposure
-stops at ±16 stops.
+on. On a file read as data, `e` cycles back into the rules and the *As
+stored* button on the histogram panel puts the window back at 0 to 1; on a
+photo the rules are not offered, and the reset button puts the window back
+with everything else. The exposure is a push on top of whatever the window
+is, and neither handle touches it. Exposure stops at ±16 stops.
 
 The histogram panel (`h`) is where all of this is seen and set. The band of
 gray under the plot is what the display makes of each value along the axis,
@@ -631,41 +632,65 @@ linear data — the band is which part of the range you are looking at. The
 handles are the window on every file, and the exposure is a separate thing
 on top of it: bringing the white handle in and raising the exposure make
 the same picture, but the window is found again when a file changes on disk
-or a *Window* rule is pressed, and the exposure survives that. The share
-of the picture the window is throwing away is
-written in the top corners of the plot — how much is at or below black on
-the left, how much is at or above white on the right — and only when there
-is any, so a number there is news. Pointing at the plot names the value
-under the pointer, and what the display turns it into.
+or a *Window* rule is pressed, and the exposure survives that. A row of stops under
+the Output and Display plots counts from white — 0 is what comes out white,
+`-2` is two stops under it, and on an HDR screen `+1` is a stop over — and
+the one under the gain map's plot counts how far the map lifts the picture.
+Pointing at a plot names the value under
+the pointer at that stage; pointing at the picture marks the pixel on every
+plot and writes its value at each stage, from the file at the foot of the
+panel to what the screen shows at the top.
 
-`w`, or the button beside the band under the plot, paints the clipped
+The pair of buttons at the head of the panel, *Photo* and *Data*, says how
+the file is being read, and switches it. A photo is shown as it was made to
+look, with 1.0 as white; data is numbers windowed to what they hold, a
+single channel spread along a ramp with no exposure to push. The program
+guesses from the file, and guesses wrong on some: a 16-bit grayscale scan
+saved without its profile opens as data, auto-leveled, and pressing *Photo*
+reads it again as the photograph it is; an elevation model saved as an
+ordinary 8-bit image opens as a picture, and *Data* reads it as the
+measurement it is. The choice stays with the file for the rest of the
+session, so stepping away and back finds it read the same way, and the
+same pair is under the Image heading of the information panel. While the
+gain map or the depth map is shown in the picture's place the pair is off:
+a map is data whatever the picture is.
+
+`w`, or the warning sign in the row of buttons at the top of the panel,
+paints the clipped
 pixels on the picture itself: red where any channel has reached white,
 blue where any has reached black. One channel is enough, because one is
 enough to lose the color: a sun whose red has burned out is painted red
 though its green never reached white, and the pink it shows is not what
 the scene held. The marks stay on until pressed off again, from one file
-to the next, and no reset of the display touches them. The paint and the
-corners of the plot count the same thing, a channel at a time, so the
-share in a corner is the share of the picture wearing the paint. A color
+to the next, and no reset of the display touches them. A color
 from a wide-gamut file — Display P3, Adobe RGB, a raw — that an ordinary
 monitor cannot show is painted too, since the screen loses it the same
 way. Neither marks white where nothing is being clipped: on
 an HDR surface with no curve, or under a curve, the highlights are shown
 or rolled off rather than lost.
 
-Under the band, every file gets the exposure: a slider over six stops each
-way, its reading at the end of the row. It snaps to the quarter stops `d`
-and `f` take, and a press anywhere along it puts the exposure there. The
-keys go on past the slider's ends, to ±16 stops, where the handle stands
-hollow at the end and the reading says where it is. Under that is the row
-of windows the `e` key cycles, named for what they do: *As stored* shows
-the values as they are, 0 to 1, which is what a graded file opens with;
-*Full range* stretches everything the file holds to black and white; and
-*Trimmed* leaves the outermost 0.2% out before stretching, which is what a
-file of linear data — sensor counts, a float TIFF, an EXR — opens with.
-Under that, the *Curve* row — *Clip* or *Roll off* — that `t` toggles,
-since a stop or two of exposure puts the top of any file above white. The
-three rows are the same for every file, so the panel is one height.
+Under the band of a photo, the exposure: a slider over six stops each way,
+its reading at the end of the row. It snaps to the quarter stops `d` and
+`f` take, and a press anywhere along it puts the exposure there. The keys
+go on past the slider's ends, to ±16 stops, where the handle stands hollow
+at the end and the reading says where it is. Under it, the *Curve* row —
+*Clip* or *Roll off* — that `t` toggles, since a stop or two of exposure
+puts the top of any picture above white.
+
+A file read as data has neither: its numbers need not be light, so there
+is no exposure to push — the white handle does the same job in the file's
+own units — and a curve would bend the values you are reading off. `d`,
+`f` and `t` do nothing on it, and values past the top of the window are
+clipped at white, on an HDR monitor too. Instead it has a row of windows,
+which the `e` key cycles, named for what they do: *As stored* shows the
+values as they are, 0 to 1; *Full range* stretches everything the file
+holds to black and white; and *Trimmed* leaves the outermost 0.2% out
+before stretching, which is what data — sensor counts, a float TIFF, an
+elevation model — opens with. A photo has no such row: it opens as stored,
+stretching it would only make it look wrong, and the handles are the way
+into its shadows and highlights. To push the exposure of a file read as
+data, press *Photo*. The rows are the same for every photo, and the same
+for every file of data, so the panel changes height only between the two.
 
 The curve is added to bring values brighter than white back down into a
 surface that cannot show them. *Clip* is not a second curve but the absence
@@ -718,7 +743,6 @@ where all of it is set.
 | Key | What it does | Name |
 | --- | --- | --- |
 | `h` | Show or hide the histogram | `interface.histogram` |
-| `y` | Count the histogram's bars up its axis, or the logarithm of them | `interface.log-counts` |
 | `i` | Show the file information on its *Curated* tab, or hide it | `interface.info` |
 | `I` | Show the file information on its *Raw Data* tab, or hide it | `interface.raw-data` |
 | `m` | Show or hide the minimap | `interface.minimap` |
@@ -757,16 +781,14 @@ bring them back: `` ` `` and `Esc`. It appears once — after that you know — 
 the message is still up puts them on screen rather than only taking the message
 off.
 
-The histogram plots each bar as its share of the fullest one, which is the
-plot a photograph wants. It is the wrong plot for measurement data, where one
-value often covers most of the image — a masked sea, the black surround of a
-scan — and that one bar flattens everything the rest of the range is doing
-into the axis. `y`, or the button for it down the left of the plot, counts the
-logarithm instead: the tall bar stays at the top and the short ones rise to
-where they can be read beside it. Heights can no longer be compared with each
-other once it is on, which is the point of it being a switch. It applies to
-whichever image is on screen and stays as you set it, and setting it while the
-histogram is closed leaves it that way for when you open it.
+The histogram's bars are linear. Display and Image share one scale, so a
+bar of the same height holds the same share of the picture in both, and the
+scale stays put while you change the display. Output is scaled to fill its
+plot whatever the display does to the picture. A spike that holds far more than
+the rest — a flat sky, the black surround of a scan — runs off the top
+rather than flattening everything else. It is capped in the accent color,
+and with the pointer on it the section's heading says what share of the
+picture it holds.
 
 Under the plot are the band and the rows of settings the plot is drawing,
 described under [The display](#the-display) above: the exposure, the

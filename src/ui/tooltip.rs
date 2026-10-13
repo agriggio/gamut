@@ -8,6 +8,7 @@
 //! thing earns a tooltip by becoming a [`Tip`] the application has something
 //! to say about.
 
+use crate::image::decode::Reading;
 use crate::image::display::{AutoWindow, Colormap, ToneMap};
 use crate::theme::Theme;
 
@@ -85,7 +86,7 @@ pub fn loupe_wheel(wheel: Option<&str>, key: Option<&str>) -> Option<String> {
 }
 
 /// What the maximize button says under its name: the press with Shift, which
-/// closes the floating panels as it hides the interface.
+/// closes the panels that stay without the bars as it hides the interface.
 pub const MAXIMIZE_SHIFTED: &str = "Hide all panels and toggle the UI";
 
 /// What the copy of the picture says while a region is up, which is what it
@@ -144,6 +145,18 @@ pub const NO_HDR_OUTPUT: &str = "HDR disabled because no HDR output is available
 pub const FALSE_COLOR_CLIPS: &str =
     "A false color clips at the top of its ramp, whatever the curve.";
 
+/// Why a curve is refused on an image read as data: the window is what
+/// puts its values on the screen, and a curve would bend the very mapping
+/// being read off. The row is not drawn on such an image, as the window's
+/// is not on a photo ([`PHOTO_AS_STORED`]), so this is the reason a press
+/// from elsewhere — the Mac's menu — is refused.
+pub const DATA_HAS_NO_CURVE: &str = "Curve unavailable for data.";
+
+/// And why the exposure is: a stop is a doubling of light, and data's
+/// values need not be light; what it would do, the white handle does in
+/// the file's own units.
+pub const DATA_HAS_NO_EXPOSURE: &str = "Exposure unavailable for data.";
+
 /// What the camera's switch says, for the key, on a file with no camera JPEG
 /// in it. The switch itself is not drawn on such a file, so this is only
 /// ever the reason a press of `v` is refused.
@@ -161,6 +174,14 @@ pub const NO_GAIN_MAP: &str = "This image has no gain map.";
 /// What the Raw Data tab's copy button says while there are no tags to
 /// copy: exiftool is not there, is reading the file, or could not.
 pub const NO_TAGS: &str = "No tags to copy.";
+
+/// What the switch between the readings says while a map is shown in the
+/// picture's place: a map is a measurement whatever the picture is.
+pub const MAP_IS_DATA: &str = "Maps are forced to data.";
+
+/// What a window rule says on a photo, where the row is not drawn: the
+/// window is as stored, and the handles are the way into the shadows.
+pub const PHOTO_AS_STORED: &str = "Window rule unavailable for photos.";
 
 /// What the camera's switch says: which of a raw's two pictures is up, and
 /// under it the other, which a press switches to. The size is left out; the
@@ -229,7 +250,8 @@ pub struct Conditions {
     /// pixel's, and whether one of them is a latitude.
     pub georeferenced: bool,
     pub geographic: bool,
-    /// Whether the content area has room for each floating panel.
+    /// Whether the window has room for each of what the side panel holds,
+    /// and for the help popup.
     pub room: Room,
     /// Whether the surface switch has anything to switch, and why not.
     pub hdr: Hdr,
@@ -246,6 +268,13 @@ pub struct Conditions {
     pub openable: bool,
     /// Whether a false color is on the picture.
     pub false_colored: bool,
+    /// Whether the image on screen is read as data, which is what the
+    /// window rules are for: a photo's window is as stored and the handles',
+    /// and data has neither an exposure nor a curve.
+    pub data: bool,
+    /// Whether one of the picture's maps is on screen in its place, which
+    /// is data by nature: the switch between the readings is the picture's.
+    pub map_shown: bool,
     /// Whether the desktop's file dialog is up.
     pub picking: bool,
     /// Whether there is no picture at all.
@@ -286,6 +315,8 @@ impl Default for Conditions {
             gain_map: false,
             openable: false,
             false_colored: false,
+            data: false,
+            map_shown: false,
             picking: false,
             nothing_open: true,
             arriving: false,
@@ -327,6 +358,8 @@ impl Conditions {
         gain_map: true,
         openable: true,
         false_colored: false,
+        data: true,
+        map_shown: false,
         picking: false,
         nothing_open: false,
         arriving: false,
@@ -365,6 +398,8 @@ pub fn disabled(tip: Tip, conditions: Conditions) -> Option<Refused> {
         hdr,
         openable,
         false_colored,
+        data,
+        map_shown,
         picking,
         picture_on_clipboard: clipboard,
         nothing_open,
@@ -397,11 +432,17 @@ pub fn disabled(tip: Tip, conditions: Conditions) -> Option<Refused> {
     if tip == Tip::Control(Control::Depth) && !depth {
         return said(NO_DEPTH_MAP);
     }
-    if tip == Tip::Control(Control::GainMap) && !gain_map {
+    if matches!(tip, Tip::Control(Control::GainMap | Control::ShowGainMap)) && !gain_map {
         return said(NO_GAIN_MAP);
     }
     if tip == Tip::Control(Control::Paste) && !clipboard {
         return said(NOTHING_TO_PASTE);
+    }
+    if matches!(tip, Tip::Control(Control::Reading(_))) && map_shown {
+        return said(MAP_IS_DATA);
+    }
+    if matches!(tip, Tip::Control(Control::Window(_))) && !data {
+        return said(PHOTO_AS_STORED);
     }
     if matches!(
         tip,
@@ -418,6 +459,7 @@ pub fn disabled(tip: Tip, conditions: Conditions) -> Option<Refused> {
                 | Control::TurnLeft
                 | Control::TurnRight
                 | Control::Export
+                | Control::Reading(_)
         )
     ) && nothing_open
     {
@@ -443,10 +485,12 @@ pub fn disabled(tip: Tip, conditions: Conditions) -> Option<Refused> {
                 | Control::TurnRight
                 | Control::Depth
                 | Control::GainMap
+                | Control::ShowGainMap
                 | Control::Play
                 | Control::StepBack
                 | Control::StepForward
                 | Control::Seek(_)
+                | Control::Reading(_)
         )
     ) && arriving
     {
@@ -475,6 +519,12 @@ pub fn disabled(tip: Tip, conditions: Conditions) -> Option<Refused> {
             said: FALSE_COLOR_CLIPS,
             hint: None,
         });
+    }
+    if matches!(tip, Tip::Control(Control::Curve(_))) && data {
+        return said(DATA_HAS_NO_CURVE);
+    }
+    if tip == Tip::Exposure && data {
+        return said(DATA_HAS_NO_EXPOSURE);
     }
     match (tip, hdr) {
         (Tip::Control(Control::Output), Hdr::NotInHdrMode) => Some(Refused {
@@ -584,11 +634,9 @@ pub fn words(tip: Tip) -> Option<String> {
         // is up, a menu first — so the cross names itself.
         Tip::Control(Control::Dismiss) => "Dismiss this message",
         // The histogram panel's, in as few words as will carry them.
-        Tip::Control(Control::Luma) => "Luminance plane",
-        Tip::Control(Control::Planes) => "Color planes",
-        Tip::Control(Control::Log) => "Logarithmic counts",
-        Tip::Control(Control::Marks) => "Mark the clipped pixels",
+        Tip::Control(Control::Marks) => "Mark clipped pixels",
         Tip::Control(Control::Reset) => "Reset the display",
+        Tip::Control(Control::ShowGainMap) => "Show the gain map in the picture's place",
         // Named rather than merely shown: a swatch of viridis is a green
         // rectangle that could be anything, and the map has a name people
         // ask for it by — the same one `--colormap` takes.
@@ -616,6 +664,11 @@ pub fn words(tip: Tip) -> Option<String> {
         Tip::WhitePoint => "White point",
         Tip::Window => "Black to white, drag to slide",
         Tip::Exposure => "Exposure",
+        // The two readings a file can be given, at the head of the
+        // histogram panel and in the information panel's Image section;
+        // what follows from each is `reading_means`, set under it.
+        Tip::Control(Control::Reading(Reading::Photo)) => "Read as a photo",
+        Tip::Control(Control::Reading(Reading::Data)) => "Read as data",
         // And what becomes of the highlights under each, the curve named
         // where there is one.
         Tip::Control(Control::Curve(index)) => match ToneMap::ALL.get(index)? {
@@ -664,6 +717,15 @@ pub fn words(tip: Tip) -> Option<String> {
         | Tip::State => return None,
     };
     Some(words.to_string())
+}
+
+/// What follows from reading a file as `reading`, set under the switch's
+/// name: what the picture is shown as, and what the panel's rows do.
+pub fn reading_means(reading: Reading) -> &'static str {
+    match reading {
+        Reading::Photo => "Shown as described by file; use exposure and curve to adjust",
+        Reading::Data => "Shown auto-leveled; use windowing to adjust",
+    }
 }
 
 /// Draws `tooltip` into the popup egui has opened for it: the thing itself
@@ -845,13 +907,17 @@ mod tests {
     fn the_curves_say_why_they_are_dead_under_a_false_color() {
         for index in 0..ToneMap::ALL.len() {
             let curve = Tip::Control(Control::Curve(index));
-            assert_eq!(disabled(curve, Conditions::ALIVE), None);
+            let photo = Conditions {
+                data: false,
+                ..Conditions::ALIVE
+            };
+            assert_eq!(disabled(curve, photo), None);
             assert_eq!(
                 disabled(
                     curve,
                     Conditions {
                         false_colored: true,
-                        ..Conditions::ALIVE
+                        ..photo
                     }
                 ),
                 Some(Refused {
@@ -870,6 +936,49 @@ mod tests {
             ),
             None
         );
+    }
+
+    /// And on an image read as data, which has neither a curve nor an
+    /// exposure, whatever its channels: a false color put over a gray one
+    /// is named first, being the one the hand chose. The window's rules are
+    /// the other way about.
+    #[test]
+    fn the_curves_and_the_exposure_say_why_they_are_dead_on_data() {
+        let said = |said| Some(Refused { said, hint: None });
+        let data = Conditions {
+            data: true,
+            ..Conditions::ALIVE
+        };
+        let photo = Conditions {
+            data: false,
+            ..Conditions::ALIVE
+        };
+        for index in 0..ToneMap::ALL.len() {
+            let curve = Tip::Control(Control::Curve(index));
+            assert_eq!(disabled(curve, data), said(DATA_HAS_NO_CURVE));
+            assert_eq!(disabled(curve, photo), None);
+            assert_eq!(
+                disabled(
+                    curve,
+                    Conditions {
+                        false_colored: true,
+                        ..data
+                    }
+                )
+                .map(|refused| refused.said),
+                Some(FALSE_COLOR_CLIPS)
+            );
+        }
+        assert_eq!(disabled(Tip::Control(Control::Ramp(0)), data), None);
+        assert_eq!(
+            disabled(Tip::Exposure, data),
+            said(DATA_HAS_NO_EXPOSURE),
+            "and the exposure, which data has none of"
+        );
+        assert_eq!(disabled(Tip::Exposure, photo), None);
+        let window = Tip::Control(Control::Window(0));
+        assert_eq!(disabled(window, data), None);
+        assert_eq!(disabled(window, photo), said(PHOTO_AS_STORED));
     }
 
     #[test]

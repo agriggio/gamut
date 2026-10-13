@@ -1,5 +1,5 @@
-//! The info panel: what the file is, as a column of words down the right of
-//! the content area.
+//! The info panel: what the file is, as a column of words down the side
+//! panel.
 //!
 //! The only part of the interface with more to say than fits, so it is the
 //! only part that scrolls: the column lives in a scroll area, under a header
@@ -24,10 +24,10 @@ use egui::{
 use crate::clock;
 use crate::image::AlphaMode;
 use crate::image::auxiliary::{Auxiliary, Showing};
-use crate::image::decode::Rendering;
+use crate::image::decode::{Reading, Rendering};
 use crate::image::depth::{Accuracy, Quantity};
 use crate::image::exif::{self, Group, ShownRegion};
-use crate::image::gain_map::Lift;
+use crate::image::gain_map::{GainMap, Lift};
 use crate::image::metadata_region::Placed;
 use crate::image::orient;
 use crate::image::sequence::{Loops, Sequence};
@@ -43,9 +43,7 @@ use super::pixel;
 use super::style::{SCROLLBAR_GUTTER, SCROLLBAR_WIDTH, TOGGLE_RADIUS};
 use super::tags::Tab;
 use super::tooltip::{Tip, Tooltip};
-use super::{
-    Current, PADDING, PANEL_INSET, PANEL_RADIUS, PANEL_WIDTH, RULE_WIDTH, TEXT_SIZE, rule,
-};
+use super::{Current, PANEL_INSET, PANEL_RADIUS, RULE_WIDTH, TEXT_SIZE, rule};
 
 /// The heading of the regions the metadata marks out on the picture.
 const REGIONS: &str = "Regions";
@@ -58,8 +56,8 @@ const GAIN_MAP: &str = "Gain map";
 const SHOWING: &str = "Showing";
 
 /// Below this the panel would show its header, two facts and a scrollbar, so
-/// it stays off instead. There is no matching minimum for the width: the
-/// panel is [`PANEL_WIDTH`] wide or it is not on screen.
+/// it stays off instead. The least width is the side panel's own — see
+/// [`super::side::WIDTH`].
 pub(super) const INFO_MIN_HEIGHT: f32 = 160.0;
 
 /// The size a field's name is written at, against [`TEXT_SIZE`] for what it
@@ -69,15 +67,15 @@ pub(super) const LABEL_SIZE: f32 = TEXT_SIZE * 0.85;
 
 /// The space above a section's name, with a hairline drawn through the
 /// middle of it doing part of the parting.
-const SECTION_GAP: f32 = 11.0;
+pub(super) const SECTION_GAP: f32 = 11.0;
 /// The space between two lines of a section written as prose rather than as
 /// fields, which are one account of one thing and are set as a paragraph is.
 const LINE_GAP: f32 = 1.0;
 /// The space between a heading's mark and its name.
-const MARK_GAP: f32 = 6.0;
+pub(super) const MARK_GAP: f32 = 6.0;
 /// The space under the head of a section drawn with a mark: small, the mark
 /// already making the head's line taller than the words in it.
-const HEAD_GAP: f32 = 3.0;
+pub(super) const HEAD_GAP: f32 = 3.0;
 /// The space between a table's two columns.
 const COLUMN_GAP: f32 = 8.0;
 /// The most of the column's width a table's names are given, so that a long
@@ -103,7 +101,7 @@ pub(super) const HEADER_GAP: f32 = 11.0;
 
 /// A copy button: how tall it is, what is kept clear inside it at either end,
 /// and the space between its label and its mark.
-const CHIP_HEIGHT: f32 = 20.0;
+pub(super) const CHIP_HEIGHT: f32 = 20.0;
 const CHIP_PADDING: f32 = 7.0;
 const CHIP_GAP: f32 = 5.0;
 /// The room set aside for the mark on a copy button, in the button's width
@@ -182,6 +180,10 @@ enum Face {
         /// A button after the head, with the mark it wears: the map of
         /// where the picture was taken, beside the coordinates.
         button: Option<(&'static [icon::Mark], Control)>,
+        /// Whether the row under the head switches how the file is read,
+        /// as a photo or as data: the Image section's, beside the facts
+        /// the switch corrects — see [`reading_row`].
+        reading: bool,
     },
     /// The regions the metadata marks out on the picture, as a table of who
     /// or what each is and where, each drawn on the picture while the
@@ -243,41 +245,6 @@ impl Contents {
             .iter()
             .flat_map(|section| section.facts.iter().map(move |fact| (section.name, fact)))
     }
-}
-
-/// Where the panel goes: down the right of `content`, starting under the
-/// histogram when that is showing as well — `above`, which is where it is —
-/// and at the top of the content when it is not, the order the two toggles
-/// are stacked in.
-///
-/// `None` when the window has no room for a column worth reading, which is
-/// also what keeps the panel off screen rather than shrunk to nothing.
-///
-/// It is one width or it is not there: the column is read at the same measure
-/// whatever the window is doing. In a window narrow enough for the panel and
-/// the minimap to want the same strip the panel takes it, being drawn after —
-/// it is on screen because it was asked for, and the minimap is a guide to a
-/// picture the panel is already covering.
-pub fn panel(content: Rect, above: Option<Rect>) -> Option<Rect> {
-    // The histogram takes the top of the column's strip; the panel starts
-    // below it rather than being drawn over it. Only where the histogram is
-    // on screen, which the caller settles from the window as well as the
-    // toggle: a window with no room for the plot is not one the column has
-    // to start below. It arrives as a rectangle rather than as a constant
-    // because it may not be there at all.
-    let taken = above.map_or(0.0, |histogram| histogram.height + PADDING);
-    let below = Rect::new(
-        content.x,
-        content.y + taken,
-        content.width,
-        content.height - taken,
-    );
-    super::panel::fit(
-        below,
-        [PANEL_WIDTH, f32::INFINITY],
-        [PANEL_WIDTH, INFO_MIN_HEIGHT],
-        super::panel::Place::TopRight,
-    )
 }
 
 /// The width of the button for `copies`: its mark, whatever label goes
@@ -462,69 +429,58 @@ fn tabs(pass: &mut Pass, ui: &mut egui::Ui) {
     }
 }
 
-/// Draws the panel: the header, and under it the column of everything the
-/// file has to say, scrolled by egui and read out by a click.
-pub(super) fn show(pass: &mut Pass, ui: &mut egui::Ui) {
-    let Some(current) = pass.current else {
-        return;
-    };
+/// Draws the panel down the whole of the side panel, `panel`: the header,
+/// and under it the column of everything the file has to say, scrolled by
+/// egui and read out by a click.
+pub(super) fn show(pass: &mut Pass, ui: &mut egui::Ui, current: &Current, panel: Rect) {
     let content = pass.content;
-    let Some(panel) = panel(content, super::histogram_shown(content, pass.panels)) else {
-        return;
-    };
-    let theme = pass.theme;
-    if pass.input.waiting {
-        super::panel::waiting(ui.ctx(), "info", None, panel, theme);
-        return;
-    }
     let area = egui::Rect::from(panel);
     // What the regions are drawn on while the pointer is on their rows: the
-    // layer the picture's own marks are painted on, under every panel, this
-    // one included. Nothing is drawn over a stand-in for another file.
-    let picture = ui
-        .painter()
-        .with_clip_rect(if pass.input.standin.is_none() {
+    // layer the picture's own marks are painted on, clipped to the content
+    // area. A painter of its own rather than this one's narrowed, since the
+    // panel's clips to the panel and the picture is beside it. Nothing is
+    // drawn over a stand-in for another file.
+    let picture = egui::Painter::new(
+        ui.ctx().clone(),
+        ui.layer_id(),
+        if pass.input.standin.is_none() {
             content.into()
         } else {
             egui::Rect::NOTHING
-        });
-    super::panel::area("info", panel, egui::Order::Middle).show(ui.ctx(), |ui| {
-        egui::Frame::NONE
-            .fill(theme.panel_background.into())
-            .corner_radius(PANEL_RADIUS)
-            .inner_margin(egui::Margin::same(PANEL_INSET as i8))
-            .show(ui, |ui| {
-                let inside = area.size() - Vec2::splat(2.0 * PANEL_INSET);
-                ui.set_min_size(inside);
-                ui.set_max_size(inside);
-                ui.spacing_mut().item_spacing = Vec2::ZERO;
+        },
+    );
+    let inside = area.shrink(PANEL_INSET);
+    ui.scope_builder(UiBuilder::new().max_rect(inside), |ui| {
+        let inside = inside.size();
+        ui.set_min_size(inside);
+        ui.set_max_size(inside);
+        ui.spacing_mut().item_spacing = Vec2::ZERO;
 
-                // The header: the two tabs at the left, and at the right
-                // what copies the one on screen.
-                ui.horizontal(|ui| {
-                    tabs(pass, ui);
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        match pass.panels.info_tab {
-                            Tab::Facts => copy_all(pass, ui),
-                            Tab::Tags => copy_menu(pass, ui),
-                        }
-                    });
-                });
-                // A hairline between the header and the column, which
-                // says that the column runs on under the header rather
-                // than stopping short of it.
-                ui.add_space((HEADER_GAP - RULE_WIDTH) / 2.0);
-                rule(pass, ui, inside.x - SCROLLBAR_GUTTER);
-                ui.add_space((HEADER_GAP - RULE_WIDTH) / 2.0);
-
-                let input = pass.input;
-                match (pass.panels.info_tab, &input.tags) {
-                    (Tab::Tags, Some(tags)) => {
-                        super::tags::show(pass, ui, tags, inside.x);
-                    }
-                    _ => column(pass, ui, current, &picture),
+        // The header: the two tabs at the left, and at the right
+        // what copies the one on screen.
+        ui.horizontal(|ui| {
+            tabs(pass, ui);
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                match pass.panels.info_tab {
+                    Tab::Facts => copy_all(pass, ui),
+                    Tab::Tags => copy_menu(pass, ui),
                 }
             });
+        });
+        // A hairline between the header and the column, which
+        // says that the column runs on under the header rather
+        // than stopping short of it.
+        ui.add_space((HEADER_GAP - RULE_WIDTH) / 2.0);
+        rule(pass, ui, inside.x - SCROLLBAR_GUTTER);
+        ui.add_space((HEADER_GAP - RULE_WIDTH) / 2.0);
+
+        let input = pass.input;
+        match (pass.panels.info_tab, &input.tags) {
+            (Tab::Tags, Some(tags)) => {
+                super::tags::show(pass, ui, tags, inside.x);
+            }
+            _ => column(pass, ui, current, &picture),
+        }
     });
 }
 
@@ -559,9 +515,14 @@ fn column(pass: &mut Pass, ui: &mut egui::Ui, current: &Current, picture: &egui:
                 }
                 match section.face {
                     Face::File => file_section(pass, ui, current, section, index, width),
-                    Face::Headed { mark, head, button } => {
-                        headed_section(pass, ui, place, section, index, width, mark, head, button)
-                    }
+                    Face::Headed {
+                        mark,
+                        head,
+                        button,
+                        reading,
+                    } => headed_section(
+                        pass, ui, place, section, index, width, mark, head, button, reading,
+                    ),
                     Face::Regions => {
                         regions_section(pass, ui, current, picture, place, section, index, width)
                     }
@@ -672,6 +633,7 @@ fn headed_section(
     mark: &[icon::Mark],
     head: &[&str],
     button: Option<(&[icon::Mark], Control)>,
+    reading: bool,
 ) {
     let theme = pass.theme;
     let pieces: Vec<Piece> = head
@@ -712,6 +674,10 @@ fn headed_section(
             paint_showing(ui, rect, theme, pass.grid);
         }
     }
+    if reading {
+        ui.add_space(HEAD_GAP);
+        reading_row(pass, ui, width);
+    }
     let rows = (first..)
         .zip(&section.facts)
         .filter(|(_, fact)| !head.contains(&fact.name.as_str()));
@@ -720,6 +686,59 @@ fn headed_section(
         table(pass, ui, rows, width);
     }
 }
+
+/// The row under the Image section's head that reads the file as a photo
+/// or as data: its name, dim, where a field's name goes, and the pair of
+/// cells beside it with the reading in force lit — the same pair as at the
+/// head of the histogram panel, going through the same control. Dead
+/// while a map is shown in the picture's place, which is data by nature.
+fn reading_row(pass: &mut Pass, ui: &mut egui::Ui, width: f32) {
+    let Some(current) = pass.current else {
+        return;
+    };
+    let theme = pass.theme;
+    let reading = Reading::of(&current.image);
+    let enabled = current.showing == Showing::Picture;
+    let font = egui::FontId::proportional(LABEL_SIZE);
+    ui.horizontal(|ui| {
+        ui.set_width(width);
+        ui.spacing_mut().item_spacing.x = COLUMN_GAP;
+        let (name, _) = ui.allocate_exact_size(vec2(READING_LABEL, CHIP_HEIGHT), Sense::HOVER);
+        ui.painter().text(
+            pos2(name.min.x, name.center().y),
+            egui::Align2::LEFT_CENTER,
+            "Read as",
+            font.clone(),
+            theme.text_dim.into(),
+        );
+        for (choice, word) in [(Reading::Photo, "Photo"), (Reading::Data, "Data")] {
+            let control = Control::Reading(choice);
+            let (rect, response) =
+                ui.allocate_exact_size(vec2(READING_CELL, CHIP_HEIGHT), Sense::CLICK);
+            let active = reading == choice;
+            let (background, ink) = pass.button_ink(active, &response, enabled);
+            ui.painter().rect_filled(rect, TOGGLE_RADIUS, background);
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                word,
+                font.clone(),
+                ink,
+            );
+            response.widget_info(|| {
+                WidgetInfo::selected(WidgetType::Button, enabled, active, control.label())
+            });
+            let response = pass.tooltip(response, Tip::Control(control));
+            if enabled && response.clicked() {
+                pass.press(control);
+            }
+        }
+    });
+}
+
+/// The width of the reading row's name, and of each of its two cells.
+const READING_LABEL: f32 = 52.0;
+const READING_CELL: f32 = 48.0;
 
 /// `section`'s name after `mark`, in the headings' ink, copying the section.
 /// Whether the pointer is on it.
@@ -742,7 +761,7 @@ fn marked_heading(
                 mark,
                 icon::square(grid, rect, COPY_ICON),
                 theme.accent.into(),
-                theme.panel_background.into(),
+                theme.bar_background.into(),
             );
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if section.showing {
@@ -791,7 +810,7 @@ fn showing_width(ui: &egui::Ui) -> f32 {
 fn paint_showing(ui: &egui::Ui, rect: egui::Rect, theme: &Theme, grid: icon::Grid) {
     let galley = showing_galley(ui);
     let ink: egui::Color32 = theme.accent.into();
-    let ground: egui::Color32 = theme.panel_background.into();
+    let ground: egui::Color32 = theme.bar_background.into();
     let painter = ui.painter();
     painter.rect_stroke(
         rect,
@@ -1085,7 +1104,7 @@ fn line(
     reserve: f32,
 ) -> Option<egui::Rect> {
     let grid = pass.grid;
-    let ground = pass.theme.panel_background;
+    let ground = pass.theme.bar_background;
     let left = ui.cursor().min.x;
     let mut marked = None;
     ui.horizontal_wrapped(|ui| {
@@ -1344,6 +1363,7 @@ fn contents(current: &Current) -> Contents {
                 mark: icon::IMAGE,
                 head: &[RESOLUTION, READ_BY],
                 button: None,
+                reading: true,
             },
             fields(image_facts(current)),
         )
@@ -1356,6 +1376,7 @@ fn contents(current: &Current) -> Contents {
                 mark: icon::SUN,
                 head: &[],
                 button: None,
+                reading: false,
             },
             fields(gain_map_facts(current)),
         )
@@ -1368,6 +1389,7 @@ fn contents(current: &Current) -> Contents {
                 mark: icon::AXIS_3D,
                 head: &[],
                 button: None,
+                reading: false,
             },
             fields(depth_facts(current)),
         )
@@ -1486,7 +1508,12 @@ fn metadata_section(exif: &exif::Exif, section: &exif::Section) -> Section {
     };
     Section::new(
         section.group.name(),
-        Face::Headed { mark, head, button },
+        Face::Headed {
+            mark,
+            head,
+            button,
+            reading: false,
+        },
         fields(entries),
     )
 }
@@ -1723,7 +1750,7 @@ fn gain_map_facts(current: &Current) -> Vec<(&'static str, String)> {
         ("Lift", map.lift_range().map(lift).unwrap_or_default()),
         (
             "Applied",
-            applied(face.lift.as_ref().map_or(0.0, |lift| lift.weight()), stops),
+            applied(face.lift.as_ref().map_or(0.0, |lift| lift.weight()), map),
         ),
     ]
 }
@@ -1816,10 +1843,12 @@ fn precision(face: &crate::ui::Face) -> String {
         .unwrap_or_default()
 }
 
-/// How much of a gain map's lift of `stops` is on screen, at `weight`, in
-/// stops: all of it, a share, or none — which is what a display with no
-/// room above white gets.
-fn applied(weight: f32, stops: f32) -> String {
+/// How much of `map`'s lift is on screen, at `weight`, in stops: all of
+/// it, a share, or none — which is what a display with no room above white
+/// gets. The share is [`GainMap::applied_stops`], which the histogram's
+/// section on the map says as well.
+fn applied(weight: f32, map: &GainMap) -> String {
+    let stops = map.stops();
     if weight >= 1.0 {
         format!("all {stops:.1} stops")
     } else if weight <= 0.0 {
@@ -1827,7 +1856,7 @@ fn applied(weight: f32, stops: f32) -> String {
     } else {
         format!(
             "{:.1} of {stops:.1} stops, as much as the display has room for",
-            weight * stops
+            map.applied_stops(weight)
         )
     }
 }

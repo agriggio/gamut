@@ -816,10 +816,10 @@ impl Lift {
     }
 }
 
-/// Every false-color ramp on the device: `Colormap::color` sampled along
-/// its length, in linear light, one row per map at the row
-/// `shader_codes::colormap` names. The gray row is the identity, and is
-/// never read, since no false color is the shader's default arm.
+/// Every ramp on the device: `Colormap::color` sampled along its length, in
+/// linear light, one row per map at the row `shader_codes::ramp` names less
+/// one. The gray row is what a single-channel measurement is read through,
+/// and gives a windowed value the gray with that code.
 fn ramps(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -828,7 +828,7 @@ fn ramps(
     let rows = Colormap::ALL.len() as u32;
     let mut texels = vec![[0.0f32; 4]; (RAMP_LENGTH * rows) as usize];
     for map in Colormap::ALL {
-        let row = shader_codes::colormap(map) as usize * RAMP_LENGTH as usize;
+        let row = (shader_codes::ramp(Some(map)) - 1) as usize * RAMP_LENGTH as usize;
         for (index, texel) in texels[row..row + RAMP_LENGTH as usize]
             .iter_mut()
             .enumerate()
@@ -1194,7 +1194,7 @@ fn params_for(
         } else {
             shader_codes::level_alpha(image.alpha)
         },
-        colormap: shader_codes::colormap(display.colormap()),
+        colormap: shader_codes::ramp(display.ramp(image.swizzle < 2)),
         resampler: shader_codes::resampler(placement.zoom, placement.upscale),
         // Only the image as uploaded is lifted; a coarse level was reduced
         // from lifted light.

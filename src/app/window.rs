@@ -78,9 +78,9 @@ impl Chrome {
         MIN_WINDOW.map(|side| f64::from(side) * self.ui_scale)
     }
 
-    /// The window that has room for both floating panels at once: the
-    /// content area [`ui::PANELS_ROOM`] asks for, the chrome around it, and
-    /// [`FLOOR_SLACK`].
+    /// The window that has room for the side panel whichever of its two it
+    /// holds: the room between the strips and the bars [`ui::PANELS_ROOM`]
+    /// asks for, the chrome around it, and [`FLOOR_SLACK`].
     ///
     /// The floor a window opens at instead of [`Chrome::min_window`], where
     /// the monitor has the room to spare. A window that opens too small for
@@ -97,7 +97,7 @@ impl Chrome {
     }
 
     /// The smallest window a monitor with `room` should be given: one with
-    /// room for both panels where the monitor can hold it, and
+    /// room for the side panel where the monitor can hold it, and
     /// [`Chrome::min_window`] where it cannot — a floor that did not fit the
     /// screen would be a window off the edge of it, which is the thing the
     /// rest of this is for.
@@ -577,8 +577,9 @@ mod tests {
     }
 
     /// A picture smaller than the interface still opens a window the
-    /// interface fits in: both panels can be opened in the window a tiny
-    /// image gets, so neither toggle is dead in it from the first frame.
+    /// interface fits in: the side panel can be opened on either of what it
+    /// holds in the window a tiny image gets, so neither toggle is dead in
+    /// it from the first frame.
     ///
     /// Measured against `ui::PANELS_ROOM`, which
     /// `ui::tests::the_panels_room_is_room_for_both` holds to what the panels
@@ -608,7 +609,7 @@ mod tests {
     /// fit the screen is the thing the rest of this is here to prevent.
     #[test]
     fn a_monitor_too_small_for_the_panels_keeps_the_smallest_window() {
-        let cramped = [monitor(500, 400, 1.0)];
+        let cramped = [monitor(340, 300, 1.0)];
         let size = window_size(&cramped, Some([32.0, 24.0]), None, Chrome::default());
         assert_eq!(size, LogicalSize::new(MIN_WINDOW[0], MIN_WINDOW[1]));
     }
@@ -761,7 +762,7 @@ mod tests {
     /// and there the smallest window is taken, at the interface's scale.
     #[test]
     fn a_monitor_with_room_for_the_panels_at_one_but_not_two_keeps_the_scaled_smallest_window() {
-        let modest = [monitor(800, 600, 1.0)];
+        let modest = [monitor(700, 600, 1.0)];
         let at_one = window_size(&modest, Some([32.0, 24.0]), None, Chrome::default());
         assert!(at_one.width > MIN_WINDOW[0], "{at_one:?}");
         let at_two = window_size(&modest, Some([32.0, 24.0]), None, Chrome::new(2.0));

@@ -51,15 +51,17 @@ pub fn level_alpha(alpha: AlphaMode) -> u32 {
     }
 }
 
-/// Which row of the ramps texture `image_layer` writes holds `map`, and
-/// what `colormap` in `shaders/image.wgsl` reads it by. Gray is 0, which the
-/// shader takes as no false color at all.
-pub fn colormap(map: Colormap) -> u32 {
+/// What `colormap` in `shaders/image.wgsl` reads the ramp a gray pixel is
+/// read through by — `Display::ramp`'s answer — and, less one, which row of
+/// the ramps texture `image_layer` writes holds it. 0 is no ramp: the pixel
+/// is light, and goes out as the window left it.
+pub fn ramp(map: Option<Colormap>) -> u32 {
     match map {
-        Colormap::Gray => 0,
-        Colormap::Viridis => 1,
-        Colormap::Magma => 2,
-        Colormap::Turbo => 3,
+        None => 0,
+        Some(Colormap::Gray) => 1,
+        Some(Colormap::Viridis) => 2,
+        Some(Colormap::Magma) => 3,
+        Some(Colormap::Turbo) => 4,
     }
 }
 
@@ -400,18 +402,18 @@ mod tests {
         );
     }
 
-    /// The ramps are rows of one texture, so the codes are its row indices:
-    /// every map has a row of its own, and gray's is the first, which the
-    /// shader takes as no false color.
+    /// The ramps are rows of one texture, so the codes are its row indices
+    /// plus one: every map has a row of its own, the gray ramp among them,
+    /// and 0 is left for no ramp, which the shader tests against.
     #[test]
-    fn the_colormaps_are_the_ramps_rows() {
-        let rows = set(Colormap::ALL.iter().map(|map| colormap(*map)));
-        assert_eq!(rows, set(0..Colormap::ALL.len() as u32));
-        assert_eq!(colormap(Colormap::Gray), 0);
+    fn the_ramps_are_the_ramps_rows() {
+        let rows = set(Colormap::ALL.iter().map(|map| ramp(Some(*map))));
+        assert_eq!(rows, set(1..=Colormap::ALL.len() as u32));
+        assert_eq!(ramp(None), 0);
         let image = wgsl::parse(IMAGE_SHADER);
         assert_eq!(
             wgsl::comparisons(&image, "shade", "colormap"),
-            [(BinaryOperator::NotEqual, colormap(Colormap::Gray))]
+            [(BinaryOperator::NotEqual, ramp(None))]
         );
     }
 

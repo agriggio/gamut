@@ -19,7 +19,7 @@ use super::input::{Action, Conditions, Effect, When, action_of};
 use super::keymap::{Chord, KeyName, Keymap};
 use crate::PROGRAM;
 use crate::image::auxiliary::{Auxiliary, Showing};
-use crate::image::decode::Rendering;
+use crate::image::decode::{Reading, Rendering};
 use crate::image::display::{Colormap, EV_STEP, ToneMap};
 use crate::menubar::{
     Bar, Chosen, Deliver, Equivalent, Identity, Menu, Modifiers, Node, Role, Shown, Snapshot,
@@ -378,10 +378,9 @@ fn image(b: &mut Builder) -> Vec<Node> {
         .enumerate()
         .map(|(index, map)| b.control(&ui::capitalized(map.label()), Control::Ramp(index), None))
         .collect();
-    let plot = vec![
-        b.button("Luminance", Control::Luma),
-        b.button("Color Planes", Control::Planes),
-        b.button("Log Counts", Control::Log),
+    let readings = vec![
+        b.control("Photo", Control::Reading(Reading::Photo), None),
+        b.control("Data", Control::Reading(Reading::Data), None),
     ];
     vec![
         b.action("Increase Exposure", Action::Exposure(EV_STEP)),
@@ -406,6 +405,7 @@ fn image(b: &mut Builder) -> Vec<Node> {
         b.submenu("Window", Some(Control::Window(0)), windows),
         b.submenu("Highlights", Some(Control::Curve(0)), curves),
         b.submenu("False Color", Some(Control::Ramp(0)), ramps),
+        b.submenu("Read As", Some(Control::Reading(Reading::Photo)), readings),
         b.button("Mark Clipped Pixels", Control::Marks),
         b.button("Reset Display", Control::Reset),
         Node::Separator,
@@ -413,8 +413,6 @@ fn image(b: &mut Builder) -> Vec<Node> {
         b.button("Camera JPEG", Control::CameraJpeg),
         b.button("Depth Map", Control::Depth),
         b.button("Gain Map", Control::GainMap),
-        Node::Separator,
-        b.submenu("Histogram Plot", None, plot),
     ]
 }
 
@@ -687,17 +685,15 @@ impl App {
             Does::Action(_) => false,
             Does::Magnification(times) => panels.loupe_magnification == times,
             Does::Control(control) => match control {
-                // The toggles that are one flag of the panels, read through
-                // the one reading of which — see `Panels::flag_mut`.
+                // The toggles that are one flag of the panels, and the two
+                // choosing what the side panel holds, read through the one
+                // reading of which — see `Panels::lit`.
                 Control::Filmstrip
                 | Control::Minimap
                 | Control::Histogram
                 | Control::Info
                 | Control::Grid
                 | Control::Loupe
-                | Control::Luma
-                | Control::Planes
-                | Control::Log
                 | Control::Marks => panels.lit(control),
                 Control::Depth => current
                     .is_some_and(|current| current.showing == Showing::Auxiliary(Auxiliary::Depth)),
@@ -717,6 +713,9 @@ impl App {
                     let zoom = self.view.zoom(self.image_size(), self.viewport());
                     (current.is_some() || matches!(choice, ZoomChoice::Filter(_)))
                         && choice.active(self.view.fit(), zoom, self.view.upscale())
+                }
+                Control::Reading(reading) => {
+                    current.is_some_and(|current| Reading::of(&current.image) == reading)
                 }
                 Control::Window(index) => current.is_some_and(|current| {
                     WINDOWS
@@ -787,6 +786,7 @@ fn about_picture(does: Does) -> bool {
                 | Control::Curve(_)
                 | Control::Ramp(_)
                 | Control::Reset
+                | Control::Reading(_)
         )
     )
 }

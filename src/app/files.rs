@@ -360,6 +360,16 @@ impl Files {
         Some(self.request(self.index, Reload::Rendering, None, Source::Disk))
     }
 
+    /// Asks for the file on screen again under the other reading — as a
+    /// photo, or as data — as [`Files::rerender`] asks for its other
+    /// rendering: nothing while a read is in flight.
+    pub(super) fn reread_as(&mut self) -> Option<Asked> {
+        if self.pending.is_some() || self.paths.is_empty() {
+            return None;
+        }
+        Some(self.request(self.index, Reload::Reading, None, Source::Disk))
+    }
+
     /// Takes in a file that did not exist when the list was made — a picture
     /// pasted from the clipboard, whose bytes the loader fetches on its way
     /// to reading it — and asks for it.

@@ -19,8 +19,8 @@ use super::folder::Then;
 use super::keymap::{Bound, Chord, KeyName, Keymap, Keys, Row};
 use crate::clipboard;
 use crate::gestures::{self, Button, Gestures, Surface, WheelAction};
-use crate::image::auxiliary::Auxiliary;
-use crate::image::decode::{CameraJpeg, Rendering};
+use crate::image::auxiliary::{Auxiliary, Showing};
+use crate::image::decode::{CameraJpeg, Reading, Rendering};
 use crate::image::display::{Colormap, EV_STEP, Startup, ToneMap};
 use crate::image::encode;
 use crate::image::region::{Region, Side};
@@ -123,14 +123,6 @@ pub enum Action {
     /// right strip.
     ShowHelp,
     ToggleHistogram,
-    /// Which of that panel's planes are plotted. Both can be off: the panel
-    /// still has its response curve and its ramp to read.
-    ToggleLuma,
-    TogglePlanes,
-    /// Whether that panel's plot counts up its axis or the logarithm of its
-    /// counts. About the plot rather than about the image, which is why it
-    /// is not one of the things [`Action::ResetDisplay`] puts back.
-    ToggleLogCounts,
     /// The information panel on one of its tabs, or away where it is up on
     /// that tab already: `i` the curated facts, `I` every tag exiftool
     /// reads. The panel's button is the plain toggle, which keeps the tab.
@@ -388,7 +380,7 @@ pub(super) fn action_of(tip: Tip) -> Option<Action> {
         Tip::Control(Control::Output) => ToggleHdr,
         Tip::Control(Control::CameraJpeg) => ToggleCameraJpeg,
         Tip::Control(Control::Depth) => ToggleDepth,
-        Tip::Control(Control::GainMap) => ToggleGainMap,
+        Tip::Control(Control::GainMap | Control::ShowGainMap) => ToggleGainMap,
         Tip::Control(Control::Paste) => Action::Paste,
         Tip::Control(Control::Region) => ToggleRegion,
         Tip::Control(Control::Help) => ShowHelp,
@@ -401,9 +393,6 @@ pub(super) fn action_of(tip: Tip) -> Option<Action> {
         Tip::Control(Control::PixelFormat) => CyclePixelFormat,
         // The histogram panel's own, and the row of false colors a key
         // cycles through.
-        Tip::Control(Control::Luma) => ToggleLuma,
-        Tip::Control(Control::Planes) => TogglePlanes,
-        Tip::Control(Control::Log) => ToggleLogCounts,
         Tip::Control(Control::Marks) => MarkClipped,
         Tip::Control(Control::Reset) => ResetDisplay,
         // Only the swatches that are actually on offer: an index past the
@@ -475,7 +464,8 @@ pub(super) fn action_of(tip: Tip) -> Option<Action> {
             | Control::ExportAs(_)
             | Control::ExportTo
             | Control::CancelExport
-            | Control::OpenLastFolder,
+            | Control::OpenLastFolder
+            | Control::Reading(_),
         ) => return None,
         // The words at the end of the bottom bar are about four settings at
         // once, so no one key does what they do; what a press on them opens
@@ -616,13 +606,19 @@ pub enum When {
     Georeferenced,
     /// And can say it in latitude and longitude.
     Geographic,
+    /// The image on screen is read as data rather than as a photo: numbers
+    /// windowed to what they hold, which is what the window rules are for.
+    Data,
+    /// And read as a photo: light, which is what an exposure and a curve
+    /// are for.
+    Photo,
 }
 
 impl When {
     /// Every condition, for a test to hold them all up against the
     /// application.
     #[cfg(test)]
-    pub const ALL: [When; 16] = [
+    pub const ALL: [When; 18] = [
         When::RegionSelected,
         When::SeveralFiles,
         When::Animation,
@@ -639,6 +635,8 @@ impl When {
         When::VisitedAfter,
         When::Georeferenced,
         When::Geographic,
+        When::Data,
+        When::Photo,
     ];
 
     /// The condition in a few words, as the popup's column reads it: a
@@ -661,6 +659,8 @@ impl When {
             When::VisitedAfter => "a file shown after this one",
             When::Georeferenced => "a georeferenced file",
             When::Geographic => "a file placed in lat/long",
+            When::Data => "an image read as data",
+            When::Photo => "an image read as a photo",
         }
     }
 
@@ -695,6 +695,8 @@ impl Conditions {
             When::VisitedAfter => self.visited_after,
             When::Georeferenced => self.georeferenced,
             When::Geographic => self.geographic,
+            When::Data => self.data,
+            When::Photo => !self.data && !self.nothing_open,
         }
     }
 }
@@ -988,25 +990,6 @@ pub static ROWS: &[Row] = &[
             [digit(CTRL, KeyCode::Digit0)]
         ),
     },
-    // The three that work the histogram's plot, under the key that opens it.
-    Row {
-        section: Section::Interface,
-        when: None,
-        help: "Toggle the luminance plane on the histogram",
-        keys: one!("interface.luma", ToggleLuma, [key('j')]),
-    },
-    Row {
-        section: Section::Interface,
-        when: None,
-        help: "Toggle the color planes on the histogram",
-        keys: one!("interface.planes", TogglePlanes, [key('k')]),
-    },
-    Row {
-        section: Section::Interface,
-        when: None,
-        help: "Toggle a logarithmic count axis on the histogram",
-        keys: one!("interface.log-counts", ToggleLogCounts, [key('y')]),
-    },
     // The same key as the two pixel copies, with nothing held: what it
     // switches is what they take away with them.
     Row {
@@ -1294,7 +1277,7 @@ pub static ROWS: &[Row] = &[
     },
     Row {
         section: Section::Display,
-        when: None,
+        when: Some(When::Photo),
         help: "Exposure down / up, a quarter stop",
         keys: Keys::Bound(&[
             Bound {
@@ -1346,20 +1329,20 @@ pub static ROWS: &[Row] = &[
     },
     Row {
         section: Section::Display,
-        when: None,
+        when: Some(When::Data),
         help: "Cycle the window rule: stored, full, trimmed",
         keys: one!("display.window", CycleAutoWindow, [key('e')]),
     },
     Row {
         section: Section::Display,
-        when: None,
+        when: Some(When::Photo),
         help: "Toggle the curve on the highlights: clip, or roll off",
         keys: one!("display.tone-map", CycleToneMap, [key('t')]),
     },
     Row {
         section: Section::Display,
         when: None,
-        help: "Toggle the marks on the clipped pixels: red at white, blue at black",
+        help: "Mark clipped pixels, or stop: red at white, blue at black",
         keys: one!("display.marks", MarkClipped, [key('w')]),
     },
     Row {
@@ -1725,6 +1708,12 @@ impl Naming for Namer {
             Tip::Exposure => (
                 vec![names(keys, at)?],
                 Vec::from_iter(hint(keys, Exposure(-EV_STEP))),
+            ),
+            // The switch between the two readings: what each is, and under
+            // it what follows from it, which no key sets.
+            Tip::Control(Control::Reading(reading)) => (
+                vec![names(keys, at)?],
+                vec![ui::tooltip::reading_means(reading).to_string()],
             ),
             // The two handles: what each is, and under it the pair of keys
             // that step it. The band between them slides the window, which
@@ -2174,23 +2163,19 @@ impl App {
                     self.toast(message, Level::Message);
                 }
             }
-            // The three panels float over the image rather than inside the
-            // bars, and the file list keeps its rows when the bars go, so
-            // hiding the interface leaves all four behind. This asks for
-            // the picture on its own, and closes them on the way. They stay
+            // The minimap floats over the image rather than inside the bars,
+            // and the file list and the side panel stay when the bars go,
+            // so hiding the interface leaves all three behind. This asks
+            // for the picture on its own, and closes them on the way. They stay
             // closed when the bars come back: what the key put away, it is
             // not the key's business to bring out again.
             ToggleInterfaceAndPanels => {
                 self.panels.show_minimap = false;
-                self.panels.show_histogram = false;
-                self.panels.show_info = false;
+                self.panels.side = None;
                 self.panels.show_filmstrip = false;
                 return self.perform(ToggleInterface);
             }
             ToggleHistogram => return self.press(Control::Histogram),
-            ToggleLuma => return self.press(Control::Luma),
-            TogglePlanes => return self.press(Control::Planes),
-            ToggleLogCounts => return self.press(Control::Log),
             ToggleInfo => return self.show_info_on(ui::tags::Tab::Facts),
             ToggleRawData => return self.show_info_on(ui::tags::Tab::Tags),
             ToggleMinimap => return self.press(Control::Minimap),
@@ -2203,37 +2188,41 @@ impl App {
             ScaleUp => return self.rescale(ui::scale::step(self.ui_scale, true)),
             ScaleDown => return self.rescale(ui::scale::step(self.ui_scale, false)),
             ScaleReset => return self.rescale(ui::scale::DEFAULT),
+            // Refused by the display on data, which has no exposure, so
+            // that the keys and the slider cannot drift — see `When::Photo`.
             Exposure(stops) => {
-                return self.adjust(|current, _| {
-                    current.display.adjust_exposure(stops);
-                    true
-                });
+                return self.adjust(|current, _| current.display.adjust_exposure(stops));
             }
+            // Refused on a photo, whose window is as stored and the
+            // handles': the row the key cycles is not on the panel for one
+            // — see `When::Data`.
             CycleAutoWindow => {
+                if !self.conditions().data {
+                    return Effect::Nothing;
+                }
                 return self.adjust(|current, _| {
                     current.shown.display.cycle_auto(&current.shown.stats);
                     true
                 });
             }
             // The handles' keys: each end of the window stepped along the
-            // plot, on the file's own curve and no further than the plot
-            // goes, as the handle it stands for is dragged.
+            // plot, on its axis and no further than the plot goes, as the
+            // handle it stands for is dragged.
             StepBlack(by) => {
                 return self.adjust(|current, _| {
-                    let transfer = current.image.color.transfer;
-                    let plot_min = current.stats.plot.min;
-                    current.display.step_black(by, transfer, plot_min)
+                    let (axis, plot) = (current.stats.axis, current.stats.plot.range());
+                    current.display.step_black(by, axis, plot)
                 });
             }
             StepWhite(by) => {
                 return self.adjust(|current, _| {
-                    let transfer = current.image.color.transfer;
-                    let plot_max = current.stats.plot.max;
-                    current.display.step_white(by, transfer, plot_max)
+                    let (axis, plot) = (current.stats.axis, current.stats.plot.range());
+                    current.display.step_white(by, axis, plot)
                 });
             }
-            // Refused under a false color, and by the display itself, so that
-            // the key and the button beside the histogram cannot drift.
+            // Refused under a false color and on data, by the display itself,
+            // so that the key and the button beside the histogram cannot
+            // drift — see `When::Photo`.
             CycleToneMap => {
                 return self.adjust(|current, _| {
                     let gray = current.image.is_gray();
@@ -2480,7 +2469,7 @@ impl App {
             },
             index: self.files.target(),
             count: self.files.len(),
-            show_histogram: self.panels.show_histogram,
+            show_histogram: self.panels.side == Some(ui::side::Side::Histogram),
             state: self
                 .current
                 .as_ref()
@@ -2540,6 +2529,8 @@ impl App {
             openable: !self.openers.is_empty(),
             false_colored: current
                 .is_some_and(|current| current.display.false_colored(current.image.is_gray())),
+            data: current.is_some_and(|current| Reading::of(&current.image) == Reading::Data),
+            map_shown: current.is_some_and(|current| current.showing != Showing::Picture),
             picking: self.picking,
             nothing_open: current.is_none(),
             arriving: self.arriving().is_some(),
@@ -3127,23 +3118,26 @@ impl App {
             // rendering, which is why the reset below leaves it alone; the
             // marks are where `w` lands too, so that the key and the button
             // beside the panel's band cannot come to mean different things.
-            Control::Minimap
-            | Control::Histogram
-            | Control::Grid
-            | Control::Loupe
-            | Control::Info
-            | Control::Luma
-            | Control::Planes
-            | Control::Log
-            | Control::Marks => {
+            Control::Minimap | Control::Grid | Control::Loupe | Control::Marks => {
                 let flag = self
                     .panels
                     .flag_mut(widget)
                     .expect("each of these toggles one flag");
                 *flag = !*flag;
+                Effect::Redraw
+            }
+            // The two buttons choosing what the side panel holds, as tabs
+            // do: the one it holds takes it down, and the other puts itself
+            // up in its place. Refused above where the window has no room.
+            Control::Histogram => {
+                self.panels.choose(ui::side::Side::Histogram);
+                Effect::Redraw
+            }
+            Control::Info => {
+                self.panels.choose(ui::side::Side::Info);
                 // The panel up again on the Tags tab reads the file it is
                 // about, which may have changed while it was down.
-                if widget == Control::Info && self.tags_showing() {
+                if self.tags_showing() {
                     self.request_tags();
                 }
                 Effect::Redraw
@@ -3419,7 +3413,9 @@ impl App {
             Control::Output => self.toggle_hdr(),
             Control::CameraJpeg => self.toggle_camera_jpeg(),
             Control::Depth => self.toggle_beside(Auxiliary::Depth),
-            Control::GainMap => self.toggle_beside(Auxiliary::GainMap),
+            // The file read the other way, which is a read like a step.
+            Control::Reading(reading) => self.read_as(reading),
+            Control::GainMap | Control::ShowGainMap => self.toggle_beside(Auxiliary::GainMap),
             // The cross on the message at the foot of the window. The frame
             // after re-tests the pointer, which is what takes the highlight
             // off a button that is no longer there.

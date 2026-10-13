@@ -14,7 +14,8 @@ pub use auto::AutoWindow;
 pub use colormap::Colormap;
 pub use tone_map::{Headroom, ToneMap};
 
-use super::{Channels, DecodedImage, Referred, Sample, Stats, Transfer};
+use super::stats::Axis;
+use super::{Channels, DecodedImage, Referred, Sample, Stats};
 
 /// Whether a step from `from` to `to` is a step at all, against a window
 /// `width` wide: a press against the plot's end asks for the end, and the
@@ -68,6 +69,13 @@ pub struct Display {
     exposure_stops: f32,
     tone_map: ToneMap,
     colormap: Colormap,
+    /// Whether the image is read as data ([`Referred::Measured`]): numbers
+    /// that need not be light, with no exposure, since a stop is a doubling
+    /// of light — see [`Display::has_exposure`] — and no curve, since the
+    /// window is what puts them on the screen — see [`Display::has_curve`];
+    /// a single channel of them read through the gray ramp rather than
+    /// shown as light — see [`Display::ramp`].
+    measured: bool,
 }
 
 impl Default for Display {
@@ -80,6 +88,7 @@ impl Default for Display {
             exposure_stops: 0.0,
             tone_map: ToneMap::None,
             colormap: Colormap::Gray,
+            measured: false,
         }
     }
 }
@@ -134,6 +143,7 @@ impl Display {
             exposure_stops: 0.0,
             tone_map: ToneMap::None,
             colormap: Colormap::Gray,
+            measured: image.referred == Referred::Measured,
         };
         display.apply_auto(stats);
         if let Some(auto) = startup.auto {
@@ -150,10 +160,14 @@ impl Display {
         if let Some(colormap) = startup.colormap.filter(|_| image.is_gray()) {
             display.colormap = colormap;
         }
-        if let Some(tone_map) = startup.tone_map {
+        if let Some(tone_map) = startup.tone_map
+            && display.has_curve()
+        {
             display.tone_map = tone_map;
         }
-        if let Some(stops) = startup.exposure_stops {
+        if let Some(stops) = startup.exposure_stops
+            && display.has_exposure()
+        {
             display.exposure_stops = stops;
         }
         display
@@ -201,7 +215,7 @@ impl Display {
     /// the histogram's right corner is a share of, and the shader's mark on
     /// a white pixel waits on.
     pub fn clips_white(&self, gray: bool, headroom: Headroom) -> bool {
-        self.false_colored(gray) || (self.tone_map == ToneMap::None && headroom == Headroom::None)
+        self.held_to_white(gray) || (self.tone_map == ToneMap::None && headroom == Headroom::None)
     }
 
     /// Whether a false color is on the picture: a colormap other than the
@@ -214,16 +228,61 @@ impl Display {
         gray && self.colormap != Colormap::Gray
     }
 
-    /// Whether the display is doing nothing at all: the window is 0..1, the
-    /// exposure is nothing and no curve is on, so every value comes out as
-    /// itself. What the histogram asks before it draws the response curve,
-    /// which on such a display is the diagonal, and says nothing the axis
-    /// under it does not.
-    pub fn is_identity(&self) -> bool {
-        self.window_low == 0.0
-            && self.window_high == 1.0
-            && self.exposure_stops == 0.0
-            && self.tone_map == ToneMap::None
+    /// The ramp a `gray` image is read through, if it is read through one:
+    /// the false color where one is on, and the gray ramp on a measurement.
+    ///
+    /// A ramp places the windowed value along itself, evenly: the middle of
+    /// the window is the middle of the ramp. Light is placed by what the
+    /// screen makes of it, and the middle of the window is half of white's
+    /// light, which the screen's curve puts three quarters of the way up
+    /// its codes. A measurement is not light — an elevation, a count, a
+    /// temperature — and spread as light, the lower quarter of its window
+    /// takes half the grays; so it is read through the gray ramp, which
+    /// gives each value the gray code at its place in the window, as every
+    /// viewer of such data does, and as the false colors here do already.
+    /// Switching a measurement between gray and viridis then moves nothing.
+    /// A color measurement is left as light: three linear channels nobody
+    /// has vouched for are as likely a photograph as data, and encoding a
+    /// photograph twice washes it out.
+    ///
+    /// Everything a ramp changes reads this: the curve held at a clip
+    /// ([`Display::curve_on`]), the clip at the window's top whatever the
+    /// surface ([`Display::clips_white`]), the color a value comes out as
+    /// ([`Display::shade`], [`Mapping::map`]) and the row of the ramps
+    /// texture the shader reads (`shader_codes::ramp`). What is *named* —
+    /// the bar's word for a false color, its row of buttons — reads
+    /// [`Display::false_colored`], since the gray ramp is nothing to name.
+    pub fn ramp(&self, gray: bool) -> Option<Colormap> {
+        (gray && (self.colormap != Colormap::Gray || self.measured)).then_some(self.colormap)
+    }
+
+    /// Whether the exposure acts on the picture. Not on an image read as
+    /// data: a stop is a doubling of light, and its values need not be
+    /// light; and a stop up is exactly the white handle brought in to the
+    /// window's middle, which the handle does in the file's own units. The
+    /// one test behind the slider left off the panel, the keys that step it
+    /// and `--exposure` all refusing.
+    pub fn has_exposure(&self) -> bool {
+        !self.measured
+    }
+
+    /// Whether the curve acts on the picture. Not on an image read as data,
+    /// whatever its channels: the window is what fits its values to the
+    /// screen, and a curve would bend the very mapping being read off — the
+    /// neutral one's toe moves every shadow and its desaturation every
+    /// color. The one test behind the row left off the panel, `t` and
+    /// `--tone-map` all refusing, and the clip at the window's top
+    /// ([`Display::held_to_white`]).
+    pub fn has_curve(&self) -> bool {
+        !self.measured
+    }
+
+    /// Whether a `gray` or a color image goes out clipped at the window's
+    /// top whatever the curve and the surface: read through a ramp, which
+    /// has no color past its end for headroom to show as, or read as data,
+    /// whose window is the whole of its mapping to the screen.
+    fn held_to_white(&self, gray: bool) -> bool {
+        self.ramp(gray).is_some() || !self.has_curve()
     }
 
     /// Puts the two values that come out black and white where they are
@@ -320,15 +379,15 @@ impl Display {
         self.apply_auto(stats);
     }
 
-    /// Puts `curve` on the picture, unless a false color is on it — the
+    /// Puts `curve` on the picture, unless it is read through a ramp — the
     /// curve is held at a clip there, see [`Display::curve_on`], and a curve
     /// changed under a ramp would have the picture change when the ramp came
     /// off, from a press made long before. `gray` is whether the image has
-    /// one channel, which is what a false color is a reading of. Says
-    /// whether anything changed. The one place the refusal is made: the key
-    /// that cycles the curves and the button that names one both come here.
+    /// one channel, which is what a ramp is a reading of. Says whether
+    /// anything changed. The one place the refusal is made: the key that
+    /// cycles the curves and the button that names one both come here.
     pub fn set_tone_map(&mut self, curve: ToneMap, gray: bool) -> bool {
-        if self.false_colored(gray) {
+        if self.held_to_white(gray) {
             return false;
         }
         let changed = self.tone_map != curve;
@@ -359,16 +418,24 @@ impl Display {
         self.set_colormap(self.colormap.next(), gray)
     }
 
-    pub fn adjust_exposure(&mut self, stops: f32) {
-        self.set_exposure(self.exposure_stops + stops);
+    /// The exposure stepped by `stops`, as the keys step it. Says whether
+    /// anything changed.
+    pub fn adjust_exposure(&mut self, stops: f32) -> bool {
+        self.set_exposure(self.exposure_stops + stops)
     }
 
     /// The exposure set outright, as the slider sets it: held to the same
-    /// limit a step is, and left alone if asked for nothing.
-    pub fn set_exposure(&mut self, stops: f32) {
-        if stops.is_finite() {
-            self.exposure_stops = stops.clamp(-EXPOSURE_LIMIT, EXPOSURE_LIMIT);
+    /// limit a step is, and left alone if asked for nothing. Refused where
+    /// the picture has none ([`Display::has_exposure`]), for the slider,
+    /// the keys and the command line alike. Says whether anything changed.
+    pub fn set_exposure(&mut self, stops: f32) -> bool {
+        if !self.has_exposure() || !stops.is_finite() {
+            return false;
         }
+        let stops = stops.clamp(-EXPOSURE_LIMIT, EXPOSURE_LIMIT);
+        let changed = self.exposure_stops != stops;
+        self.exposure_stops = stops;
+        changed
     }
 
     /// Puts the value that comes out black where it is told to, the value
@@ -399,48 +466,61 @@ impl Display {
     }
 
     /// The black handle stepped by `fraction` of the window's width along
-    /// the plot, and no lower than `floor`, the bottom of the plot: what a
-    /// press of the black point's key does.
+    /// the plot, and no lower than the plot's floor, the first of `plot`'s
+    /// two ends: what a press of the black point's key does.
     ///
-    /// Along the plot, which is on the file's own curve, `transfer`, rather
-    /// than in linear light: a step is the same distance on the band every
-    /// time, as a drag's is. In linear light a twentieth of a 0..1 window
-    /// on an sRGB file is a quarter of the band on the first press and a
-    /// tenth on the next, the handle bounding out of the shadows and then
-    /// slowing, since the curve gives the shadows most of the band.
+    /// Along the plot, which is on `axis` — the file's own curve, or stops
+    /// — rather than in linear light: a step is the same distance on the
+    /// band every time, as a drag's is. In linear light a twentieth of a
+    /// 0..1 window on an sRGB file is a quarter of the band on the first
+    /// press and a tenth on the next, the handle bounding out of the
+    /// shadows and then slowing, since the curve gives the shadows most of
+    /// the band.
     ///
     /// The handle stops at the floor because the band does, and a key that
     /// went on past it would be a lift — nothing coming out black — which
     /// is grading and not a place to look. Whether anything moved, since a
     /// press against the floor is a press that did nothing.
-    pub fn step_black(&mut self, fraction: f32, transfer: Transfer, floor: f32) -> bool {
-        let (black, white) = self.displayed_bounds();
-        let (black, white) = (transfer.to_encoded(black), transfer.to_encoded(white));
+    pub fn step_black(&mut self, fraction: f32, axis: Axis, plot: [f32; 2]) -> bool {
+        let (black, white) = self.placed(axis, plot);
+        let [floor, _] = plot;
         // A window already under the floor is not pushed up to it by a
         // press downward: the floor stops a step, it does not make one.
         let asked = (black + (white - black) * fraction).max(floor.min(black));
         if !asked.is_finite() || !moved(black, asked, white - black) {
             return false;
         }
-        self.put_black(transfer.to_linear(asked));
+        self.put_black(axis.value(asked));
         true
     }
 
     /// The white handle stepped by `fraction` of the window's width along
-    /// the plot, and no higher than `ceiling`, the top of the plot: what a
-    /// press of the white point's key does, the twin of
+    /// the plot, and no higher than the plot's top, the second of `plot`'s
+    /// two ends: what a press of the white point's key does, the twin of
     /// [`Display::step_black`] with the ceiling for the floor. A window
     /// already over the ceiling is not pulled down to it by a press upward.
     /// Whether anything moved.
-    pub fn step_white(&mut self, fraction: f32, transfer: Transfer, ceiling: f32) -> bool {
-        let (black, white) = self.displayed_bounds();
-        let (black, white) = (transfer.to_encoded(black), transfer.to_encoded(white));
+    pub fn step_white(&mut self, fraction: f32, axis: Axis, plot: [f32; 2]) -> bool {
+        let (black, white) = self.placed(axis, plot);
+        let [_, ceiling] = plot;
         let asked = (white + (white - black) * fraction).min(ceiling.max(white));
         if !asked.is_finite() || !moved(white, asked, white - black) {
             return false;
         }
-        self.put_white(transfer.to_linear(asked));
+        self.put_white(axis.value(asked));
         true
+    }
+
+    /// The two ends of the window as they stand on `axis`, for a step along
+    /// a plot that runs over `plot`. A black at no light has no place on an
+    /// axis in stops — it is below every floor — and stands at the plot's
+    /// floor for the step, as the handle drawn for it stands at the plot's
+    /// edge: a window's width is then its white's distance up from there.
+    fn placed(&self, axis: Axis, plot: [f32; 2]) -> (f32, f32) {
+        let (black, white) = self.displayed_bounds();
+        let black = axis.place(black);
+        let black = if black.is_finite() { black } else { plot[0] };
+        (black, axis.place(white))
     }
 
     /// Puts the rendering back to what this image would open with if nothing
@@ -480,25 +560,27 @@ impl Display {
         Mapping {
             offset,
             gain,
-            colormap: self.colormap,
+            ramp: self.ramp(true),
             on_gray: self.curve_on(true, headroom),
             on_color: self.curve_on(false, headroom),
         }
     }
 
     /// The curve the picture goes out through, and the room it goes out
-    /// into: the chosen one on the surface as it is — or, over a false
-    /// color, a plain clip whatever the surface.
+    /// into: the chosen one on the surface as it is — or, over a ramp or on
+    /// data, a plain clip whatever the surface.
     ///
-    /// False color is already display-referred: a tone curve on top of a
-    /// colormap would distort the mapping the viewer is reading values off,
-    /// and headroom above the top of the ramp is a color the ramp does not
-    /// have. The one place the choice is made: `render/composite.rs` asks
+    /// A ramp is already display-referred: a tone curve on top of one would
+    /// distort the mapping the viewer is reading values off, and headroom
+    /// above the top of the ramp is a color the ramp does not have. Data is
+    /// read off its window the same way, its three channels as much as its
+    /// one, and what is past the window's top is past what was asked to be
+    /// shown, not light for the headroom to hold. The one place the choice is made: `render/composite.rs` asks
     /// this for the arm the shader runs, and [`Display::map`] runs the same
     /// arm on the CPU for the readouts, so neither can stop describing the
     /// screen the other draws.
     pub fn curve_on(&self, gray: bool, headroom: Headroom) -> (ToneMap, Headroom) {
-        if self.false_colored(gray) {
+        if self.held_to_white(gray) {
             (ToneMap::None, Headroom::None)
         } else {
             (self.tone_map, headroom)
@@ -559,17 +641,17 @@ impl Display {
     /// pixel, which is what lets the histogram paint the display's own output
     /// under the values it is plotting instead of a second drawing of it.
     ///
-    /// It needs the channels because the false color is a reading of one:
-    /// it is what a gray image is looked at through, and a color image's
-    /// three are colors already. Everything below the window comes back
+    /// It needs the channels because a ramp is a reading of one: it is what
+    /// a gray image is looked at through, and a color image's three are
+    /// colors already. Everything below the window comes back
     /// black, and everything above it as the top of the ramp, or as white —
     /// or, on a surface with room above white and no curve on, brighter than
     /// white — because that is what the screen does with it.
     pub fn shade(&self, value: f32, channels: Channels, headroom: Headroom) -> [f32; 3] {
         let windowed = self.windowed(value);
-        let color = match (channels.is_gray(), self.colormap) {
-            (true, Colormap::Gray) | (false, _) => [windowed; 3],
-            (true, colormap) => colormap.color(windowed),
+        let color = match self.ramp(channels.is_gray()) {
+            Some(ramp) => ramp.color(windowed),
+            None => [windowed; 3],
         };
         self.curve(channels.is_gray(), headroom, color)
     }
@@ -583,14 +665,14 @@ impl Display {
 }
 
 /// A [`Display`] as it maps pixels on one surface: the window as offset
-/// and gain, the false color, and the curve and the room it goes out into
+/// and gain, the ramp a gray pixel is read through, and the curve and the room it goes out into
 /// as [`Display::curve_on`] decided them for a gray pixel and a color one.
 /// See [`Display::mapping`].
 #[derive(Clone, Copy, Debug)]
 pub struct Mapping {
     offset: f32,
     gain: f32,
-    colormap: Colormap,
+    ramp: Option<Colormap>,
     on_gray: (ToneMap, Headroom),
     on_color: (ToneMap, Headroom),
 }
@@ -605,11 +687,12 @@ impl Mapping {
         let count = sample.channels.color_count();
         let gray = sample.channels.is_gray();
 
-        // The order the pipeline uses: window, then false color for a single
-        // channel, then the tone curve over whatever that produced.
-        let color = match (gray, self.colormap) {
-            (true, Colormap::Gray) => [values[0]; 3],
-            (true, colormap) => colormap.color(values[0]),
+        // The order the pipeline uses: window, then the ramp for a single
+        // channel read through one, then the tone curve over whatever that
+        // produced.
+        let color = match (gray, self.ramp) {
+            (true, Some(ramp)) => ramp.color(values[0]),
+            (true, None) => [values[0]; 3],
             (false, _) => values,
         };
         let (tone_map, headroom) = if gray { self.on_gray } else { self.on_color };
@@ -653,7 +736,7 @@ impl Mapped {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::image::{AlphaMode, Channels, ColorSpace, Primaries, Referred, Samples};
+    use crate::image::{AlphaMode, Channels, ColorSpace, Primaries, Referred, Samples, Transfer};
 
     /// Linear float gray as a measurement: numbers that need not be light,
     /// windowed to what they hold.
@@ -672,6 +755,7 @@ mod tests {
             nodata: None,
             gain_map: None,
             depth: None,
+            opens_on: None,
         }
     }
 
@@ -701,6 +785,7 @@ mod tests {
             nodata: None,
             gain_map: None,
             depth: None,
+            opens_on: None,
         }
     }
 
@@ -782,6 +867,7 @@ mod tests {
             nodata: None,
             gain_map: None,
             depth: None,
+            opens_on: None,
         };
         let p3 = red(Primaries::DisplayP3);
         let stats = Stats::scan(&p3);
@@ -920,6 +1006,7 @@ mod tests {
             nodata: None,
             gain_map: None,
             depth: None,
+            opens_on: None,
         };
         let sample = image.sample(0, 0, None).expect("inside");
 
@@ -1066,19 +1153,47 @@ mod tests {
             window_high: 0.6,
             ..Default::default()
         };
-        assert!(display.step_black(0.5, Transfer::Linear, 0.0));
+        assert!(display.step_black(0.5, Axis::Curve(Transfer::Linear), [0.0, 1.0]));
         assert!((display.window_low - 0.4).abs() < 1e-6);
         assert!((display.window_high - 0.6).abs() < 1e-6);
         assert_eq!(display.auto, AutoWindow::Manual);
         // Down by more than there is room for stops at the floor, and a
         // press against the floor moves nothing.
-        assert!(display.step_black(-5.0, Transfer::Linear, 0.1));
+        assert!(display.step_black(-5.0, Axis::Curve(Transfer::Linear), [0.1, 1.0]));
         assert!((display.window_low - 0.1).abs() < 1e-6);
-        assert!(!display.step_black(-0.05, Transfer::Linear, 0.1));
+        assert!(!display.step_black(-0.05, Axis::Curve(Transfer::Linear), [0.1, 1.0]));
         assert!((display.window_low - 0.1).abs() < 1e-6);
         // A window that starts under the floor is not lifted to it.
-        assert!(!display.step_black(-0.05, Transfer::Linear, 0.5));
+        assert!(!display.step_black(-0.05, Axis::Curve(Transfer::Linear), [0.5, 1.0]));
         assert!((display.window_low - 0.1).abs() < 1e-6);
+    }
+
+    /// On an axis in stops a black at no light is below every floor, and
+    /// a step of it starts from the plot's floor, where its handle is
+    /// drawn; a step of white is a share of the window's width up from
+    /// there, and the black stays at nothing.
+    #[test]
+    fn a_black_at_no_light_steps_from_the_floor_of_a_stops_axis() {
+        let mut display = Display {
+            window_low: 0.0,
+            window_high: 1.0,
+            ..Default::default()
+        };
+        assert!(display.step_white(-0.1, Axis::Stops, [-10.0, 0.0]));
+        assert_eq!(display.window_low, 0.0);
+        assert!(
+            (display.window_high - 0.5).abs() < 1e-6,
+            "{}",
+            display.window_high
+        );
+        assert!(display.step_black(0.05, Axis::Stops, [-10.0, 0.0]));
+        assert!(
+            (display.window_low.log2() + 9.55).abs() < 1e-4,
+            "{}",
+            display.window_low
+        );
+        // And no further down than the floor from there.
+        assert!(!display.step_black(-5.0, Axis::Stops, [-9.55, 0.0]));
     }
 
     /// A step is a twentieth of the band as drawn, which on a curved file
@@ -1092,11 +1207,11 @@ mod tests {
             window_high: 1.0,
             ..Default::default()
         };
-        assert!(display.step_black(0.05, Transfer::Srgb, 0.0));
+        assert!(display.step_black(0.05, Axis::Curve(Transfer::Srgb), [0.0, 1.0]));
         assert!((Transfer::Srgb.to_encoded(display.window_low) - 0.05).abs() < 1e-5);
         assert!(display.window_low < 0.005, "{}", display.window_low);
         // And the second press is the same distance along the band again.
-        assert!(display.step_black(0.05, Transfer::Srgb, 0.0));
+        assert!(display.step_black(0.05, Axis::Curve(Transfer::Srgb), [0.0, 1.0]));
         assert!((Transfer::Srgb.to_encoded(display.window_low) - 0.0975).abs() < 1e-5);
         assert!((display.window_high - 1.0).abs() < 1e-6);
     }
@@ -1111,16 +1226,16 @@ mod tests {
             window_high: 0.6,
             ..Default::default()
         };
-        let linear = Transfer::Linear;
-        assert!(display.step_white(0.5, linear, 1.0));
+        let linear = Axis::Curve(Transfer::Linear);
+        assert!(display.step_white(0.5, linear, [0.0, 1.0]));
         assert!((display.window_low - 0.2).abs() < 1e-6);
         assert!((display.window_high - 0.8).abs() < 1e-6);
         assert_eq!(display.exposure_stops, 0.0);
         assert_eq!(display.auto, AutoWindow::Manual);
-        assert!(display.step_white(5.0, linear, 1.0));
+        assert!(display.step_white(5.0, linear, [0.0, 1.0]));
         assert!((display.window_high - 1.0).abs() < 1e-6);
-        assert!(!display.step_white(0.05, linear, 1.0));
-        assert!(!display.step_white(0.05, linear, 0.5));
+        assert!(!display.step_white(0.05, linear, [0.0, 1.0]));
+        assert!(!display.step_white(0.05, linear, [0.0, 0.5]));
         assert!((display.window_high - 1.0).abs() < 1e-6);
     }
 
@@ -1132,24 +1247,25 @@ mod tests {
     fn a_step_of_white_is_the_windows_top_on_graded_light_too() {
         let mut display = Display::default();
         let srgb = Transfer::Srgb;
-        assert!(display.step_white(-0.05, srgb, 1.0));
+        let axis = Axis::Curve(srgb);
+        assert!(display.step_white(-0.05, axis, [0.0, 1.0]));
         assert_eq!(display.exposure_stops, 0.0);
         assert_eq!(display.window_low, 0.0);
         assert_eq!(display.auto, AutoWindow::Manual);
         let (_, white) = display.displayed_bounds();
         assert!((srgb.to_encoded(white) - 0.95).abs() < 1e-5, "{white}");
         // Along the plot: the second press is the same distance on the band.
-        assert!(display.step_white(-0.05, srgb, 1.0));
+        assert!(display.step_white(-0.05, axis, [0.0, 1.0]));
         let (_, white) = display.displayed_bounds();
         assert!((srgb.to_encoded(white) - 0.9025).abs() < 1e-5, "{white}");
         // And back up as far as the plot's top, no further.
-        assert!(display.step_white(5.0, srgb, 1.0));
+        assert!(display.step_white(5.0, axis, [0.0, 1.0]));
         assert!(
             (display.window_high - 1.0).abs() < 1e-5,
             "{}",
             display.window_high
         );
-        assert!(!display.step_white(0.05, srgb, 1.0));
+        assert!(!display.step_white(0.05, axis, [0.0, 1.0]));
         assert_eq!(display.exposure_stops, 0.0);
     }
 
@@ -1159,7 +1275,7 @@ mod tests {
         let stats = Stats::scan(&image);
         let mut display = Display::for_image_with(&image, &stats, Startup::default());
 
-        display.step_black(0.05, Transfer::Linear, 0.0);
+        display.step_black(0.05, Axis::Curve(Transfer::Linear), [0.0, 1.0]);
         assert_eq!(display.auto, AutoWindow::Manual);
         display.cycle_auto(&stats);
         assert_eq!(display.auto, AutoWindow::Off);
@@ -1336,8 +1452,11 @@ mod tests {
             "the hot pixel is above the window"
         );
         assert!(!display.exceeds_white(&stats));
-        // Until exposure carries the window's own top past white.
-        display.adjust_exposure(0.5);
+        // Until the window's own top is brought in under the samples — by
+        // the white handle, a gray measurement having no exposure to do it.
+        assert!(!display.adjust_exposure(0.5));
+        let (_, white) = display.displayed_bounds();
+        display.put_white(white / 2.0);
         assert!(display.exceeds_white(&stats));
     }
 
@@ -1473,51 +1592,6 @@ mod tests {
         assert_eq!(display.window_low, 0.2);
     }
 
-    /// The display is the identity exactly when nothing has been asked of
-    /// it, and any one thing asked of it is enough to make it not.
-    #[test]
-    fn the_identity_is_the_display_with_nothing_asked_of_it() {
-        let identity = Display::default();
-        assert!(identity.is_identity());
-        assert!(
-            !Display {
-                exposure_stops: 0.25,
-                ..identity.clone()
-            }
-            .is_identity()
-        );
-        assert!(
-            !Display {
-                tone_map: ToneMap::Neutral,
-                ..identity.clone()
-            }
-            .is_identity()
-        );
-        assert!(
-            !Display {
-                window_high: 0.5,
-                ..identity.clone()
-            }
-            .is_identity()
-        );
-        assert!(
-            !Display {
-                window_low: 0.1,
-                ..identity.clone()
-            }
-            .is_identity()
-        );
-        // The false color is not a change to the values, so it is not one
-        // to the response.
-        assert!(
-            Display {
-                colormap: Colormap::Turbo,
-                ..identity
-            }
-            .is_identity()
-        );
-    }
-
     /// Each handle moves its own end of the window, whatever the file, and
     /// the exposure is left alone by both: a hand-set white under a stop of
     /// exposure is that white, with the stop still on top of it.
@@ -1576,5 +1650,119 @@ mod tests {
         assert_eq!(display.tone_map, ToneMap::None, "held at the clip");
         assert!(display.set_colormap(Colormap::Gray, true));
         assert!(display.set_tone_map(ToneMap::Neutral, true));
+    }
+
+    /// A single-channel measurement is read through the gray ramp: the
+    /// middle of its window comes out the middle gray code, not half of
+    /// white's light, and the false colors put the same value at the same
+    /// place along their ramps. It clips at the window's ends on any
+    /// surface, and the curve is held off, as under a false color. A
+    /// graded gray picture is light, and shown as light; a color
+    /// measurement is left as light too.
+    #[test]
+    fn a_gray_measurement_is_read_through_the_gray_ramp() {
+        let image = float_gray(vec![0.0, 1.0]);
+        let mut display = opened(&image);
+        (display.window_low, display.window_high) = (0.0, 1.0);
+        assert_eq!(display.ramp(true), Some(Colormap::Gray));
+        assert_eq!(display.ramp(false), None, "three channels are light");
+
+        let middle = display.shade(0.5, Channels::Gray, Headroom::None);
+        assert_eq!(middle, Colormap::Gray.color(0.5));
+        assert_eq!(Transfer::Srgb.to_encoded(middle[0]), 0.5, "the middle code");
+        assert!(middle[0] < 0.25, "not half of white's light");
+        display.colormap = Colormap::Viridis;
+        assert_eq!(
+            display.shade(0.5, Channels::Gray, Headroom::None),
+            Colormap::Viridis.color(0.5),
+            "the false color reads the same place along its ramp"
+        );
+        display.colormap = Colormap::Gray;
+
+        for headroom in [Headroom::None, Headroom::Above] {
+            assert_eq!(display.shade(2.0, Channels::Gray, headroom), [1.0; 3]);
+            assert_eq!(
+                display.curve_on(true, headroom),
+                (ToneMap::None, Headroom::None)
+            );
+            assert!(display.clips_white(true, headroom));
+        }
+        assert!(
+            !display.set_tone_map(ToneMap::Neutral, true),
+            "the curve is held off"
+        );
+        assert_eq!(
+            display.shade(0.5, Channels::Rgb, Headroom::None),
+            [0.5; 3],
+            "a color measurement is shown as light"
+        );
+
+        // And it has no exposure: not from the slider, the keys or the
+        // command line.
+        assert!(!display.has_exposure());
+        assert!(!display.set_exposure(1.0));
+        assert!(!display.adjust_exposure(0.25));
+        assert_eq!(display.exposure_stops(), 0.0);
+        let startup = Startup {
+            exposure_stops: Some(2.0),
+            ..Startup::default()
+        };
+        let started = Display::for_image_with(&image, &Stats::scan(&image), startup);
+        assert_eq!(started.exposure_stops(), 0.0, "--exposure is passed over");
+
+        // The pixel readout agrees with the shade.
+        let sample = image.sample(1, 0, None).unwrap();
+        let mapped = display.map(&sample, Headroom::None);
+        assert_eq!(mapped.color, [1.0; 3]);
+
+        let graded = gray(vec![0, u16::MAX], Transfer::Srgb);
+        let mut display = opened(&graded);
+        assert_eq!(display.ramp(true), None);
+        assert_eq!(display.shade(0.5, Channels::Gray, Headroom::None), [0.5; 3]);
+        assert!(display.has_exposure());
+        assert!(display.set_exposure(1.0));
+        assert!(!display.set_exposure(1.0), "already there");
+    }
+
+    /// Three channels read as data are shown as light, but read off their
+    /// window as a single channel is: no exposure, no curve — not from the
+    /// row, the key or the command line — and a clip at the window's top
+    /// on any surface. Scene light with the same numbers keeps both.
+    #[test]
+    fn color_data_has_no_exposure_and_no_curve() {
+        let mut image = float_gray(vec![0.0, 0.5, 1.0, 2.0, 0.0, 0.5]);
+        image.width = 2;
+        image.samples = Samples::F32 {
+            channels: Channels::Rgb,
+            data: vec![0.0, 0.5, 1.0, 2.0, 0.0, 0.5],
+        };
+        let mut display = opened(&image);
+        (display.window_low, display.window_high) = (0.0, 1.0);
+        assert_eq!(display.ramp(false), None, "shown as light");
+        assert!(!display.has_exposure() && !display.has_curve());
+        assert!(!display.set_exposure(1.0));
+        assert!(!display.set_tone_map(ToneMap::Neutral, false));
+        assert!(!display.cycle_tone_map(false));
+        for headroom in [Headroom::None, Headroom::Above] {
+            assert_eq!(
+                display.curve_on(false, headroom),
+                (ToneMap::None, Headroom::None)
+            );
+            assert!(display.clips_white(false, headroom));
+            assert_eq!(display.shade(2.0, Channels::Rgb, headroom), [1.0; 3]);
+        }
+        let startup = Startup {
+            exposure_stops: Some(2.0),
+            tone_map: Some(ToneMap::Neutral),
+            ..Startup::default()
+        };
+        let started = Display::for_image_with(&image, &Stats::scan(&image), startup);
+        assert_eq!(started.exposure_stops(), 0.0, "--exposure is passed over");
+        assert_eq!(started.tone_map(), ToneMap::None, "and --tone-map");
+
+        image.referred = Referred::Scene;
+        let started = Display::for_image_with(&image, &Stats::scan(&image), startup);
+        assert!(started.has_exposure() && started.has_curve());
+        assert_eq!(started.tone_map(), ToneMap::Neutral);
     }
 }

@@ -16,8 +16,9 @@ use super::output::{Encoding, Output};
 use super::shader_codes;
 use super::{Color, Placement, Scene, UI_FORMAT, UiPaint, Upscale, WORKING_FORMAT};
 use crate::image::color::{Primaries, Transfer};
-use crate::image::display::{Colormap, Display, Headroom, ToneMap};
+use crate::image::display::{Colormap, Display, Headroom, Startup, ToneMap};
 use crate::image::orient::{self, Turn};
+use crate::image::stats::Stats;
 use crate::image::{AlphaMode, Channels, ColorSpace, DecodedImage, Referred, Samples};
 
 /// Draws `image` into a `target`-sized working-space texture and reads it
@@ -197,6 +198,7 @@ fn gray(width: u32, height: u32, samples: Samples) -> DecodedImage {
         nodata: None,
         gain_map: None,
         depth: None,
+        opens_on: None,
     }
 }
 
@@ -544,6 +546,7 @@ fn a_transparent_texel_does_not_bleed_its_color() {
         nodata: None,
         gain_map: None,
         depth: None,
+        opens_on: None,
     };
 
     let placement = Placement {
@@ -1024,8 +1027,9 @@ fn the_coarse_chain_is_reduced_from_lifted_light() {
 /// A false color on the device is the readout's: every ramp, drawn over a
 /// gray sweep through and past the window, is `Colormap::color` of the
 /// windowed value — including the ends, which out-of-window values take.
-/// Gray is no false color at all: the windowed value itself, unclamped,
-/// left for the compositor's curve to clip.
+/// Gray on light is no ramp at all: the windowed value itself, unclamped,
+/// left for the compositor's curve to clip. On a measurement it is a ramp
+/// like the others, and the gray ramp clips at its ends.
 #[test]
 fn the_false_color_on_the_device_is_the_readouts() {
     let Some(gpu) = gpu::test_context() else {
@@ -1071,6 +1075,34 @@ fn the_false_color_on_the_device_is_the_readouts() {
             }
         }
     }
+
+    let mut measurement = image.clone();
+    measurement.referred = Referred::Measured;
+    let stats = Stats::scan(&measurement);
+    for map in Colormap::ALL {
+        let mut display = Display::for_image_with(&measurement, &stats, Startup::default());
+        display.set_displayed_bounds(0.0, 1.0);
+        display.set_colormap(map, true);
+        assert_eq!(display.ramp(true), Some(map));
+        let pixels = draw_layer_as(
+            gpu,
+            &mut layer,
+            target,
+            Draw::plain(whole(target, &image), None),
+            &display,
+        );
+        for (x, value) in values.iter().enumerate() {
+            let expected = map.color(*value);
+            let got = pixels[x];
+            for (channel, (got, want)) in got.iter().zip(expected).enumerate() {
+                assert!(
+                    close(*got, want, 2e-3),
+                    "{} on a measurement at {value}: channel {channel} got {got}, expected {want}",
+                    map.label()
+                );
+            }
+        }
+    }
 }
 
 /// A one-row picture of linear float color in `primaries`, one pixel per
@@ -1093,6 +1125,7 @@ fn rgb_f32_row(pixels: &[[f32; 3]], primaries: Primaries) -> DecodedImage {
         nodata: None,
         gain_map: None,
         depth: None,
+        opens_on: None,
     }
 }
 

@@ -26,7 +26,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::image::decode::Rendering;
+use crate::image::decode::{Reading, Rendering};
 use crate::image::display::Display;
 use crate::image::orient::Turn;
 use crate::view::View;
@@ -61,26 +61,47 @@ pub(super) enum Left {
 
 /// Every file seen so far, and what each was left in.
 #[derive(Default)]
-pub(super) struct Kept(HashMap<PathBuf, Settings>);
+pub(super) struct Kept {
+    settings: HashMap<PathBuf, Settings>,
+    /// The files whose reading was chosen by hand — as a photo, or as
+    /// data — and which. Apart from the settings, since it is wanted before
+    /// the file is read rather than once it has arrived, and is set while
+    /// the file is on screen rather than as it is left.
+    readings: HashMap<PathBuf, Reading>,
+}
 
 impl Kept {
     /// Puts away how the file at `path` is being left, replacing whatever it
     /// had left before.
     pub(super) fn keep(&mut self, path: &Path, settings: Settings) {
-        self.0.insert(path.to_path_buf(), settings);
+        self.settings.insert(path.to_path_buf(), settings);
     }
 
     /// What that file left behind, or `None` for one that has not been on
     /// screen yet.
     pub(super) fn left(&self, path: &Path) -> Option<&Settings> {
-        self.0.get(path)
+        self.settings.get(path)
+    }
+
+    /// Has the file at `path` read as `reading` from now on.
+    pub(super) fn read_as(&mut self, path: &Path, reading: Reading) {
+        self.readings.insert(path.to_path_buf(), reading);
+    }
+
+    /// How the file at `path` was asked to be read, or `None` for one left
+    /// to the decoder's own reading.
+    pub(super) fn reading(&self, path: &Path) -> Option<Reading> {
+        self.readings.get(path).copied()
     }
 
     /// The file at `from` is called `to` now: what it left comes with it,
     /// since a renamed file is still the same file.
     pub(super) fn rename(&mut self, from: &Path, to: &Path) {
-        if let Some(settings) = self.0.remove(from) {
-            self.0.insert(to.to_path_buf(), settings);
+        if let Some(settings) = self.settings.remove(from) {
+            self.settings.insert(to.to_path_buf(), settings);
+        }
+        if let Some(reading) = self.readings.remove(from) {
+            self.readings.insert(to.to_path_buf(), reading);
         }
     }
 }

@@ -47,7 +47,6 @@ pub struct Config {
     pub show_filmstrip: bool,
     pub show_histogram: bool,
     pub show_info: bool,
-    pub log_counts: bool,
     /// Whether a single file named on the command line steps on through
     /// the other images in its folder.
     pub browse_folder: bool,
@@ -69,7 +68,6 @@ impl Default for Config {
             show_filmstrip: true,
             show_histogram: false,
             show_info: false,
-            log_counts: false,
             browse_folder: true,
             open_map_link: OPEN_MAP_LINK.to_string(),
             exiftool: "exiftool".to_string(),
@@ -95,7 +93,7 @@ struct Setting {
 /// Every setting the configuration file takes, in the order the template
 /// lists them. [`Config::template`] writes each one's value, and
 /// [`Config::parse`] reads it back.
-const SETTINGS: [Setting; 9] = [
+const SETTINGS: [Setting; 8] = [
     Setting {
         name: "show_ui",
         words: "The panels around the picture.",
@@ -116,21 +114,15 @@ const SETTINGS: [Setting; 9] = [
     },
     Setting {
         name: "show_histogram",
-        words: "The histogram panel.",
+        words: "The histogram, in the side panel; it wins over show_info where both are on.",
         get: |config| config.show_histogram.to_string(),
         set: |config, value| flag(&mut config.show_histogram, value),
     },
     Setting {
         name: "show_info",
-        words: "The file information panel.",
+        words: "The file information, in the side panel.",
         get: |config| config.show_info.to_string(),
         set: |config, value| flag(&mut config.show_info, value),
-    },
-    Setting {
-        name: "log_counts",
-        words: "The histogram's bars as tall as the logarithm of their counts.",
-        get: |config| config.log_counts.to_string(),
-        set: |config, value| flag(&mut config.log_counts, value),
     },
     Setting {
         name: "browse_folder",
@@ -187,11 +179,23 @@ pub fn map_link(link: &str, [latitude, longitude]: [f64; 2]) -> String {
         .replace("{lng}", &format!("{longitude:.6}"))
 }
 
-/// Settings the configuration file once took, which the state file keeps
-/// now: how the pointer's pixel and place are written, chosen by hand from
+/// Settings the configuration file once took: how the pointer's pixel and
+/// place are written, which the state file keeps now, chosen by hand from
 /// the readout's menu and remembered where they were left, like everything
-/// else set there. A line naming one is passed over.
-const RETIRED: [&str; 3] = ["pixel_format", "coordinate_format", "geographic_format"];
+/// else set there; and the histogram's logarithmic counts, which its one
+/// scale down the column has taken the place of. A line naming one is
+/// passed over.
+const RETIRED: [&str; 4] = [
+    "pixel_format",
+    "coordinate_format",
+    "geographic_format",
+    "log_counts",
+];
+
+/// Key names the table once had: the histogram's logarithmic counts, which
+/// its one scale down the column has taken the place of. A `keys.` line
+/// naming one is passed over.
+const RETIRED_KEYS: [&str; 1] = ["interface.log-counts"];
 
 impl Config {
     /// The configuration as a file: every setting at its default, commented
@@ -304,6 +308,9 @@ impl Config {
         set_on: &mut Vec<(&'static str, usize)>,
         problems: &mut Vec<(usize, String)>,
     ) {
+        if RETIRED_KEYS.contains(&name) {
+            return;
+        }
         let mut chords = Vec::new();
         let mut tokens = Vec::new();
         for token in value.split_whitespace() {
@@ -708,8 +715,11 @@ mod tests {
              \n\
              show_minimap=false   # it gets in the way\n\
              show_histogram = true\n\
-             log_counts = true\n",
+             log_counts = true\n\
+             keys.interface.log-counts = y\n",
         );
+        // `log_counts` and its key are retired, and passed over rather than
+        // called mistakes.
         assert_eq!(problems, Vec::new());
         assert_eq!(
             config,
@@ -717,7 +727,6 @@ mod tests {
                 show_ui: false,
                 show_minimap: false,
                 show_histogram: true,
-                log_counts: true,
                 ..Config::default()
             }
         );
@@ -786,7 +795,7 @@ mod tests {
             .lines()
             .filter(|line| line.starts_with("gesture."))
             .count();
-        assert_eq!(keys, 103, "{uncommented}");
+        assert_eq!(keys, 100, "{uncommented}");
         // A Mac's two more: the wheel with Command, and the pinch.
         let slots = if cfg!(target_os = "macos") { 12 } else { 10 };
         assert_eq!(gestures, slots, "{uncommented}");
@@ -882,7 +891,6 @@ mod tests {
             show_filmstrip: !defaults.show_filmstrip,
             show_histogram: !defaults.show_histogram,
             show_info: !defaults.show_info,
-            log_counts: !defaults.log_counts,
             browse_folder: !defaults.browse_folder,
             open_map_link: "https://www.openstreetmap.org/?mlat={lat}&mlon={lng}".to_string(),
             exiftool: "/opt/exiftool/exiftool".to_string(),

@@ -25,7 +25,7 @@ struct Params {
     primaries: mat3x3<f32>,      // source primaries -> BT.709
     swizzle: u32,                // 0 gray, 1 gray+alpha, 2 rgb, 3 rgba
     alpha_mode: u32,             // 0 opaque, 1 straight, 2 premultiplied
-    colormap: u32,               // 0 none, 1 viridis, 2 magma, 3 turbo
+    colormap: u32,               // the ramp a gray pixel is read through: 0 none, 1 gray, 2 viridis, 3 magma, 4 turbo
     resampler: u32,              // 0 area, 1 antialiased nearest, 2 bicubic
     lift: u32,                   // 0 no gain map, else its channel count; 0 on a coarse level
     level: u32,                  // which level of the coarse chain `source` is; 0 is the picture itself
@@ -185,21 +185,21 @@ fn resample(uv: vec2<f32>) -> vec4<f32> {
     }
 }
 
-// The false-color ramps, one row per map, as `image_layer` wrote them from
+// The ramps, one row per map, as `image_layer` wrote them from
 // `Colormap::color`: the readout in the bottom bar names a color from the
 // same function, so the swatch and the screen cannot disagree. Which row a
-// map is, is `shader_codes::colormap`'s to say.
+// map is, is `shader_codes::ramp`'s to say, less one.
 @group(3) @binding(0) var ramps: texture_2d<f32>;
 
-// The color ramp `which` gives a windowed value, in linear light: the two
-// entries either side of it, blended by where it falls between them.
-// Out-of-window values take the end of the ramp.
-fn false_color(which: u32, t: f32) -> vec3<f32> {
+// The color the ramp coded `which` gives a windowed value, in linear light:
+// the two entries either side of it, blended by where it falls between
+// them. Out-of-window values take the end of the ramp.
+fn ramped(which: u32, t: f32) -> vec3<f32> {
     let last = i32(textureDimensions(ramps).x) - 1;
     let at = clamp(t, 0.0, 1.0) * f32(last);
     let low = i32(floor(at));
     let high = min(low + 1, last);
-    let row = i32(which);
+    let row = i32(which) - 1;
     let below = textureLoad(ramps, vec2<i32>(low, row), 0).rgb;
     let above = textureLoad(ramps, vec2<i32>(high, row), 0).rgb;
     return mix(below, above, at - f32(low));
@@ -291,9 +291,12 @@ fn shade(uv: vec2<f32>) -> vec4<f32> {
     // window/level a measurement image needs.
     let windowed = (color - vec3<f32>(params.window.x)) * params.window.y;
 
+    // A gray pixel read through a ramp — a false color, or the gray ramp
+    // a measurement is spread along — takes the ramp's color at its
+    // windowed value; light goes out as the window left it.
     var result: vec3<f32>;
     if is_gray && params.colormap != 0u {
-        result = false_color(params.colormap, windowed.r);
+        result = ramped(params.colormap, windowed.r);
     } else {
         result = windowed;
     }

@@ -38,7 +38,7 @@ use crate::exiftool;
 use crate::gestures::{Gestures, Surface};
 use crate::image::DecodedImage;
 use crate::image::auxiliary::{Auxiliary, Showing};
-use crate::image::decode::{self, CameraJpeg, Rendering};
+use crate::image::decode::{self, CameraJpeg, Reading, Rendering};
 use crate::image::display::{Display, Headroom, Startup};
 use crate::image::orient::Turn;
 use crate::image::sequence::Sequence;
@@ -54,10 +54,10 @@ use crate::theme::{self, Theme};
 use crate::thumbnailer::{Delivered, Facts, News, Thumb, Thumbnailer};
 use crate::timing;
 use crate::trash::Trash;
-use crate::ui::chrome::{Parts, content_area, image_viewport};
+use crate::ui::chrome::{Parts, image_viewport};
 use crate::ui::toast::{self, Level, Toasts};
 use crate::ui::tooltip::Hdr;
-use crate::ui::{self, Current, FileFacts, FrameInput, Panels, Rect, Toast};
+use crate::ui::{self, Current, FileFacts, FrameInput, Panels, Toast};
 use crate::view::{View, Viewport};
 use crate::watch::{self, Watch};
 use filmstrip::Filmstrip;
@@ -500,8 +500,8 @@ pub struct App {
     /// [`Panels::show_filmstrip`].
     filmstrip: Filmstrip,
     /// Where what is kept from one run to the next is written back to when
-    /// the window closes: the file list's width and the loupe's
-    /// magnification.
+    /// the window closes: the file list's and the side panel's widths and
+    /// the loupe's magnification.
     state: StateFile,
     /// The files that have been on screen, for going back and forward
     /// through them.
@@ -756,12 +756,16 @@ impl App {
             panels: Panels {
                 show_ui: config.show_ui,
                 show_filmstrip: config.show_filmstrip,
-                show_histogram: config.show_histogram,
-                show_luma: true,
-                show_planes: true,
-                log_counts: config.log_counts,
+                // The histogram where both are asked for: it is the first
+                // of the two buttons.
+                side: if config.show_histogram {
+                    Some(ui::side::Side::Histogram)
+                } else if config.show_info {
+                    Some(ui::side::Side::Info)
+                } else {
+                    None
+                },
                 mark_clipped: false,
-                show_info: config.show_info,
                 show_minimap: config.show_minimap,
                 show_grid: false,
                 show_loupe: false,
@@ -1020,7 +1024,8 @@ impl App {
     /// that tab, with room for it — the reading the frame draws it by, so
     /// that what is drawn and what is run cannot disagree.
     pub(super) fn tags_showing(&self) -> bool {
-        self.panels.show_info && self.panels.info_tab == ui::tags::Tab::Tags && self.room().info
+        self.side_showing() == Some(ui::side::Side::Info)
+            && self.panels.info_tab == ui::tags::Tab::Tags
     }
 
     /// Puts the information panel up on `tab`, or takes it down where it is
@@ -1030,10 +1035,10 @@ impl App {
         if self.refuses(ui::Control::Info) {
             return Effect::Nothing;
         }
-        if self.panels.show_info && self.panels.info_tab == tab {
-            self.panels.show_info = false;
+        if self.panels.side == Some(ui::side::Side::Info) && self.panels.info_tab == tab {
+            self.panels.side = None;
         } else {
-            self.panels.show_info = true;
+            self.panels.side = Some(ui::side::Side::Info);
             self.panels.info_tab = tab;
             if self.tags_showing() {
                 self.request_tags();
@@ -1105,6 +1110,24 @@ impl App {
     /// without its head.
     pub(super) fn filmstrip_showing(&self) -> bool {
         self.panels.show_filmstrip && self.files.len() > 1
+    }
+
+    /// What the side panel holds while it is on screen: what was asked for,
+    /// where the window has room for it, and while there is something open
+    /// for it to be about — the empty window has its buttons in the middle,
+    /// and nothing for a histogram or a column of facts to say. Hiding the
+    /// interface leaves it up, as it leaves the file list.
+    pub(super) fn side_showing(&self) -> Option<ui::side::Side> {
+        let side = self.panels.side?;
+        if self.is_empty() {
+            return None;
+        }
+        let room = ui::room(
+            self.logical_size(),
+            self.panels.show_ui,
+            self.parts_but_side(),
+        );
+        room.holds(side).then_some(side)
     }
 
     /// What is known about `path` that the list is ordered by: what its
@@ -1372,8 +1395,9 @@ impl App {
 
     /// How much room above white the picture is going out to: the
     /// monitor's peak over its white, where it has said and the surface has
-    /// the room, and none otherwise. What a gain map's lift is weighed
-    /// against.
+    /// the room; unbounded where the surface has the room and the monitor
+    /// has not said how much, so that a gain map's lift is shown whole; and
+    /// none otherwise. What a gain map's lift is weighed against.
     fn display_headroom(&self) -> f32 {
         if self.headroom() != Headroom::Above {
             return 1.0;
@@ -1658,28 +1682,30 @@ impl App {
         [physical[0] / scale, physical[1] / scale]
     }
 
-    /// Whether the content area has room for each of the two panels that
-    /// float over it. The frame builder works this out for itself; it is
-    /// worked out here as well for the presses and the tooltips, which have
-    /// to answer between frames.
+    /// Whether the window has room for each of what the side panel holds,
+    /// and for the help popup. The frame builder works this out for itself;
+    /// it is worked out here as well for the presses and the tooltips,
+    /// which have to answer between frames.
     pub(super) fn room(&self) -> ui::Room {
-        ui::room(self.content(), &self.panels)
-    }
-
-    /// What the panels leave free for the image and for whatever floats over
-    /// it, in the logical pixels those are laid out in. The frame builder
-    /// works this out for itself; it is worked out here as well for the hit
-    /// tests, which have to answer between frames.
-    fn content(&self) -> Rect {
-        content_area(self.logical_size(), self.panels.show_ui, self.parts())
+        ui::room(self.logical_size(), self.panels.show_ui, self.parts())
     }
 
     /// Which of the panels that come and go are up: what the chrome's
     /// geometry is derived from besides the window size.
     fn parts(&self) -> Parts {
         Parts {
+            side: self.side_showing().is_some(),
+            ..self.parts_but_side()
+        }
+    }
+
+    /// The same with the side panel left out, which is all whether there is
+    /// room for it is decided by — see [`ui::chrome::side_room`].
+    fn parts_but_side(&self) -> Parts {
+        Parts {
             transport: self.has_transport(),
             filmstrip: self.filmstrip_showing().then(|| self.filmstrip.slot()),
+            side: false,
         }
     }
 
@@ -2040,6 +2066,7 @@ impl App {
             deleted: self.watch.missing(),
             headroom: self.headroom(),
             hdr_available: self.hdr_available(),
+            room: self.display_headroom(),
             can_pan: self.view.can_pan(self.image_size(), viewport),
             openers: self
                 .openers
@@ -2057,6 +2084,7 @@ impl App {
             zoom_box: self.marking.zoom_box(),
             transport: self.transport(),
             filmstrip,
+            side: self.side_showing(),
             chooser,
             tags,
             rename,
@@ -2551,6 +2579,7 @@ impl App {
     /// the frame owed, for a request that goes somewhere else.
     fn send(&mut self, asked: Asked) -> Effect {
         let mut request = asked.request(self.overrides, self.rendering);
+        request.overrides = self.overrides_for(&request.path);
         let elsewhere = request.mode == Reload::Fresh
             && (self.current.is_none() || self.files.shown_path() != Some(request.path.as_path()));
         // A paged file comes back to the page it was left on, which has to
@@ -2575,6 +2604,39 @@ impl App {
         self.filmstrip.reveal();
         self.refresh_title();
         Effect::Redraw
+    }
+
+    /// The decode overrides for the file at `path`: the command line's, and
+    /// over them the reading the file was asked for by hand, if it was —
+    /// see [`App::read_as`].
+    pub(super) fn overrides_for(&self, path: &Path) -> decode::Overrides {
+        let mut overrides = self.overrides;
+        overrides.reading = self.kept.reading(path);
+        overrides
+    }
+
+    /// Reads the file on screen as `reading` from now on — as a photo, or
+    /// as data — and reads it again under it where it is the other. The
+    /// choice is the file's and stays with it, as what it was left in does:
+    /// a step away and back finds it read the same way. Nothing to draw
+    /// yet: the picture stays until it arrives, as on a step.
+    pub(super) fn read_as(&mut self, reading: Reading) -> Effect {
+        let Some(path) = self.files.shown_path() else {
+            return Effect::Nothing;
+        };
+        let shown = self
+            .current
+            .as_ref()
+            .map(|current| Reading::of(current.picture().0));
+        if shown == Some(reading) {
+            return Effect::Nothing;
+        }
+        let path = path.to_path_buf();
+        self.kept.read_as(&path, reading);
+        if let Some(request) = self.files.reread_as() {
+            let _ = self.send(request);
+        }
+        Effect::Nothing
     }
 
     /// Puts [`App::title`] on the window, which names the file last asked
@@ -2640,6 +2702,7 @@ impl App {
         let Ready {
             image,
             stats,
+            stored,
             exif,
             gpu,
             sequence,
@@ -2817,6 +2880,7 @@ impl App {
             shown: ui::Face {
                 image,
                 stats,
+                stored: Arc::new(stored),
                 display,
                 reduced,
                 lift: None,
@@ -2907,7 +2971,7 @@ impl App {
         self.players += 1;
         self.animation = Some(Animation::start(
             path,
-            self.overrides,
+            self.overrides_for(path),
             count,
             loops,
             left,
@@ -2950,6 +3014,7 @@ impl App {
         if let Some(current) = &mut self.current {
             current.image = Arc::clone(&frame.image);
             current.stats = frame.stats.clone();
+            current.stored = Arc::clone(&frame.stored);
             current.reduced = reduced.or(current.reduced);
         }
         animation.shown(head);
@@ -3323,8 +3388,9 @@ enum Arrival {
     /// Another file of another size, or a file into an empty window: put
     /// back as it was left, or fitted afresh.
     Anew,
-    /// The file on screen in its other rendering: the view is rescaled so the
-    /// same detail stays where it was, the display starts over.
+    /// The file on screen in its other rendering, or under its other
+    /// reading: the view is rescaled so the same detail stays where it was,
+    /// the display starts over.
     Rerendered,
 }
 
@@ -3343,7 +3409,7 @@ fn arrival(
     let same_file = mode != Reload::Fresh;
     let stepping = shown.is_some_and(|(shown, _)| shown != path);
     let arrival = match (same_file, same_size) {
-        _ if mode == Reload::Rendering => Arrival::Rerendered,
+        _ if matches!(mode, Reload::Rendering | Reload::Reading) => Arrival::Rerendered,
         (true, true) => Arrival::Reread,
         (true, false) => Arrival::Reshaped,
         (false, true) => Arrival::Beside,

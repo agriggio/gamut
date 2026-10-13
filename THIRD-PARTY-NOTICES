@@ -1,4 +1,4 @@
-Cargo.lock sha256: 4326c0a27bf7952aa732948217dca5dff05e32ef44e5ea0ced4452c14b9d2e8c
+Cargo.lock sha256: da572cfb3f63179767488ca05e6380ad0ba59fe9afa0ec816077cad740469ade
 
                       gamut: third-party notices
 
@@ -1560,7 +1560,7 @@ Used by:
   alloc-stdlib 0.2.4
   exr 1.74.2
 
-Copyright (c) <year> <owner>. 
+Copyright (c) <year> <owner>.
 
 Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
 
@@ -5490,5 +5490,3 @@ the following restrictions:
     misrepresented as being the original software.
 
 3. This notice may not be removed or altered from any source distribution.
-
-
