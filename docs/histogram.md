@@ -127,12 +127,19 @@ above them as the section's own plot, the net of the three, as the Display
 section's plot stands above its rows. The last row, `section::trace_row`,
 follows the pointer's pixel up through them.
 
-Each part's plot has a caption over it (`profile::caption`): its name, what
-its axes are, and on the right what the pointer's pixel reads on it, in
-numbers, so that nothing has to be read off the position of a dot. Its
-ground is set in from the left (`section::SCALE_GUTTER`) for the stops its
-height is in, a few numbers up the side, so that the height has a scale as
-the row of stops under it gives the width one.
+Each part's plot has a caption over it (`profile::caption`), its name
+alone, and the pointer's pixel on it as a dot with two guides
+(`profile::guides`): one up from the axis, worded `in` with the number
+that went in, and one across from the scale, worded `out` on the curve and
+`lift` on the table with what came of it — so that nothing has to be read
+off the position of a dot, and what each axis is is said at the point
+where it is read rather than in a line of its own under the name. What
+the part is, and what the brightness the table reads is, is the part's
+tooltip (`Tip::ToneCurve`, `Tip::GainTable`), over the caption and the plot
+together; the exposure's row has one too (`Tip::Baseline`). Its ground is
+set in from the left (`section::SCALE_GUTTER`) for the stops its height
+is in, a few numbers up the side, so that the height has a scale as the
+row of stops under it gives the width one.
 
 Every reading is in one quantity wherever it can be: the pixel's brightest
 channel in linear ProPhoto, in stops below white. That is the channel the

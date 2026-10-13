@@ -628,8 +628,12 @@ the order they are applied: the tone curve; the exposure and the gain
 table together, how far they lift a pixel by how bright it is, coming down
 to no lift at white, with the spread across the picture as a band and the
 pixel under the pointer as a line and a dot; and the exposure on its own
-row. Pointing at the picture writes each part's reading over its plot, and
-the *Pixel* row at the foot follows the pixel up through all three: its
+row. Pointing at the picture puts the pixel on each part's plot as a dot
+with two guides, one up from the axis labeled *in* with what went in, and
+one across from the side labeled *out* on the curve and *lift* on the
+table with what came of it; resting on a part, or on the exposure row,
+says what it is. The *Pixel* row at the foot follows the pixel up through
+all three: its
 brightest channel in stops below white as developed, then exposed, then
 through the table, then through the curve. Brightness is measured that way
 everywhere in the section except across the gain table's plot, which is

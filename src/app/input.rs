@@ -488,7 +488,10 @@ pub(super) fn action_of(tip: Tip) -> Option<Action> {
         | Tip::Exposure
         | Tip::ProfilePixel
         | Tip::Demosaic(_)
-        | Tip::Clipped => return None,
+        | Tip::Clipped
+        | Tip::Baseline
+        | Tip::GainTable
+        | Tip::ToneCurve => return None,
     })
 }
 

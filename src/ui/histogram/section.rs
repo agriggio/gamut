@@ -204,7 +204,7 @@ impl Section {
 fn part(rect: Rect, index: usize) -> (Rect, Rect) {
     let lift = Section::Profile.plot(rect);
     let top = lift.bottom() + PLOT_INSET + EV_ROW + index as f32 * PART_HEIGHT + PART_GAP;
-    let caption = Rect::new(lift.x, top, lift.width, CAPTION_HEIGHT);
+    let caption = Rect::new(lift.x, top, lift.width, PART_CAPTION_HEIGHT);
     let ground = Rect::new(
         lift.x + SCALE_GUTTER,
         caption.bottom() + PLOT_INSET,
@@ -251,9 +251,13 @@ pub fn trace_row(rect: Rect) -> Rect {
 /// photosites: the gap from the row above.
 pub const PART_GAP: f32 = 8.0;
 
-/// A part's caption: two lines of the plot's small words, the part's name
-/// and the pointer's reading on it over what its axes are.
+/// A caption of two lines of the plot's small words: a name over what the
+/// plot under it is — the Develop section's photosites.
 pub const CAPTION_HEIGHT: f32 = 2.0 * CLIP_TEXT + 6.0;
+
+/// A Profile part's caption: the one line its name takes, the plot under it
+/// saying the rest with the guides to the pointer's pixel.
+pub const PART_CAPTION_HEIGHT: f32 = CLIP_TEXT + 4.0;
 
 /// How tall a part's plot is drawn: as tall as the lift's plot, the two
 /// being read one above the other.
@@ -262,7 +266,7 @@ const PART_PLOT_HEIGHT: f32 = SHORT_PLOT_HEIGHT;
 /// What a part takes of the section, from the row of stops above it to its
 /// own.
 const PART_HEIGHT: f32 =
-    PART_GAP + CAPTION_HEIGHT + PLOT_INSET + PART_PLOT_HEIGHT + PLOT_INSET + EV_ROW;
+    PART_GAP + PART_CAPTION_HEIGHT + PLOT_INSET + PART_PLOT_HEIGHT + PLOT_INSET + EV_ROW;
 
 /// What a part's ground is set in from the left by, for the stops its
 /// height is in: room for a signed stop and a tenth, clear of the ground's

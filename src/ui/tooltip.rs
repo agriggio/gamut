@@ -57,6 +57,11 @@ pub enum Tip {
     Demosaic(Demosaic),
     /// The Develop section's clipped row: what the shares on it are of.
     Clipped,
+    /// The Profile section's exposure row, its gain table and its tone
+    /// curve: what each part of the rendering is.
+    Baseline,
+    GainTable,
+    ToneCurve,
 }
 
 /// What a tooltip says: the thing itself first, and under it the keys that do
@@ -723,6 +728,23 @@ pub fn words(tip: Tip) -> Option<String> {
         Tip::Clipped => {
             "The share of each channel's pixels at white after development, whether the \
              sensor saturated or the balance and the color matrix carried them past white"
+        }
+        Tip::Baseline => {
+            "The profile's baseline exposure: how many stops the developed picture is \
+             pushed before the gain table and the tone curve"
+        }
+        Tip::GainTable => {
+            "The profile's gain table with the exposure in it: a table of gains by \
+             brightness at each point of a grid over the picture, the camera's local tone \
+             map. The band is the spread of every point's; the line is the pointer's \
+             pixel's own, blended from the points around it. In is the brightness the \
+             table reads, a blend of the pixel's channels; lift is how far the exposure \
+             and the gain together push a pixel of that brightness, back to none at white"
+        }
+        Tip::ToneCurve => {
+            "The profile's tone curve, applied last: what it makes of a pixel's brightest \
+             channel, in and out both in stops below white; the other channels follow it. \
+             The faint diagonal is a curve doing nothing"
         }
         // No words of its own: an item of the open menu wears the name of
         // the program it hands the file to, and there is nothing an

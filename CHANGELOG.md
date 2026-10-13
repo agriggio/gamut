@@ -38,10 +38,6 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
   Display plot spreads a dark frame across the panel instead of piling it
   against the left edge, white stays at the top however dark the frame,
   and the Display's readout of a value is stops below white.
-- The *Image* section draws a file's channels over one another on one
-  plot, each as tall as its own share of its pixels, rather than one under
-  the other; a file read as data, whose channels have ranges of their own,
-  keeps a plot to the channel.
 - An iPhone's ProRAW, whose picture is compressed with JPEG XL, is
   developed like any other raw — the camera's balance and color, in
   Rec. 2020 — and shown as its camera profile renders it: the baseline
@@ -50,18 +46,22 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
   every raw, and the choice is kept between runs. The histogram panel's
   *Profile* section plots how far the rendering lifts each pixel, and under
   it its parts in the order they are applied: the file's tone curve, the
-  exposure and the gain table together, and the exposure. `G` and the
+  exposure and the gain table together, and the exposure, each with the
+  pointer's pixel on it and guides from the axes labeled with what went in
+  and what came of it, and each explained under the pointer. `G` and the
   dimmed sun beside `HDR` show the profile's effective gain map in the
   picture's place, and the information panel describes the profile. `--no-gain-map` leaves the rendering behind too.
 
 ### Changed
 
-- The histogram's Image section plots each channel as the file stores it on
-  a plot of its own, one under the other, and no longer plots a luminance
+- The histogram's Image section plots each channel as the file stores it,
+  the channels over one another on one plot, each in its own ink and as
+  tall as its own share of its pixels, and no longer plots a luminance
   line: the file stores none, and the one it drew weighted a wide-gamut
   file's channels as though they were BT.709's. A photograph's channels
-  share one axis, as before; a file read as data has each channel on its
-  own range, trimmed of strays, with its own row of values under it.
+  share one axis, as before; a file read as data has each channel on a
+  plot of its own, over its own range, trimmed of strays, with its own row
+  of values under it.
 - Every statistic is now counted from every pixel rather than from a sample
   of about two million: the extremes, the percentiles the *Full range* and
   *Trimmed* windows read, the key the exposure is metered from, and every

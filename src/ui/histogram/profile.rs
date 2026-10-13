@@ -28,6 +28,9 @@ const CURVE_STOPS: i32 = 10;
 /// How big the dot is that places the pointer's pixel on a curve.
 const PIXEL_DOT: f32 = 2.5;
 
+/// How far a guide's words stand off the guide and off the plot's edge.
+const GUIDE_GAP: f32 = 3.0;
+
 /// How strongly the spread of the gain table's points is laid on its
 /// ground: a wash of the accent, behind the line it is the range of.
 const SPREAD_ALPHA: f32 = 0.35;
@@ -208,17 +211,75 @@ pub(super) fn show(
         &exposure_words(profile.baseline),
         &font,
     );
+    tip_on(
+        pass,
+        ui,
+        section::exposure_row(rect),
+        "profile exposure",
+        Tip::Baseline,
+    );
     let trace = pixel.as_ref().map(Pixel::trace).unwrap_or_default();
     let trace_row = section::trace_row(rect);
     row(pass, ui, trace_row, PIXEL, &trace, &font);
     // What the row's numbers are, under the pointer: the row has no room
     // to say it.
-    let response = ui.interact(
-        egui::Rect::from(trace_row),
-        ui.id().with("profile trace"),
-        Sense::hover(),
+    tip_on(pass, ui, trace_row, "profile trace", Tip::ProfilePixel);
+}
+
+/// `tip` under the pointer over `rect`, which is painted rather than a
+/// widget: a row, or a part's caption and plot together.
+fn tip_on(pass: &Pass, ui: &egui::Ui, rect: Rect, id: &str, tip: Tip) {
+    let response = ui.interact(egui::Rect::from(rect), ui.id().with(id), Sense::hover());
+    pass.tooltip(response, tip);
+}
+
+/// A part's caption and its ground as one rectangle, for the tooltip over
+/// both.
+fn part_rect((head, bars): (Rect, Rect)) -> Rect {
+    let x = head.x.min(bars.x);
+    let y = head.y.min(bars.y);
+    Rect::new(
+        x,
+        y,
+        head.right().max(bars.right()) - x,
+        head.bottom().max(bars.bottom()) - y,
+    )
+}
+
+/// The pointer's pixel placed on a part's plot at `at`: a guide up from the
+/// axis to the dot and one across from the scale to it, each with its word
+/// and the number it stands for — `across` along the bottom, `up` along the
+/// side — and the dot over both. The words go on whichever side of their
+/// guide has the room.
+fn guides(pass: &Pass, ui: &egui::Ui, bars: Rect, at: egui::Pos2, across: &str, up: &str) {
+    let painter = ui.painter();
+    let stroke = Stroke::new(
+        pass.grid.line_width(RULE_WIDTH),
+        Color32::from(pass.theme.accent.with_alpha(CURSOR_ALPHA)),
     );
-    pass.tooltip(response, Tip::ProfilePixel);
+    painter.line_segment([pos2(at.x, bars.bottom()), at], stroke);
+    painter.line_segment([pos2(bars.x, at.y), at], stroke);
+    let font = FontId::proportional(CLIP_TEXT);
+    let ink = Color32::from(pass.theme.text_primary);
+    let (x, align) = if at.x > bars.x + bars.width / 2.0 {
+        (at.x - GUIDE_GAP, egui::Align2::RIGHT_BOTTOM)
+    } else {
+        (at.x + GUIDE_GAP, egui::Align2::LEFT_BOTTOM)
+    };
+    painter.text(
+        pos2(x, bars.bottom() - GUIDE_GAP),
+        align,
+        across,
+        font.clone(),
+        ink,
+    );
+    let (y, align) = if at.y < bars.y + bars.height / 2.0 {
+        (at.y + GUIDE_GAP, egui::Align2::LEFT_TOP)
+    } else {
+        (at.y - GUIDE_GAP, egui::Align2::LEFT_BOTTOM)
+    };
+    painter.text(pos2(bars.x + GUIDE_GAP, y), align, up, font, ink);
+    dot(ui, at);
 }
 
 /// The histogram of the lift at `plot_rect`, with its row of stops.
@@ -279,9 +340,10 @@ fn dot(ui: &egui::Ui, at: egui::Pos2) {
     );
 }
 
-/// A part's caption at `caption`: its name over what its axes are, in the
-/// plot's small words, and on the right of the name what the pointer's
-/// pixel reads on it.
+/// A part's caption at `caption`: its name, in the plot's small words, on
+/// the right of it what the pointer's pixel reads on it, and under both
+/// what its axes are where `axes` says anything — a second line the
+/// caption is then laid out with room for.
 pub(super) fn caption(
     pass: &Pass,
     ui: &egui::Ui,
@@ -292,7 +354,8 @@ pub(super) fn caption(
 ) {
     let painter = ui.painter();
     let font = FontId::proportional(CLIP_TEXT);
-    let line = caption.height / 2.0;
+    let lines = if axes.is_empty() { 1.0 } else { 2.0 };
+    let line = caption.height / lines;
     let first = caption.y + line / 2.0;
     painter.text(
         pos2(pass.grid.snap(caption.x), first),
@@ -308,13 +371,15 @@ pub(super) fn caption(
         font.clone(),
         pass.theme.text_primary.into(),
     );
-    painter.text(
-        pos2(pass.grid.snap(caption.x), first + line),
-        egui::Align2::LEFT_CENTER,
-        axes,
-        font,
-        pass.theme.text_dim.into(),
-    );
+    if !axes.is_empty() {
+        painter.text(
+            pos2(pass.grid.snap(caption.x), first + line),
+            egui::Align2::LEFT_CENTER,
+            axes,
+            font,
+            pass.theme.text_dim.into(),
+        );
+    }
 }
 
 /// The numbers up the left of a part's ground at `bars`: each value at the
@@ -409,21 +474,29 @@ fn curve(
         })
         .collect();
     line(pass, ui, points);
-    let reading = match pixel {
-        Some(pixel) => {
-            let [input, output] = pixel.curve;
-            if output > 0.0 {
-                dot(ui, pos2(across(bars, stops(input)), up(clamped(output))));
-            }
-            format!(
-                "{IN} {}, {OUT} {}",
-                stops_words(stops(input), 1),
-                stops_words(stops(output), 1)
-            )
+    // The pixel on the curve, with its guides: what went in along the
+    // bottom, what came out along the side.
+    if let Some(pixel) = pixel {
+        let [input, output] = pixel.curve;
+        if output > 0.0 {
+            guides(
+                pass,
+                ui,
+                bars,
+                pos2(across(bars, stops(input)), up(clamped(output))),
+                &format!("{IN} {}", stops_words(stops(input), 1)),
+                &format!("{OUT} {}", stops_words(stops(output), 1)),
+            );
         }
-        None => String::new(),
-    };
-    caption(pass, ui, head, TONE_CURVE, TONE_CURVE_AXES, &reading);
+    }
+    caption(pass, ui, head, TONE_CURVE, "", "");
+    tip_on(
+        pass,
+        ui,
+        part_rect((head, bars)),
+        "profile curve",
+        Tip::ToneCurve,
+    );
     scale(pass, ui, bars, &[0.0, -reach, -reach / 2.0], up);
     input_scale(pass, ui, bars);
 }
@@ -528,7 +601,7 @@ fn gain_table(
         }
     }
     let table = profile.table.as_deref();
-    let reading = match (table, pixel) {
+    match (table, pixel) {
         (Some(table), Some(pixel)) => {
             let points = inputs
                 .iter()
@@ -540,16 +613,17 @@ fn gain_table(
                 })
                 .collect();
             line(pass, ui, points);
-            match pixel.table {
-                Some([input, raised]) => {
-                    dot(ui, pos2(across(bars, stops(input)), up(raised)));
-                    format!(
-                        "{READS} {}, {LIFT} {}",
-                        stops_words(stops(input), 1),
-                        stops_words(raised, 1)
-                    )
-                }
-                None => String::new(),
+            // The pixel on its own curve, with its guides: the brightness
+            // the table read along the bottom, the lift along the side.
+            if let Some([input, raised]) = pixel.table {
+                guides(
+                    pass,
+                    ui,
+                    bars,
+                    pos2(across(bars, stops(input)), up(raised)),
+                    &format!("{IN} {}", stops_words(stops(input), 1)),
+                    &format!("{LIFT} {}", stops_words(raised, 1)),
+                );
             }
         }
         // The exposure alone, the same at every brightness.
@@ -559,13 +633,17 @@ fn gain_table(
                 ui,
                 vec![pos2(bars.x, up(baseline)), pos2(bars.right(), up(baseline))],
             );
-            pixel.map_or(String::new(), |_| {
-                format!("{LIFT} {}", stops_words(baseline, 1))
-            })
         }
-        (Some(_), None) => String::new(),
-    };
-    caption(pass, ui, head, GAIN_TABLE, GAIN_TABLE_AXES, &reading);
+        (Some(_), None) => {}
+    }
+    caption(pass, ui, head, GAIN_TABLE, "", "");
+    tip_on(
+        pass,
+        ui,
+        part_rect((head, bars)),
+        "profile table",
+        Tip::GainTable,
+    );
     // No lift and the exposure alone first, since they are the rules, then
     // the plot's top and foot where there is room.
     scale(pass, ui, bars, &[0.0, round_tenth(baseline), high, low], up);
@@ -598,19 +676,18 @@ fn row(pass: &Pass, ui: &egui::Ui, row: Rect, name: &str, value: &str, font: &Fo
     );
 }
 
-/// The tone curve's caption: its name, and what its axes are.
+/// The tone curve's caption: its name.
 pub(in crate::ui) const TONE_CURVE: &str = "Tone curve";
-const TONE_CURVE_AXES: &str = "Brightest channel, out by in";
 
 /// The gain table's caption: the table, with the exposure it is read after
-/// in it, and what its axes are.
+/// in it.
 pub(in crate::ui) const GAIN_TABLE: &str = "Exposure and gain table";
-const GAIN_TABLE_AXES: &str = "Lift by the brightness the table reads";
 
-/// The words of the pointer's readings on the two parts.
+/// The words on the guides to the pointer's pixel on the two parts: what
+/// went in along the bottom of both, and along the side what the curve made
+/// of it and how far the table lifted it.
 const IN: &str = "in";
 const OUT: &str = "out";
-const READS: &str = "reads";
 const LIFT: &str = "lift";
 
 /// The names of the section's two rows.
