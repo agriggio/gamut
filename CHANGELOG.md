@@ -15,6 +15,12 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
   had taken integer samples for linear data. The choice stays with the
   file for the session, and the file is read again under it with the view
   kept. The Mac's Image menu has it as *Read As*.
+- The loupe's glass marks its center: four thin ticks around a clear
+  middle, and, once the pixel under the pointer is magnified to 8 points
+  or more, a box drawn just outside that pixel's edges. Each is a white
+  line edged in black, so it shows on light and dark pictures alike. The
+  glass now centers on the middle of the pixel the readout reads and moves
+  a pixel at a time.
 
 ### Changed
 
