@@ -378,6 +378,10 @@ fn image(b: &mut Builder) -> Vec<Node> {
         .enumerate()
         .map(|(index, map)| b.control(&ui::capitalized(map.label()), Control::Ramp(index), None))
         .collect();
+    let readings = vec![
+        b.control("Photo", Control::Reading(Reading::Photo), None),
+        b.control("Data", Control::Reading(Reading::Data), None),
+    ];
     vec![
         b.action("Increase Exposure", Action::Exposure(EV_STEP)),
         b.action("Decrease Exposure", Action::Exposure(-EV_STEP)),
@@ -401,14 +405,7 @@ fn image(b: &mut Builder) -> Vec<Node> {
         b.submenu("Window", Some(Control::Window(0)), windows),
         b.submenu("Highlights", Some(Control::Curve(0)), curves),
         b.submenu("False Color", Some(Control::Ramp(0)), ramps),
-        b.submenu(
-            "Read As",
-            Some(Control::Reading(Reading::Photo)),
-            vec![
-                b.control("Photo", Control::Reading(Reading::Photo), None),
-                b.control("Data", Control::Reading(Reading::Data), None),
-            ],
-        ),
+        b.submenu("Read As", Some(Control::Reading(Reading::Photo)), readings),
         b.button("Mark Clipped Pixels", Control::Marks),
         b.button("Reset Display", Control::Reset),
         Node::Separator,
