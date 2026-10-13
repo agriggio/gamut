@@ -396,6 +396,10 @@ pub struct App {
     /// the camera's JPEG. One preference for every raw, kept between runs;
     /// a raw with no JPEG in it shows its developed picture whatever it is.
     rendering: Rendering,
+    /// Whether a raw whose profile says how it should look is shown as the
+    /// profile renders it. One preference for every raw, kept between runs,
+    /// for the reason [`App::rendering`] is.
+    pub(super) profile: bool,
     /// Where the view is going: the pan and zoom every key and press act
     /// on. What is on screen is `App::shown_view`, which is this once it
     /// has arrived.
@@ -710,6 +714,7 @@ impl App {
                 true => Rendering::CameraJpeg,
                 false => Rendering::Developed,
             },
+            profile: kept_state.profile,
             view,
             motion: None,
             kept: Kept::default(),
@@ -1412,16 +1417,21 @@ impl App {
     /// room. The picture follows at once; the numbers follow once
     /// [`measuring`] has them, which for a weight met before is at once
     /// too. Nothing happens for a picture with no map, or a lift already at
-    /// the weight.
+    /// the weight. A raw's profile is not room above white, and is the
+    /// switch's to weigh: all of it or none.
     fn refresh_lift(&mut self) {
         let headroom = self.display_headroom();
+        let profile = self.profile;
         let Some(current) = &mut self.current else {
             return;
         };
         let Some(map) = &current.image.gain_map else {
             return;
         };
-        let weight = map.weight(headroom);
+        let weight = match map.is_profile() {
+            true => f32::from(u8::from(profile)),
+            false => map.weight(headroom),
+        };
         if current
             .lift
             .as_ref()
@@ -1497,6 +1507,15 @@ impl App {
             let _ = self.send(request);
         }
         Effect::Nothing
+    }
+
+    /// Shows a raw as its profile renders it, or as developed, for this raw
+    /// and every one after it. The rendering is the gain map the raw was
+    /// read with, so nothing is read again: its weight is all that moves.
+    pub(super) fn toggle_profile(&mut self) -> Effect {
+        self.profile = !self.profile;
+        self.refresh_lift();
+        Effect::Redraw
     }
 
     /// Shows the image of `kind` the picture carries in its place, or the
@@ -1651,6 +1670,7 @@ impl App {
             ui_scale: self.ui_scale,
             order: self.filmstrip.order(),
             camera_jpeg: self.rendering == Rendering::CameraJpeg,
+            profile: self.profile,
             pixel_format: self.panels.pixel_format,
             coordinate_format: self.panels.coordinate_format,
             geographic_format: self.panels.geographic_format,

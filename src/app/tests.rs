@@ -2576,6 +2576,56 @@ fn the_gain_map_toggle_shows_the_map_in_stops() {
     assert!(current.lift.is_some(), "the picture keeps its lift");
 }
 
+/// A raw whose profile says how it should look arrives as the profile
+/// renders it; the switch takes the whole of the lift away and gives it
+/// back, for every raw from then on, the numbers following each time; and
+/// the switch is what is kept between runs.
+#[test]
+fn the_profile_switch_moves_the_lift_between_nothing_and_all() {
+    let raw = fixture("dng-jxl.dng");
+    let mut app = open(vec![raw.clone()], vec![raw]);
+    answer(&mut app, Reload::Fresh);
+    assert!(app.conditions().profile);
+    let weight = |app: &App| {
+        app.current
+            .as_ref()
+            .and_then(|current| current.lift.as_ref())
+            .map(|table| table.weight())
+    };
+    assert_eq!(weight(&app), Some(1.0), "the profile's rendering");
+    let white = |app: &App| {
+        let current = app.current.as_ref().expect("the raw");
+        current.sample(24, 18).expect("a pixel").color()[1]
+    };
+    assert!((white(&app) - 0.25).abs() < 0.01, "{}", white(&app));
+    assert!(app.kept_state().profile);
+
+    assert!(matches!(
+        app.perform(super::input::Action::ToggleProfile),
+        Effect::Redraw
+    ));
+    assert_eq!(weight(&app), Some(0.0), "as developed");
+    assert!((white(&app) - 1.0).abs() < 0.01, "{}", white(&app));
+    assert!(!app.kept_state().profile);
+
+    let _ = app.press(crate::ui::Control::Profile);
+    assert_eq!(weight(&app), Some(1.0));
+    assert!(app.kept_state().profile);
+}
+
+/// The profile's switch is dead on a picture that has no profile, as on
+/// one with a photograph's gain map, which is lifted by the room instead.
+#[test]
+fn the_profile_switch_is_dead_without_a_profile() {
+    let (mut app, _dir) = app_over("plain", &[("a.png", 4, 3)]);
+    assert!(!app.conditions().profile);
+    assert!(matches!(
+        app.press(crate::ui::Control::Profile),
+        Effect::Nothing
+    ));
+    assert!(app.profile, "refused, and left alone");
+}
+
 /// A file arriving is weighed against the picture, not against the depth
 /// map shown in its place; and with the toggle on, the next picture with
 /// a map comes up showing it, the next without one as itself.

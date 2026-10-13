@@ -171,6 +171,11 @@ pub const NO_DEPTH_MAP: &str = "This image has no depth map.";
 /// map, which is as seldom heard as [`NO_DEPTH_MAP`] for the same reason.
 pub const NO_GAIN_MAP: &str = "This image has no gain map.";
 
+/// What the profile's switch says, for the key, on a file whose profile
+/// says nothing of how it should look. The switch is a square of the
+/// histogram's Profile section, which is not drawn for such a file.
+pub const NO_PROFILE: &str = "This file carries no camera profile.";
+
 /// What the Raw Data tab's copy button says while there are no tags to
 /// copy: exiftool is not there, is reading the file, or could not.
 pub const NO_TAGS: &str = "No tags to copy.";
@@ -265,6 +270,9 @@ pub struct Conditions {
     /// Whether the picture on screen carries a gain map, which is what the
     /// gain map's toggle needs.
     pub gain_map: bool,
+    /// Whether the picture on screen is a raw whose profile says how it
+    /// should look, which is what the profile's switch needs.
+    pub profile: bool,
     /// Whether anything out there offers to open the file on screen.
     pub openable: bool,
     /// Whether a false color is on the picture.
@@ -314,6 +322,7 @@ impl Default for Conditions {
             camera_jpeg: false,
             depth: false,
             gain_map: false,
+            profile: false,
             openable: false,
             false_colored: false,
             data: false,
@@ -357,6 +366,7 @@ impl Conditions {
         camera_jpeg: true,
         depth: true,
         gain_map: true,
+        profile: true,
         openable: true,
         false_colored: false,
         data: true,
@@ -411,6 +421,7 @@ pub fn disabled(tip: Tip, conditions: Conditions) -> Option<Refused> {
         camera_jpeg,
         depth,
         gain_map,
+        profile,
         ..
     } = conditions;
     let said = |said| Some(Refused { said, hint: None });
@@ -435,6 +446,9 @@ pub fn disabled(tip: Tip, conditions: Conditions) -> Option<Refused> {
     }
     if matches!(tip, Tip::Control(Control::GainMap | Control::ShowGainMap)) && !gain_map {
         return said(NO_GAIN_MAP);
+    }
+    if tip == Tip::Control(Control::Profile) && !profile {
+        return said(NO_PROFILE);
     }
     if tip == Tip::Control(Control::Paste) && !clipboard {
         return said(NOTHING_TO_PASTE);
@@ -487,6 +501,7 @@ pub fn disabled(tip: Tip, conditions: Conditions) -> Option<Refused> {
                 | Control::Depth
                 | Control::GainMap
                 | Control::ShowGainMap
+                | Control::Profile
                 | Control::Play
                 | Control::StepBack
                 | Control::StepForward
@@ -711,7 +726,8 @@ pub fn words(tip: Tip) -> Option<String> {
             | Control::CameraJpeg
             // Named by its key's row, like the other toggles.
             | Control::Depth
-            | Control::GainMap,
+            | Control::GainMap
+            | Control::Profile,
         )
         | Tip::Name
         | Tip::Counter

@@ -413,6 +413,7 @@ fn image(b: &mut Builder) -> Vec<Node> {
         b.button("Camera JPEG", Control::CameraJpeg),
         b.button("Depth Map", Control::Depth),
         b.button("Gain Map", Control::GainMap),
+        b.button("Profile", Control::Profile),
     ]
 }
 
@@ -705,6 +706,7 @@ impl App {
                 Control::CameraJpeg => {
                     current.is_some_and(|current| current.rendering == Rendering::CameraJpeg)
                 }
+                Control::Profile => self.profile,
                 Control::Format(format) => panels.pixel_format == format,
                 Control::Coordinates(format) => panels.coordinate_format == format,
                 Control::Geographic(format) => panels.geographic_format == format,
@@ -738,7 +740,8 @@ impl App {
 
     /// What `does` is called now, where that is not its own title: what
     /// undo would put back, the copy of a region, the pause of an animation
-    /// playing, and the pages of a file that holds several.
+    /// playing, the pages of a file that holds several, and the gain map of
+    /// a raw, which is its profile's lift.
     fn retitled(&self, does: Does, conditions: &Conditions) -> Option<String> {
         let pages = conditions.pages && !conditions.animation;
         let title = match does {
@@ -762,6 +765,7 @@ impl App {
             }
             Does::Control(Control::StepForward) if pages => "Next Page",
             Does::Control(Control::StepBack) if pages => "Previous Page",
+            Does::Control(Control::GainMap) if conditions.profile => "Profile Lift",
             _ => return None,
         };
         Some(title.to_string())

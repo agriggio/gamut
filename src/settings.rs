@@ -381,6 +381,9 @@ pub struct State {
     /// Whether a raw opens as the camera's JPEG of it rather than as the
     /// picture developed from its sensor counts.
     pub camera_jpeg: bool,
+    /// Whether a raw whose profile says how it should look is shown as the
+    /// profile renders it, rather than as developed.
+    pub profile: bool,
     /// How the pointer's pixel was last written.
     pub pixel_format: PixelFormat,
     /// How its place was last written, in a georeferenced file.
@@ -397,6 +400,7 @@ impl Default for State {
             ui_scale: scale::DEFAULT,
             order: filmstrip::Order::default(),
             camera_jpeg: false,
+            profile: true,
             pixel_format: PixelFormat::default(),
             coordinate_format: CoordinateFormat::default(),
             geographic_format: GeographicFormat::default(),
@@ -416,7 +420,7 @@ struct Kept {
 }
 
 /// Every line of the state file, in the order it is written.
-const KEPT: [Kept; 9] = [
+const KEPT: [Kept; 10] = [
     Kept {
         name: "filmstrip_width",
         get: |state| state.filmstrip_width.to_string(),
@@ -474,6 +478,13 @@ const KEPT: [Kept; 9] = [
         get: |state| state.camera_jpeg.to_string(),
         set: |state, value| {
             let _ = flag(&mut state.camera_jpeg, value);
+        },
+    },
+    Kept {
+        name: "profile",
+        get: |state| state.profile.to_string(),
+        set: |state, value| {
+            let _ = flag(&mut state.profile, value);
         },
     },
     Kept {
@@ -795,7 +806,7 @@ mod tests {
             .lines()
             .filter(|line| line.starts_with("gesture."))
             .count();
-        assert_eq!(keys, 100, "{uncommented}");
+        assert_eq!(keys, 101, "{uncommented}");
         // A Mac's two more: the wheel with Command, and the pinch.
         let slots = if cfg!(target_os = "macos") { 12 } else { 10 };
         assert_eq!(gestures, slots, "{uncommented}");
@@ -946,6 +957,7 @@ mod tests {
                 direction: filmstrip::Direction::Descending,
             },
             camera_jpeg: true,
+            profile: false,
             pixel_format: PixelFormat::Depth,
             coordinate_format: CoordinateFormat::Geographic,
             geographic_format: GeographicFormat::Dms,
@@ -996,6 +1008,7 @@ mod tests {
              sort = shoe size\n\
              sort_direction = sideways\n\
              camera_jpeg = maybe\n\
+             profile = sometimes\n\
              garbage\n",
         );
         assert_eq!(state, State::default());

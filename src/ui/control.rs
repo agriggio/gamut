@@ -140,6 +140,11 @@ controls! {
     /// its own rather than the same one, so that each of the two names
     /// itself once to whatever reads the interface by name.
     ShowGainMap,
+    /// The square at the end of the histogram's Profile section's header,
+    /// which shows a raw as its profile renders it or as developed, for
+    /// every raw: lit while the profile is applied, and there only for a
+    /// raw whose profile says how it should look. `P` does the same.
+    Profile,
     /// The button at the foot of the right strip, which opens the help
     /// popup — every key, what it does and when — and closes it while it
     /// is up. `?` and `/` do the same.
@@ -302,6 +307,7 @@ impl Control {
             Control::Depth => "Depth".to_string(),
             Control::GainMap => "Gain map".to_string(),
             Control::ShowGainMap => "Show gain map".to_string(),
+            Control::Profile => "Profile".to_string(),
             Control::Help => "Help".to_string(),
             Control::PixelFormat => "Pixel format".to_string(),
             Control::Dismiss => "Dismiss".to_string(),

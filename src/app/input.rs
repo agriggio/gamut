@@ -23,6 +23,7 @@ use crate::image::auxiliary::{Auxiliary, Showing};
 use crate::image::decode::{CameraJpeg, Reading, Rendering};
 use crate::image::display::{Colormap, EV_STEP, Startup, ToneMap};
 use crate::image::encode;
+use crate::image::gain_map::GainMap;
 use crate::image::region::{Region, Side};
 use crate::loader::Source;
 use crate::openers;
@@ -168,6 +169,9 @@ pub enum Action {
     /// Between the picture and its gain map, drawn in its place in stops,
     /// for every picture with one from then on.
     ToggleGainMap,
+    /// Between a raw as its profile renders it and as developed, for every
+    /// raw from then on.
+    ToggleProfile,
     /// Put the name of the file on screen on the clipboard, with nothing of
     /// the directory it sits in.
     CopyName,
@@ -381,6 +385,7 @@ pub(super) fn action_of(tip: Tip) -> Option<Action> {
         Tip::Control(Control::CameraJpeg) => ToggleCameraJpeg,
         Tip::Control(Control::Depth) => ToggleDepth,
         Tip::Control(Control::GainMap | Control::ShowGainMap) => ToggleGainMap,
+        Tip::Control(Control::Profile) => ToggleProfile,
         Tip::Control(Control::Paste) => Action::Paste,
         Tip::Control(Control::Region) => ToggleRegion,
         Tip::Control(Control::Help) => ShowHelp,
@@ -594,6 +599,9 @@ pub enum When {
     Depth,
     /// The picture on screen carries a gain map.
     GainMap,
+    /// The picture on screen is a raw whose profile says how it should
+    /// look.
+    Profile,
     SingleChannel,
     /// A rename, a deletion or a removal has been made this session and
     /// not yet undone.
@@ -618,7 +626,7 @@ impl When {
     /// Every condition, for a test to hold them all up against the
     /// application.
     #[cfg(test)]
-    pub const ALL: [When; 18] = [
+    pub const ALL: [When; 19] = [
         When::RegionSelected,
         When::SeveralFiles,
         When::Animation,
@@ -629,6 +637,7 @@ impl When {
         When::CameraJpeg,
         When::Depth,
         When::GainMap,
+        When::Profile,
         When::SingleChannel,
         When::Undoable,
         When::VisitedBefore,
@@ -653,6 +662,7 @@ impl When {
             When::CameraJpeg => "a raw with a camera JPEG",
             When::Depth => "an image has a depth map",
             When::GainMap => "an image has a gain map",
+            When::Profile => "a raw with a camera profile",
             When::SingleChannel => "a single-channel image",
             When::Undoable => "an edit to undo",
             When::VisitedBefore => "a file shown before this one",
@@ -689,6 +699,7 @@ impl Conditions {
             When::CameraJpeg => self.camera_jpeg,
             When::Depth => self.depth,
             When::GainMap => self.gain_map,
+            When::Profile => self.profile,
             When::SingleChannel => self.single_channel,
             When::Undoable => self.undoable,
             When::VisitedBefore => self.visited_before,
@@ -1368,6 +1379,12 @@ pub static ROWS: &[Row] = &[
         when: Some(When::GainMap),
         help: "Toggle gain map display",
         keys: one!("display.gain-map", ToggleGainMap, [key('G')]),
+    },
+    Row {
+        section: Section::Display,
+        when: Some(When::Profile),
+        help: "Toggle the camera profile's rendering of a raw: baseline exposure, gain table and tone curve",
+        keys: one!("display.profile", ToggleProfile, [key('P')]),
     },
     Row {
         section: Section::Display,
@@ -2311,6 +2328,7 @@ impl App {
             ToggleCameraJpeg => return self.press(Control::CameraJpeg),
             ToggleDepth => return self.press(Control::Depth),
             ToggleGainMap => return self.press(Control::GainMap),
+            ToggleProfile => return self.press(Control::Profile),
             ToggleRegion => return self.press(Control::Region),
             // Only a region moves, grows and shrinks, and there is none: see
             // `perform_on_region`.
@@ -2526,6 +2544,15 @@ impl App {
                 && current.is_some_and(|current| current.picture().0.carries(Auxiliary::Depth)),
             gain_map: self.animation.is_none()
                 && current.is_some_and(|current| current.picture().0.carries(Auxiliary::GainMap)),
+            profile: self.animation.is_none()
+                && current.is_some_and(|current| {
+                    current
+                        .picture()
+                        .0
+                        .gain_map
+                        .as_deref()
+                        .is_some_and(GainMap::is_profile)
+                }),
             openable: !self.openers.is_empty(),
             false_colored: current
                 .is_some_and(|current| current.display.false_colored(current.image.is_gray())),
@@ -3416,6 +3443,7 @@ impl App {
             // The file read the other way, which is a read like a step.
             Control::Reading(reading) => self.read_as(reading),
             Control::GainMap | Control::ShowGainMap => self.toggle_beside(Auxiliary::GainMap),
+            Control::Profile => self.toggle_profile(),
             // The cross on the message at the foot of the window. The frame
             // after re-tests the pointer, which is what takes the highlight
             // off a button that is no longer there.
