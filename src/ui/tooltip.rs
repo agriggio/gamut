@@ -55,6 +55,8 @@ pub enum Tip {
     ProfilePixel,
     /// The Develop section's demosaic row: what the name on it means.
     Demosaic(Demosaic),
+    /// The Develop section's clipped row: what the shares on it are of.
+    Clipped,
 }
 
 /// What a tooltip says: the thing itself first, and under it the keys that do
@@ -717,6 +719,10 @@ pub fn words(tip: Tip) -> Option<String> {
         }
         Tip::Demosaic(Demosaic::None) => {
             "The file stores three counts a pixel, so nothing was interpolated"
+        }
+        Tip::Clipped => {
+            "The share of each channel's pixels at white after development, whether the \
+             sensor saturated or the balance and the color matrix carried them past white"
         }
         // No words of its own: an item of the open menu wears the name of
         // the program it hands the file to, and there is nothing an

@@ -30,8 +30,9 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
   counting from white as the Display section's does, with the demosaic,
   the balance in stops per color, the light it is for in kelvin, the share
   of each channel clipped at white, and for a mosaic the photosites around
-  the pointer. Resting on the demosaic's name says what it does, and on the
-  *Profile* section's *Pixel* row what its numbers are. A HEIC or a JPEG
+  the pointer. Resting on the demosaic's name says what it does, on the
+  clipped row what its shares are of, and on the *Profile* section's
+  *Pixel* row what its numbers are. A HEIC or a JPEG
   has no Develop section, since nothing was developed.
 - An iPhone's ProRAW, whose picture is compressed with JPEG XL, is
   developed like any other raw — the camera's balance and color, in

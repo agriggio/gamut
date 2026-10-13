@@ -686,8 +686,8 @@ writing them — the light that balance is for as a color temperature, and
 the share of each channel standing at white: a channel against the right
 edge there and short of it in the *Image* plot below was put there by the
 balance, not by the sensor. Resting the pointer on the demosaic's name
-says what it does, and on the *Profile* section's *Pixel* row what its
-numbers are. Under the rows, for a mosaic, are the photosites around the
+says what it does, on the clipped row what its shares are of, and on the
+*Profile* section's *Pixel* row what its numbers are. Under the rows, for a mosaic, are the photosites around the
 pointer, a window of five by five counts in their colors, which is what
 the demosaic read to make the pixel.
 Pointing at a plot names the value under

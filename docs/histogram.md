@@ -215,7 +215,8 @@ cubic for a mosaic (`Handle::kelvin`, the information panel's own
 number), the illuminant the color matrices are blended for
 (`Profile::kelvin`) for a Linear Raw — and the share of each developed
 channel standing at white, read off the stored tallies (`Plane::rank` at
-1, doubled, since the rank counts half of what sits at a value). The
+1, doubled, since the rank counts half of what sits at a value), with
+what the shares are of under the pointer (`Tip::Clipped`). The
 balance row is the answer to the question the two sets of plots raise
 together, which is how a channel short of the sensor's white in the Image
 plot came to stand against it in the Develop plot. For a mosaic the

@@ -179,7 +179,14 @@ pub(super) fn show(
             (share, ink.ink())
         })
         .collect();
-    cells_row(pass, ui, next(), CLIPPED, &clipped, &font);
+    let clipped_row = next();
+    cells_row(pass, ui, clipped_row, CLIPPED, &clipped, &font);
+    let response = ui.interact(
+        egui::Rect::from(clipped_row),
+        ui.id().with("develop clipped"),
+        Sense::hover(),
+    );
+    pass.tooltip(response, Tip::Clipped);
 
     if shape.grid {
         grid(pass, ui, current, rect, shape);
