@@ -550,7 +550,7 @@ fn marked(
             Section::Output => output::pixel_mark(current, headroom, plots.output, x, y),
             Section::Display => display::pixel_mark(current, headroom, x, y),
             Section::GainMap | Section::Profile => gain_map::pixel_mark(current, plots.lift, x, y),
-            Section::Develop => stored::pixel_mark(current, x, y),
+            Section::Develop => stored::developed_mark(current, x, y),
             Section::Image => stored::image_mark(current, x, y),
         };
     }
@@ -572,6 +572,14 @@ fn width_of(ui: &egui::Ui, text: &str, size: f32) -> f32 {
 /// four decimals of nothing.
 fn axis_words(current: &Current, place: f32) -> String {
     let transfer = current.image.color.transfer;
+    let floats = matches!(current.image.samples, crate::image::Samples::F32 { .. });
+    // A photo of linear light in integers — a developed raw — is on an axis
+    // in stops, and its full scale is white, so a value reads in stops
+    // below white, as the Develop section's and the Profile's do; a float's
+    // 1 need not be white, and it keeps its number.
+    if current.stats.axis == stats::Axis::Stops && !floats {
+        return white_stops_words(place);
+    }
     let scale = if transfer.is_linear() {
         current.image.samples.full_scale()
     } else {
@@ -582,6 +590,17 @@ fn axis_words(current: &Current, place: f32) -> String {
         return format!("{value:.0}");
     }
     trimmed(format!("{value:.3}"))
+}
+
+/// `stops` below white as the Develop section and the Display's readouts
+/// write a linear integer photo's value: signed, to a tenth, with a true
+/// minus; and `0` for no light at all, which is what the value is.
+fn white_stops_words(stops: f32) -> String {
+    if !stops.is_finite() {
+        return "0".to_string();
+    }
+    // Adding zero makes a negative zero positive.
+    format!("{:+.1}", stops + 0.0).replace('-', "\u{2212}")
 }
 
 /// A decimal with the zeros it does not need taken off the end: `0.500` is

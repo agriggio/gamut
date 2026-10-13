@@ -192,19 +192,21 @@ picture moves up a section to where it stands in the flow: between the
 counts it was made from and the profile that is applied to it, under the
 name of the step that made it.
 
-The Develop section's plots are the developed channels, drawn by the same
+The Develop section's plot is the developed channels, drawn by the same
 code as the Image section's (`stored::body`, from `stored::Source::developed`),
 with the developed pixel's values in its header as the Image section's
 header writes the counts: read one above the other, the two headers are
-one pixel before and after development. The row under the plots counts
-stops from white (`Source::white_stops`), as the Display section's row
-does, rather than writing quarters of 65535: the developed picture is
-linear light with its white at full scale, so the stops are the same
-stops the Display row above and the Profile's parts count in, and the
-rule the pointer puts on a Develop plot stands at the number the
-Profile's trace starts from — the pixel's brightest channel in stops
-below white, which that row's tooltip (`Tip::ProfilePixel`) says, the row
-having no room to. Under the plots, rows of words (`develop::show`): the
+one pixel before and after development. The developed picture is linear
+light with its white at full scale, and it is plotted in stops as every
+linear photograph is (`Axis::Stops`, below); its header writes each
+channel in stops below white too (`Source::white_stops`), so that the
+header, the axis, the Display section's readout above and the Profile's
+trace are one vocabulary, and the Profile's first number is visibly the
+largest of the three in the Develop header — the pixel's brightest channel
+in stops below white, which that row's tooltip (`Tip::ProfilePixel`) says,
+the row having no room to. The sensor's counts stay counts: they are the
+file's own numbers, and a black level at 2048 makes stops from white
+meaningless below it. Under the plots, rows of words (`develop::show`): the
 demosaic the mosaic went through, by its name, with what the name means
 under the pointer (`Tip::Demosaic`); the balance each plane was multiplied
 by, in stops in the plane's own ink — `applied in the file` for an
@@ -265,20 +267,29 @@ raw it is the sensor's `Stored` instead (`Sensor::stored`, tallied by
 `Mosaic::tally` or in `Linear::tile` as the picture is developed, through
 `Stored::of_codes`, a bin to the count), and `Face::stored` — the developed
 picture — is what the Develop section plots; `stored::Source` is which of
-the two a pass is drawing from. It is a
-plot to the channel (`stored::plots`), one under the other in the order the
-file keeps them, each poured from the channel's tally (`stats::Plane::plot`):
-a bin to the code for integer samples, so the plot is exact, and a bin to a
-thousandth of an octave for floats. The tallies are made in the same pass as
-the scan the display starts from (`Stats::scan_both`), when the image
+the two a pass is drawing from. It is one plot of every channel over the
+others (`plot::overlaid`), each in its own ink and each as tall as its own
+share of its pixels, so that the two greens of a mosaic, twice the pixels
+of the red, stand no taller for it, and the pointer's pixel is a rule to
+the channel with its percentile beside it, as the Display section draws
+its planes; only where the channels have ranges of their own — a file read
+as data — is it a plot to the channel, one under the other, each with its
+own row of values (`stored::Layout::plots`). A plot to the channel for
+every file was tried first and cost a raw's column two screens. Each
+plane is poured from the channel's tally (`stats::Plane::plot`): a bin to
+the code for integer samples, so the plot is exact, and a bin to a
+thousandth of an octave for floats. The tallies are made in the same pass
+as the scan the display starts from (`Stats::scan_both`), when the image
 arrives, on the loader's or the player's thread.
 
 Which range the plots span is the file's reading. A photograph's channels
 are compared against one another, so they share one axis: integer samples
-over the whole range they can hold, a raw's from black to the sensor's
-saturation, so that how far a picture stands short of clipping is the room
-to the right of it; light stored as floats in stops, read off every channel
-together as the Display's axis is read off the luminance. A file read as
+on a curve over the whole range they can hold, and a raw's sensor from
+nothing to its saturation, so that how far a picture stands short of
+clipping is the room to the right of it; linear light in stops, floats and
+a developed raw alike, read off every channel together as the Display's
+axis is read off the luminance, with white at the top at least for a
+picture that has one. A file read as
 data may hold channels that are different quantities, so each has its own
 range and its own row of values under it (`Stored::shared`): the channel's
 exact extremes, or, where the trim the display's own percentile window uses
@@ -342,9 +353,15 @@ drawn over it cannot be spaced two ways. A file on a curve is plotted on
 that curve, and a linear integer file — sensor counts, a measurement — on
 its linear values; the reasons are with `stats::Plot`.
 
-Light stored linear as floats — a Radiance picture, an EXR — is plotted in
-stops instead (`Axis::Stops`): a value stands at its base-2 logarithm. Such
-a file has no curve of its own and no top. A Radiance picture runs from
+Linear light — a Radiance picture, an EXR, and a raw developed to sixteen
+bits, which is the same light in integers — is plotted in stops instead
+(`Axis::Stops`): a value stands at its base-2 logarithm. Only a
+measurement keeps a linear axis for linear samples. Such a file has no
+curve of its own and, as a float, no top; a photograph's top is its white
+at least (`Stats::from_scan`, `Stored::from_scan`), so that a dark raw
+stands short of it instead of being stretched to its own brightest, and
+its readouts along the axis are stops below white (`histogram::axis_words`)
+rather than counts. A Radiance picture runs from
 nothing to a few hundred with almost all of it in the bottom hundredth,
 which a linear axis puts in its first bin and its first two *fine* bins:
 the Output plot, rebinned from those, came out as two flat steps, and the

@@ -290,7 +290,8 @@ fn the_image_section_has_a_plot_to_the_channel() {
         assert_eq!(layout, stored::Layout { planes, shared });
         let rect = rect_of(&laid_out(&current, 600.0), Section::Image);
         let plots = stored::plots(rect, layout);
-        assert_eq!(plots.len(), planes);
+        assert_eq!(plots.len(), layout.plots());
+        assert_eq!(layout.plots(), if shared { 1 } else { planes });
         let first = Section::Image.plot(rect);
         assert_eq!(
             (plots[0].x, plots[0].y, plots[0].width),
@@ -810,7 +811,7 @@ fn a_pixel_is_traced_down_every_section() {
     // On one of the Image section's plots, only it marks anything, and
     // what it says is its bin's value on that plane.
     let rect = rect_of(&layout, Section::Image);
-    let bars = stored::plots(rect, stored::Layout::of(&current))[1];
+    let bars = stored::plots(rect, stored::Layout::of(&current))[0];
     let traced = marked(
         &current,
         &layout,
@@ -819,11 +820,14 @@ fn a_pixel_is_traced_down_every_section() {
         Headroom::None,
         &plots,
     );
-    let mark = traced.image.as_ref().expect("the green plot marks its bin");
+    let mark = traced.image.as_ref().expect("the plot marks its bin");
     assert_eq!(mark.bin, Some(BINS / 2));
-    assert_eq!(mark.channels.len(), 1);
-    assert_eq!(mark.channels[0].plane, Plane::Green);
-    assert_eq!(mark.channels[0].bin, Some(BINS / 2));
+    // The one value, with where it stands among each plane stacked beside
+    // the one rule.
+    assert_eq!(mark.channels.len(), 3);
+    assert_eq!(mark.channels[1].plane, Plane::Green);
+    assert!(mark.channels.iter().all(|channel| channel.bin.is_none()));
+    assert!(mark.channels.iter().all(|channel| channel.rank.is_some()));
     assert!(traced.output.is_none());
     assert!(traced.display.is_none());
     assert!(traced.gain_map.is_none());
@@ -1220,11 +1224,11 @@ fn scene_light_is_plotted_in_stops() {
     assert!(pushed.plot.luma[BINS - 1] > plain.plot.luma[BINS - 1]);
 }
 
-/// Integer samples are plotted on the whole range they can hold, a raw's
-/// from black to the sensor's saturation, however little of it a linear
-/// file was measured over, and their axis is written in quarters of it;
-/// floats, which have no top, on what they were measured over, and written
-/// at its ends.
+/// A linear integer photograph — a developed raw — is plotted in stops
+/// below white, as linear floats are, with the row of stops under it; read
+/// as data, the same samples are plotted over what they hold on a linear
+/// axis, written at its ends; and floats, which have no top, over what they
+/// were measured over.
 #[test]
 fn the_image_axis_is_the_whole_range_of_integer_samples() {
     let linear = |samples| {
@@ -1250,22 +1254,33 @@ fn the_image_axis_is_the_whole_range_of_integer_samples() {
     );
     photo.referred = Referred::Display;
     let counts = shown(photo);
+    let axis = counts.stored.axis;
+    assert_eq!(axis, Axis::Stops);
     let plane = &counts.stored.planes[0];
-    assert_eq!(plane.range, [0.0, 1.0]);
-    let plot = plane.plot(counts.stored.axis);
-    for value in [16384.0, 32768.0] {
-        let bin = plane.bin_at(value / 65535.0).expect("on the axis");
+    assert_eq!(plane.range[1], 0.0, "white at the top");
+    assert!(plane.range[0] <= -2.0);
+    let plot = plane.plot(axis);
+    for value in [16384.0f32, 32768.0] {
+        let bin = plane
+            .bin_at(axis.place_stored(value / 65535.0))
+            .expect("on the axis");
         assert!(plot[bin] > 0, "{value}");
     }
-    let past = plane.bin_at(0.6).expect("on the axis");
+    let past = plane.bin_at(axis.place_stored(0.6)).expect("on the axis");
     assert!(plot[past..].iter().all(|&count| count == 0));
     let mark = stored::pixel_mark(&counts, 1, 0).expect("on the picture");
-    assert_eq!(mark.channels[0].bin, plane.bin_at(32768.0 / 65535.0));
-    let ticks: Vec<String> = stored::ticks(&stored::Source::image(&counts), plane)
-        .into_iter()
-        .map(|(_, words)| words)
-        .collect();
-    assert_eq!(ticks, ["0", "16384", "32768", "49152", "65535"]);
+    assert_eq!(
+        mark.channels[0].bin,
+        plane.bin_at(axis.place_stored(32768.0 / 65535.0))
+    );
+    assert_eq!(mark.channels[0].words, "32768", "the file's own count");
+    assert!(
+        stored::ticks(&stored::Source::image(&counts), plane).is_empty(),
+        "a row of stops instead"
+    );
+    // The Display's readout of the same value is in stops below white.
+    assert_eq!(axis_words(&counts, axis.place_stored(0.5)), "\u{2212}1.0");
+    assert_eq!(axis_words(&counts, f32::NEG_INFINITY), "0");
 
     // The same read as data: what it holds, written at its ends.
     let data = linear(Samples::U16 {
@@ -1431,9 +1446,9 @@ fn a_raw_has_a_develop_section_over_the_sensors_counts() {
         Section::Develop.height(false, false, image, shape)
     );
     let plots = stored::plots(rect, shape.layout);
-    assert_eq!(plots.len(), 3);
+    assert_eq!(plots.len(), 1, "the channels over one another");
     let first_row = develop::row(rect, shape, 0);
-    assert!(first_row.y > plots[2].bottom());
+    assert!(first_row.y > plots[0].bottom());
     let (caption, ground) = develop::grid_part(rect, shape);
     assert!(caption.y > develop::row(rect, shape, 3).bottom());
     assert!(ground.y > caption.bottom());
@@ -1472,16 +1487,18 @@ fn a_raws_pixel_is_marked_on_the_sensor_and_as_developed() {
     let red = stored::image_mark(&current, 4, 0).expect("on the picture");
     assert_eq!(red.channels[0].words, "256");
     assert_eq!(red.channels[0].plane, Plane::Red);
-    // The developed pixel, as the decoded picture holds it.
-    let developed = stored::pixel_mark(&current, 5, 0).expect("on the picture");
+    // The developed pixel, in stops below white: 20 of 255.
+    let developed = stored::developed_mark(&current, 5, 0).expect("on the picture");
     assert_eq!(
         developed
             .channels
             .iter()
             .map(|channel| channel.words.as_str())
             .collect::<Vec<_>>(),
-        ["20", "20", "20"]
+        ["\u{2212}3.7", "\u{2212}3.7", "\u{2212}3.7"]
     );
+    let black = stored::developed_mark(&current, 0, 0).expect("on the picture");
+    assert_eq!(black.channels[0].words, "0");
     // Traced down the column: both sections mark the pixel at once.
     let layout = laid_out(&current, 600.0);
     let binned = output::binned_for(&current, Headroom::None, 1.0);
@@ -1509,21 +1526,22 @@ fn a_raws_pixel_is_marked_on_the_sensor_and_as_developed() {
         Some(3)
     );
     assert_eq!(traced.image.as_ref(), Some(&mark));
-    // The pointer on a Develop plot marks that plane's bin alone.
+    // The pointer on the Develop plot marks its bin alone, in stops, with
+    // every plane's rank beside the one rule.
     let rect = rect_of(&layout, Section::Develop);
-    let bars = stored::plots(rect, develop::Shape::of(&current).layout)[1];
+    let bars = stored::plots(rect, develop::Shape::of(&current).layout)[0];
     let traced = marked(
         &current,
         &layout,
-        Some([bars.x + 0.5, bars.y + 1.0]),
+        Some([bars.x + bars.width / 2.0, bars.y + 1.0]),
         Some([5, 0]),
         Headroom::None,
         &plots,
     );
     assert!(traced.image.is_none());
     let hovered = traced.develop.expect("the plot under the pointer");
-    assert_eq!(hovered.channels[0].plane, Plane::Green);
-    assert_eq!(hovered.words, "0");
+    assert_eq!(hovered.channels.len(), 3);
+    assert_eq!(hovered.words, "\u{2212}1.0");
 
     // Three counts a pixel: the first pixel is black, which sits at the
     // clamp, and the middle one is clear of it.

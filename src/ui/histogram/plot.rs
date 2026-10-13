@@ -241,9 +241,36 @@ pub(super) fn bars(
     draw(pass, ui, section, &planes, counts, bars, rules, Tail::Drawn)
 }
 
+/// Several planes over one another on one ground, each in its own ink and
+/// each as tall as its own share of its pixels — so the two greens of a
+/// mosaic, twice the pixels of the red, stand no taller for it — and each
+/// line ended where the last of its pixels is behind it: the Image and
+/// Develop sections' plot of the stored channels together.
+pub(super) fn overlaid(
+    pass: &Pass,
+    ui: &egui::Ui,
+    section: Section,
+    planes: &[(&[u32; BINS], Color32)],
+    counts: Counts,
+    bars: Rect,
+    rules: &[(usize, Color32)],
+) -> Vec<f32> {
+    draw(
+        pass,
+        ui,
+        section,
+        planes,
+        counts,
+        bars,
+        rules,
+        Tail::Dropped,
+    )
+}
+
 /// One plane on its own ground, in its own ink, as [`bars`] draws a plot's
-/// planes together: the Image section's plot of one stored channel, its
-/// line ended where the last of the channel's pixels is behind it.
+/// planes together: the Image section's plot of one stored channel on a
+/// range of its own, its line ended where the last of the channel's pixels
+/// is behind it.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn plane_bars(
     pass: &Pass,

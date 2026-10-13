@@ -671,25 +671,29 @@ from white: the curve's toe, where it takes the deepest shadows to black,
 differs from one picture to the next.
 
 For a camera raw, the *Image* section at the foot is the sensor's own
-counts: a plot for each color under the filter, from nothing to the
-sensor's white level, with the black level marked on the axis, so the
-room to the right of a plot is how far the sensor was from saturating.
+counts: one plot with a line for each color under the filter, from nothing
+to the sensor's white level, with the black level marked on the axis, so
+the room to the right of a line is how far the sensor was from saturating.
 Pointing at the picture writes the one count under the pointer in its
 color, since a photosite holds one color; a raw that stores three counts
 a pixel writes all three, with a `~` before them where the development
 clipped a channel and they can only be worked back approximately. Above
 it, the *Develop* section is the picture as it was developed from those
-counts, its row of stops counting from white as the *Display* section's
-does, with the demosaic, the balance each color was multiplied by in
+counts, plotted in stops below white with its readout in the same stops,
+with the demosaic, the balance each color was multiplied by in
 stops — *applied in the file* where the camera balanced the counts before
 writing them — the light that balance is for as a color temperature, and
 the share of each channel standing at white: a channel against the right
 edge there and short of it in the *Image* plot below was put there by the
 balance, not by the sensor. Resting the pointer on the demosaic's name
 says what it does, on the clipped row what its shares are of, and on the
-*Profile* section's *Pixel* row what its numbers are. Under the rows, for a mosaic, are the photosites around the
-pointer, a window of five by five counts in their colors, which is what
-the demosaic read to make the pixel.
+*Profile* section's *Pixel* row what its numbers are. Under the rows, for
+a mosaic, are the photosites around the pointer, a window of five by five
+counts in their colors, which is what the demosaic read to make the pixel.
+A raw's *Display* plot is spaced in stops too, as a file of linear floats
+is, since both are linear light, and its readout is stops below white: a
+dark frame spreads across the plot instead of piling against its left
+edge.
 Pointing at a plot names the value under
 the pointer at that stage; pointing at the picture marks the pixel on every
 plot and writes its value at each stage, from the file at the foot of the
