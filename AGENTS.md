@@ -97,7 +97,8 @@ ui/            lays each frame's interface out with egui; no wgpu or winit impor
                  the scrolling column under it and the pixel traced down it (marked()),
                  section.rs Section — the stages in flow order, each one height — and its
                  header with its mark and its own button, plot.rs the plot every section
-                 draws, output.rs / display.rs / gain_map.rs / stored.rs (Image) the four stages,
+                 draws, output.rs / display.rs / gain_map.rs / profile.rs / stored.rs (Image) the
+                 five stages,
                  track.rs the band and its handles, slider.rs the exposure's slider, drawn
                  by ui/slider.rs
   minimap.rs / grid.rs   one widget each, drawn with egui's painter
@@ -288,8 +289,9 @@ image/         the data model, nothing GPU
   decode/        Decoder trait + DECODERS registry in mod.rs; one file per format; limits.rs the size ceiling;
                  dynamic.rs the shared DynamicImage bridge; heif/tmap.rs reads ISO 21496-1's gain-map item and
                  heif/apple.rs Apple's maker note; raw/linear.rs develops the DNG LibRaw cannot unpack —
-                 Linear Raw in JPEG XL tiles, an iPhone's ProRAW — and raw/profile.rs the DNG color
-                 arithmetic it goes through; fixture_tests.rs runs every file in test_images/
+                 Linear Raw in JPEG XL tiles, an iPhone's ProRAW — and bakes its profile's rendering
+                 beside it as a gain map of ratios, and raw/profile.rs the DNG color arithmetic both
+                 go through; fixture_tests.rs runs every file in test_images/
 render/        the GPU
   mod.rs         Renderer: surface, device, the three passes; Scene is what a frame draws;
                  UiPaint is what egui drew, and the ui-layer pass hands it to egui-wgpu
@@ -379,6 +381,7 @@ still agrees with both, so renaming either is editing the constant —
 | Something a Mac does differently from Linux | the module's `macos.rs` beside its Linux file, re-exported under the same names from its `mod.rs` — `clipboard/`, `portal/`, `trash/`, `openers/`, `monitor/`, `ui/fonts/`, `theme/` — or a `cfg!` in the one place that differs; a crate only one platform needs goes under its `[target.'cfg(target_os = …)'.dependencies]`, and an AppKit or Foundation class is a feature of `objc2-app-kit` or `objc2-foundation` there. `docs/macos.md` says what each Mac half is and why |
 | A dependency | `Cargo.toml`, then `bin/release` rewrites `THIRD-PARTY-NOTICES`. A license `about.toml` does not accept fails generation: add it there, in priority order, and its text to `LICENSES/`, or take the dependency instead |
 | An upscale filter or tone map | the WGSL function, one arm in `render/shader_codes.rs`, one enum variant with its `label`/`parse`/`next`; a tone map's CPU twin is `ToneMap::apply`, which takes the surface's `Headroom` as the shader arm does |
+| How a raw's profile renders it — its baseline exposure, gain table and tone curve | `image/decode/raw/linear.rs`: `Rendering::read` for the tags, `GainTable` for the table's layout and lookup, `Rendering::render` for the order, worked out in `Linear::tile`; `raw/profile.rs` for `prophoto` and `rgb_tone`. The result is a `GainMap` of `Lift::Profile` and `Data::Ratios`, so what reads through a lift reads through it (the next row). `App::profile` and `App::toggle_profile` for the switch, kept in `settings::State::profile`; `ui/histogram/profile.rs` for the section and its curve |
 | How far a gain map lifts the picture, or what reads through the lift | `image/gain_map.rs`: `GainMap::weight` for the share of the lift a display's room gets, `GainMap::table` for what a weight makes of the map, `gain_at` for the CPU twin of the shaders' `gain` — keep the three in step. `App::display_headroom` is what the weight is fed, `App::refresh_lift` puts the table in `Current::lift` and has `app/measuring.rs` scan the statistics through it off the loop, `App::measured` taking them in, and `Draw::lift` carries the table itself to `image_layer`, which writes it to the device and rebuilds the coarse chain. Whatever reads a pixel takes the table: `DecodedImage::sample`, `encode::displayed`, `Stats::scan_with` |
 | What the surface can be, SDR or HDR | `render/output.rs` chooses it; `monitor/` says what the monitor is in; `App::surface_hdr` and `App::headroom` put the two together, `App::sync_output` acts on them, and `App::toggle_hdr` is what the bar's `HDR` button and `o` both call |
 | A new render pass | build it from `render/gpu.rs`; add its target to `Renderer::render` |

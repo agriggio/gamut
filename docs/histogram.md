@@ -25,7 +25,8 @@ menu. The panel is an instrument, not `Display`'s fields laid out as rows.
 The panel is the picture's way from the file to the screen, a section to a
 stage, read from the screen back: **Output**, what goes out; **Display**,
 what the display starts from and what it does to it; **Gain map**, how far
-the map lifts the picture, for a picture that carries one; **Image**, the
+the map lifts the picture, for a picture that carries one; **Profile**, how
+a raw's profile renders it, for a raw whose profile says; **Image**, the
 picture as the file stores it — named for the picture rather than the file,
 since the gain map is the file's too. `histogram::Section` is that list, in that
 order, and `section::layout` lays out the ones the picture passes through
@@ -93,12 +94,40 @@ in the picture's place, lit while it is. A section's readout ends short of
 that square where the section has a button, and at the line's end where it
 does not; a section given one later — the switch that passes a stage by —
 takes the square the same way.
-A stage added later — the development stages a ProRAW file describes, a
-baseline exposure, a profile's tone curve, a gain table — is a `Section`
-variant placed between Display and Image at a height of its own: a 1D stage
-composes into the Display curve and takes a header of its own, and a stage
-that lifts each pixel by its own amount is shaped as the Gain map section
-is, a histogram of the lift with how much of it is applied in its header.
+A stage added later is a `Section` variant placed between Display and Image
+at a height of its own: a 1D stage composes into the Display curve and
+takes a header of its own, and a stage that lifts each pixel by its own
+amount is shaped as the Gain map section is, a histogram of the lift with
+how much of it is applied in its header.
+
+The **Profile** section is the second kind: the rendering a raw's profile
+describes — a baseline exposure, a gain table and a tone curve — is worked
+out per pixel when the raw is developed, and kept as a gain map of ratios
+(see [formats](formats.md#camera-raw)), so its lift is plotted and traced
+exactly as the Gain map section's, by `gain_map::lift_plot`,
+`gain_map::bin_mark` and `gain_map::pixel_mark`. It is a variant of its own
+rather than the Gain map section retitled, since it is another shape, and
+the two never meet: `Section::applies` gives a profile's map to the one and
+every other map to the other. It stands nearest the file, below where the
+Gain map section would, because the profile is applied to the values the
+file stores before anything else is. Its square is not an eye but the
+profile's switch, lit while the rendering is applied, since showing the
+lift in the picture's place is `G`'s already and the switch has nowhere
+else to be on the screen; its header says the baseline exposure and whether
+the rendering is applied.
+
+Under the lift's plot is the profile's tone curve, on its own ground
+(`section::curve_plot`), with both axes in stops below white down to ten.
+The curve is the one stage of the profile that is a function of one value,
+and so the one that can be drawn rather than counted; and in stops is where
+it can be read, since everything that tells one file's curve from another's
+is the toe, which a linear plot squeezes into its first hundredth while in
+stops the shoulder is the straight line every curve shares. The pointer's
+pixel is a dot on it, placed by `Profile::on_curve`: the developed pixel
+lifted by the whole of the profile, its largest channel in ProPhoto — the
+one the curve was put through — and the curve run backwards from there for
+what it took. The whole of the profile, whether or not the switch has it on
+screen, since the curve is the profile's and not the screen's.
 
 The row of buttons — the marks on the picture, and at the far end the
 reset (`histogram::toolbar`) — acts on every plot in the column, or on the

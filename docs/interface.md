@@ -681,6 +681,36 @@ carries the rendering it was asked for on `Opened::rendering`, and
 `App::follow_rendering` asks again once it lands if the preference has moved
 in the meantime.
 
+## The profile's switch
+
+A raw whose profile says how it should look arrives with the rendering
+beside it as a gain map (see [formats](formats.md#camera-raw)), and whether
+it is on screen is `App::profile`: one preference for every raw, kept
+between runs in `settings::State::profile`, on by default, for the reason
+the camera's JPEG is one — the question is how raws are to be looked at,
+and a choice per file would have `P` mean different things from file to
+file. It is on by default because the rendering is what the file asks for;
+off is what a raw developer that ignores the profile would show.
+
+Unlike the camera's JPEG it reads nothing again. The rendering is the gain
+map the raw was read with, so `App::toggle_profile` flips the preference and
+`App::refresh_lift` gives the map's lift a weight of one or of none, which
+moves the picture at once and the numbers once `app/measuring.rs` has them —
+at once for a weight met before, the base and the last lift both being kept.
+Nothing about the view or the display starts over: it is the same picture
+under a different rendering, at the same size, and an exposure set on one is
+an exposure on the other.
+
+The switch is the Profile section's square, at the end of its header in the
+histogram, and `P`; the Mac's Image menu has it as **Profile**. The bottom
+bar's gain map toggle is left out for a profile (`Pass::gain_map_toggle`),
+since a profile is about no room above white and the sun would say it was;
+`G` still shows the lift in the picture's place, and the Mac's menu calls
+that **Profile Lift** for a raw. `Conditions::profile` is what makes the
+square and the key dead, with `NO_PROFILE` as the reason, on a file with no
+profile, which only a press of `P` ever reaches, the section not being drawn
+for such a file.
+
 ## The file's other images
 
 What is on screen is what everything reads: the size the top bar gives, the

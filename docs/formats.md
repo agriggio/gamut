@@ -143,8 +143,26 @@ since it is what every other reader of the file will use; the map itself is
 the same image either way, decoded through `libheif` like any other in the
 file.
 
+A raw's profile is a third kind, `Lift::Profile`, made by the developer
+rather than read from the file (see **The profile's rendering** under
+[camera raw](#camera-raw)). It is the gain itself rather than a code
+through a table — `gain_map::Data::Ratios`, half floats a channel for every
+pixel of the picture — because its curve lifts each channel by its own
+amount. It goes up as a half-float texture (`upload::Plan::float16`) and
+the shader reads it raw, `shader_codes::lift` giving it a code of its own;
+its table is all ones and unread. Its weight is not the display's room,
+since it is the camera's rendering and the same on every surface:
+`GainMap::weight` answers one, and `App::refresh_lift` gives it all or none
+by `App::profile`, the switch kept in the state file as the camera JPEG's
+choice is. At no weight its code is zero and the shader skips the lift
+entirely. Its range in stops is found as it is made and kept on the
+`Profile`, since the panels ask for it every frame and a walk over a map the
+picture's size is too much for that; its histogram is plotted over all but
+a thousandth of its values, the pixels the curve's toe takes to black being
+lifted by nothing a ratio can say.
+
 `--no-gain-map` leaves the map unread, which shows the SDR base whatever
-the surface: what many other viewers show, and worth having when the two
+the surface, and leaves a raw's profile unmade: what many other viewers show, and worth having when the two
 need comparing. The JPEG's ICC profile is read on the same pass as its
 map, because a phone JPEG is Display P3 far more often than it is sRGB,
 and P3 numbers shown as sRGB come out visibly flat.
@@ -508,16 +526,63 @@ of 1; and Bradford's transform from that white to D65. The camera
 calibration matrices are taken as the identity, since they apply only under
 a signature match a phone's own profile does not make.
 
-The file's instructions about how it should *look* are left alone, as
-LibRaw's development leaves a camera's curve alone: the baseline exposure
-(−1.27 EV on the iPhone sampled), the profile's tone curve, and the
-`ProfileGainTableMap`, a grid of gains by position and brightness that is
-Apple's local tone mapping, lifting shadows by as much as twelve times. The
-developed picture is therefore darker in the shadows than Photos shows it,
-and the camera's JPEG is the iPhone's rendering. Turning is LibRaw's
-reading of the orientation, as for the developed frame, and LibRaw's size
-for the file is the full picture with no crop, so the probe and the develop
-agree. A 48-megapixel ProRAW develops in about a second on this machine.
+Turning is LibRaw's reading of the orientation, as for the developed frame,
+and LibRaw's size for the file is the full picture with no crop, so the
+probe and the develop agree. A 48-megapixel ProRAW develops in about a
+second on this machine.
+
+**The profile's rendering.** The file also says how it should *look*, in
+three tags of its camera profile: `BaselineExposure`, `ProfileGainTableMap`
+— a grid over the picture with a table of gains by brightness at each
+point, which is Apple's local tone mapping — and `ProfileToneCurve`. None of
+them makes sense alone. On the iPhones sampled the baseline runs from
+−1.27 to +4.12 EV; the table's input weights sum to exactly 2^−baseline and
+its top gain is 2^−baseline too, so after the exposure the highlights are
+taken back down to where the file stored them while the shadows stay lifted,
+by twenty to thirty times on the brightest baseline; and the curve's toe,
+which differs file to file, then takes the deepest of those shadows to
+black. Applied together they put the picture where the camera's JPEG has it:
+the linear median of the developed picture lifted is within a few percent of
+the JPEG's on both files sampled.
+
+`Linear::develop` does not apply them to the picture, which stays the
+development LibRaw would make, as decoders here describe rather than
+normalize. It works out, beside it, what the profile renders each pixel as,
+and keeps the ratio each channel is lifted by: a `GainMap` of
+`Lift::Profile`, whose `Data::Ratios` are half floats a channel for every
+pixel, so that the curve's application, which is not a gain alike on every
+channel, is exact. That reuses everything a photograph's gain map already
+goes through — see [gain maps](#gain-maps-ultra-hdr-jpeg-and-an-iphones-heic)
+— and costs the picture's size
+again in half floats: 72 MB for 12 megapixels, 293 MB for 48, and on the
+device four channels of the same.
+
+The rendering is `Rendering::render`, worked out in the tile pass, which is
+where the balanced camera values are and where the developed value is
+quantized; the ratio is taken over that quantized value, so the shader's
+texel times ratio is the rendering itself. It follows the DNG SDK's order,
+in linear ProPhoto (`raw::profile::prophoto`): the baseline as a plain
+multiply — the SDK's exposure ramp adds a small quadratic toe at black from
+a shadows setting the file does not carry, and clips at white, which here
+would undo the table's work, so neither is done; the table's gain, the same
+on every channel; and the curve by `raw::profile::rgb_tone`, the SDK's
+`RGBTone`, which puts the curve through the largest and smallest channel
+and keeps the middle one where it stood between them, so that the hue
+holds. The table's input is its five weights against red, green, blue, the
+least of the three and the most; the index runs to the table's length and
+is clamped to its last entry; and the grid is read at the pixel's center as
+a share of the picture's height and width, edge-replicated. Those three
+come from the one open reading of the tag found rather than from the
+specification, and `GainTable::gain_at` holds all three so that they can
+move together. The tag has no byte order of its own; an iPhone writes it
+big-endian inside a little-endian file, and `GainTable::read` tries
+big-endian first and the file's order after, a wrong order failing the
+size check. A tag that is not what the specification says — a table cut
+short, a curve that does not run from black to white — is passed over on
+the terminal and the rest of the profile applied: it is cosmetic, and a
+refusal would send the reader to the JPEG for it. DNG 1.7's
+`ProfileGainTableMap2`, which adds sample types and a gamma, is not read
+yet. The bake adds about a fifth to the develop.
 
 **The preview.** Every raw carries the camera's own JPEG of the frame,
 which LibRaw copies out without decoding anything — `unpack_thumb` and
@@ -589,9 +654,15 @@ the pattern as Linear Raw in four JPEG XL tiles — the bottom two padded
 past the picture — of ten-bit codes, through a linearization table that is
 a square, so that a code taken for a value comes out far too dark. Its
 matrix is `dng-cfa.dng`'s, and it develops to the pattern. LibRaw fails on
-it exactly as it does on the phone's file. `bad-dng-jxl.dng` is the same
-with each tile cut forty bytes in: it will not develop, and the loader
-shows its JPEG instead.
+it exactly as it does on the phone's file. Its profile is chosen so that
+white comes out at a number worked by hand: −2 EV, a two-by-two table of
+twos written big-endian, and a curve through (0.5, 0.25), which together
+take white to a quarter, two stops down; a primary's channels holding
+nothing are left alone, a ratio of one. `dng-jxl-profile-cut.dng` is the
+same with its table's last gain cut off: it develops, the table passed over
+and white three stops down through the exposure and the curve alone.
+`bad-dng-jxl.dng` is the same with each tile cut forty bytes in and no
+profile: it will not develop, and the loader shows its JPEG instead.
 
 ## JPEG XL
 

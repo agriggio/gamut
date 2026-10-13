@@ -22,9 +22,14 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
   glass now centers on the middle of the pixel the readout reads and moves
   a pixel at a time.
 - An iPhone's ProRAW, whose picture is compressed with JPEG XL, is
-  developed like any other raw: the camera's balance and color, in
-  Rec. 2020. Apple's own lift of the shadows is not applied, so it opens
-  darker than Photos shows it.
+  developed like any other raw — the camera's balance and color, in
+  Rec. 2020 — and shown as its camera profile renders it: the baseline
+  exposure, Apple's local tone map and the profile's tone curve, which put
+  it close to the camera's JPEG. `P` switches the rendering off and on for
+  every raw, and the choice is kept between runs. The histogram panel's
+  *Profile* section plots how far the rendering lifts each pixel and draws
+  the file's tone curve in stops, and the information panel describes the
+  profile. `--no-gain-map` leaves the rendering behind too.
 
 ### Changed
 

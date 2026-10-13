@@ -547,6 +547,7 @@ that is not a paste; open it as an argument instead.
 | `v` | Show a raw as the camera's JPEG of it, or as the picture developed from the sensor | `display.camera-jpeg` |
 | `Shift+D` | Show a picture's depth map in its place, or the picture again | `display.depth` |
 | `Shift+G` | Show a picture's gain map in its place, or the picture again | `display.gain-map` |
+| `Shift+P` | Show a raw as its camera profile renders it, or as developed | `display.profile` |
 | `r` | Cycle false color: gray → viridis → magma → turbo | `display.colormap` |
 | `z` | Reset every display setting | `display.reset` |
 | `;` | Turn the picture a quarter counterclockwise | `display.turn.left` |
@@ -610,6 +611,17 @@ much of it is being applied. A map with a channel for each color is drawn in
 color. The gain map's button and the depth map's take each other's place:
 with both on a picture, one map is up at a time.
 
+Some raws say how they should look: an iPhone's ProRAW carries an exposure,
+a brightening of the shadows that varies across the picture, and a tone
+curve, which together are how the iPhone rendered it. `gamut` shows such a
+raw that way, and `P`, or the camera button at the end of the *Profile*
+heading in the histogram panel, shows the picture as developed instead,
+without them: much darker for most iPhone pictures. The choice holds for
+every raw, and for the next time `gamut` starts. Nothing is read again, so
+the switch is immediate, and the view and the display settings stay as they
+are. `G` shows how far the profile brightens each pixel in the picture's
+place, in stops, as it shows a gain map; such a raw has no sun button.
+
 The window is the one place the case of a key matters: `a` and `s` move
 the value that comes out black, `A` and `S` the value that comes out white.
 Each press moves its end by a twentieth of the window's width as the
@@ -638,6 +650,11 @@ or a *Window* rule is pressed, and the exposure survives that. A row of stops un
 the Output and Display plots counts from white — 0 is what comes out white,
 `-2` is two stops under it, and on an HDR screen `+1` is a stop over — and
 the one under the gain map's plot counts how far the map lifts the picture.
+A raw that says how it should look has a *Profile* section instead, whose
+plot counts how far that rendering lifts each pixel, and under it the raw's
+own tone curve, both of its axes in stops below white: the curve's toe,
+where it takes the deepest shadows to black, differs from one picture to
+the next.
 Pointing at a plot names the value under
 the pointer at that stage; pointing at the picture marks the pixel on every
 plot and writes its value at each stage, from the file at the foot of the
