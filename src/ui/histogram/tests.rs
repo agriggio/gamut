@@ -1324,8 +1324,9 @@ fn developed() -> Current {
         black: vec![64.0; 3],
         stored,
         development: Development {
-            demosaic: Some("AHD"),
+            demosaic: crate::image::sensor::Demosaic::Ahd,
             balance: [4.0, 1.0, 2.0],
+            kelvin: Some(5200.0),
         },
     }));
     shown(image)
@@ -1354,8 +1355,9 @@ fn recovered() -> Current {
         black: vec![0.0; 3],
         stored,
         development: Development {
-            demosaic: None,
+            demosaic: crate::image::sensor::Demosaic::None,
             balance: [1.0; 3],
+            kelvin: None,
         },
     }));
     shown(image)
@@ -1417,9 +1419,12 @@ fn a_raw_has_a_develop_section_over_the_sensors_counts() {
                 planes: 3,
                 shared: true
             },
+            rows: 4,
             grid: true
         }
     );
+    assert!(stored::Source::developed(&current).white_stops);
+    assert!(!stored::Source::image(&current).white_stops);
     let rect = rect_of(&layout, Section::Develop);
     assert_eq!(
         rect.height,
@@ -1430,12 +1435,13 @@ fn a_raw_has_a_develop_section_over_the_sensors_counts() {
     let first_row = develop::row(rect, shape, 0);
     assert!(first_row.y > plots[2].bottom());
     let (caption, ground) = develop::grid_part(rect, shape);
-    assert!(caption.y > develop::row(rect, shape, 2).bottom());
+    assert!(caption.y > develop::row(rect, shape, 3).bottom());
     assert!(ground.y > caption.bottom());
     assert_eq!(ground.bottom() + PLOT_INSET, rect.bottom());
     // Without the mosaic, no photosites.
     let plain = develop::Shape::of(&recovered());
     assert!(!plain.grid);
+    assert_eq!(plain.rows, 3, "no light where the file says nothing of it");
     assert!(plain.height() < shape.height());
     assert_eq!(develop::Shape::of(&picture(false)), develop::Shape::NONE);
 }

@@ -18,6 +18,7 @@ use super::histogram::WINDOWS;
 use super::info::Copyable;
 use super::menu::{self, Copies};
 use super::tags::{Fold, Tab, Table};
+use crate::image::sensor::Demosaic;
 
 /// Something in the interface that names itself when the pointer rests on it.
 ///
@@ -49,6 +50,11 @@ pub enum Tip {
     /// things in force; the tooltip is the whole of it in sentences, the
     /// window's own bounds included — see `App::tooltip`.
     State,
+    /// The Profile section's last row, the pixel followed up through the
+    /// profile's parts: what quantity its numbers are.
+    ProfilePixel,
+    /// The Develop section's demosaic row: what the name on it means.
+    Demosaic(Demosaic),
 }
 
 /// What a tooltip says: the thing itself first, and under it the keys that do
@@ -698,6 +704,20 @@ pub fn words(tip: Tip) -> Option<String> {
         },
         // The timeline: no key scrubs, so it names itself.
         Tip::Timeline => "Frame timeline",
+        // The Profile section's trace and the Develop section's demosaic:
+        // rows of numbers and a name, with what they are said under the
+        // pointer, since the rows have no room to say it themselves.
+        Tip::ProfilePixel => {
+            "The pixel's brightest channel in linear ProPhoto, in stops below white: \
+             as developed, after the exposure, after the gain table, after the tone curve"
+        }
+        Tip::Demosaic(Demosaic::Ahd) => {
+            "Adaptive homogeneity-directed interpolation: each missing color is taken \
+             along the direction its neighborhood is most uniform in"
+        }
+        Tip::Demosaic(Demosaic::None) => {
+            "The file stores three counts a pixel, so nothing was interpolated"
+        }
         // No words of its own: an item of the open menu wears the name of
         // the program it hands the file to, and there is nothing an
         // interface that has never heard of that program could add to it.

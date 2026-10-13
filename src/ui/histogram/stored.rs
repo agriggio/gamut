@@ -92,7 +92,18 @@ pub(super) struct Source<'a> {
     /// The widest value a sample can be written as, which the header's
     /// cells are sized to.
     pub widest: String,
+    /// Whether the row under the plots counts stops from white, as the
+    /// Display section's does, rather than writing values: the developed
+    /// picture's, which is linear light with its white at full scale, so
+    /// that its row reads as the Display's above and the Profile's parts'
+    /// do, and the pixel's rule stands at the stops the Profile's trace
+    /// starts from.
+    pub white_stops: bool,
 }
+
+/// How far below white the row of stops under the developed plots is
+/// looked for: to the last stop a sixteen-bit count can stand in.
+const DEVELOPED_STOPS: i32 = 16;
 
 /// The sensor behind the picture on screen, while the picture itself is
 /// up: what the Image section plots in its place, and what the Develop
@@ -126,6 +137,7 @@ impl<'a> Source<'a> {
                     gray: sensor.planes() == 1,
                     levels: Some(levels),
                     widest: format!("{:.0}", sensor.white),
+                    white_stops: false,
                 }
             }
             None => Self::decoded(current, Section::Image),
@@ -135,7 +147,10 @@ impl<'a> Source<'a> {
     /// The Develop section's: the developed picture, as the decoder handed
     /// it over.
     pub fn developed(current: &'a Current) -> Self {
-        Self::decoded(current, Section::Develop)
+        Self {
+            white_stops: true,
+            ..Self::decoded(current, Section::Develop)
+        }
     }
 
     /// The picture as the decoder handed it over, for `section`.
@@ -155,6 +170,7 @@ impl<'a> Source<'a> {
                 Samples::F32 { .. } => "0.0000",
             }
             .to_string(),
+            white_stops: false,
         }
     }
 
@@ -577,6 +593,12 @@ pub(super) fn body(
         match stored.axis {
             Axis::Stops => {
                 plot::ev_scale(pass, ui, row, STOP_REACH, |stop| stop_across(range, stop))
+            }
+            Axis::Curve(_) if source.white_stops => {
+                plot::ev_scale(pass, ui, row, -DEVELOPED_STOPS..=0, |stop| {
+                    let span = range[1] - range[0];
+                    (span > 0.0).then(|| ((stop as f32).exp2() - range[0]) / span)
+                })
             }
             Axis::Curve(_) => plot::value_scale(pass, ui, row, &ticks(source, plane)),
         }

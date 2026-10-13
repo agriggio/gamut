@@ -485,7 +485,9 @@ pub(super) fn action_of(tip: Tip) -> Option<Action> {
         | Tip::BlackPoint
         | Tip::WhitePoint
         | Tip::Window
-        | Tip::Exposure => return None,
+        | Tip::Exposure
+        | Tip::ProfilePixel
+        | Tip::Demosaic(_) => return None,
     })
 }
 

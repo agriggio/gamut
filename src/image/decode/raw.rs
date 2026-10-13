@@ -56,10 +56,6 @@ use crate::image::{
 
 pub struct Raw;
 
-/// The demosaic the development asks for, by the name the Develop section
-/// gives it: `ffi::DEMOSAIC_AHD`.
-const DEMOSAIC: &str = "AHD";
-
 impl super::Decoder for Raw {
     fn name(&self) -> &'static str {
         "camera raw"
@@ -424,6 +420,13 @@ impl Handle {
     /// sensor of three colors, and only where the answer lands on the part
     /// of the locus the cubic holds for.
     fn color_temperature(&self) -> Option<String> {
+        let kelvin = self.kelvin()?;
+        Some(format!("{} K", (kelvin / 50.0).round() as u32 * 50))
+    }
+
+    /// The same in kelvin, unrounded: what [`Handle::color_temperature`]
+    /// writes and the sensor carries.
+    fn kelvin(&self) -> Option<f64> {
         if self.params().colors != 3 {
             return None;
         }
@@ -448,8 +451,7 @@ impl Handle {
                 matrix,
             )
         };
-        let kelvin = correlated_temperature(camera, daylight, matrix)?;
-        Some(format!("{} K", (kelvin / 50.0).round() as u32 * 50))
+        correlated_temperature(camera, daylight, matrix)
     }
 
     /// The developed picture's size: the cropped sensor, turned the way the
@@ -702,8 +704,10 @@ impl Handle {
             black,
             stored,
             development: sensor::Development {
-                demosaic: Some(DEMOSAIC),
+                // `configure` asks for AHD: `ffi::DEMOSAIC_AHD`.
+                demosaic: sensor::Demosaic::Ahd,
                 balance,
+                kelvin: self.kelvin().map(|kelvin| kelvin as f32),
             },
         })
     }
@@ -1170,7 +1174,14 @@ mod tests {
         assert_eq!(sensor.white, 4095.0);
         assert_eq!(sensor.black, vec![0.0; 3]);
         assert_eq!(sensor.stored.planes.len(), 3);
-        assert_eq!(sensor.development.demosaic, Some("AHD"));
+        assert_eq!(
+            sensor.development.demosaic,
+            crate::image::sensor::Demosaic::Ahd
+        );
+        // A neutral of white under the matrix the fixture states, which is
+        // Rec. 2020's: daylight.
+        let kelvin = sensor.development.kelvin.expect("a temperature");
+        assert!((5500.0..=7000.0).contains(&kelvin), "{kelvin}");
         assert!(sensor.development.balanced_as_stored());
         // The white quadrant's red is at white, and a pixel of it reads
         // its one photosite.

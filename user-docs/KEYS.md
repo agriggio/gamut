@@ -679,12 +679,17 @@ color, since a photosite holds one color; a raw that stores three counts
 a pixel writes all three, with a `~` before them where the development
 clipped a channel and they can only be worked back approximately. Above
 it, the *Develop* section is the picture as it was developed from those
-counts, with the demosaic, the balance each color was multiplied by in
-stops, and the share of each channel standing at white: a channel against
-the right edge there and short of it in the *Image* plot below was put
-there by the balance, not by the sensor. Under the rows, for a mosaic, are
-the photosites around the pointer, a window of five by five counts in
-their colors, which is what the demosaic read to make the pixel.
+counts, its row of stops counting from white as the *Display* section's
+does, with the demosaic, the balance each color was multiplied by in
+stops — *applied in the file* where the camera balanced the counts before
+writing them — the light that balance is for as a color temperature, and
+the share of each channel standing at white: a channel against the right
+edge there and short of it in the *Image* plot below was put there by the
+balance, not by the sensor. Resting the pointer on the demosaic's name
+says what it does, and on the *Profile* section's *Pixel* row what its
+numbers are. Under the rows, for a mosaic, are the photosites around the
+pointer, a window of five by five counts in their colors, which is what
+the demosaic read to make the pixel.
 Pointing at a plot names the value under
 the pointer at that stage; pointing at the picture marks the pixel on every
 plot and writes its value at each stage, from the file at the foot of the

@@ -163,14 +163,38 @@ impl Recovery {
 /// What the developer did to the counts on the way to the picture.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Development {
-    /// The demosaic the mosaic went through, by its name; `None` for a raw
-    /// stored three counts a pixel, which needs none.
-    pub demosaic: Option<&'static str>,
+    /// The demosaic the mosaic went through.
+    pub demosaic: Demosaic,
     /// What each plane was multiplied by to balance the picture, the green
     /// at 1: the camera's multipliers, or the daylight ones a file that
     /// records none is given. All 1 where the counts are balanced as
     /// stored.
     pub balance: [f32; 3],
+    /// The correlated color temperature of the light the balance is for,
+    /// in kelvin: what the camera took the scene to be lit by. `None` where
+    /// the file says nothing it can be worked out from.
+    pub kelvin: Option<f32>,
+}
+
+/// How the one count a photosite became three a pixel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Demosaic {
+    /// Adaptive homogeneity-directed interpolation: each missing color is
+    /// taken along the direction its neighborhood is most uniform in.
+    /// dcraw's default, and what every other method is compared to.
+    Ahd,
+    /// None: the file stores three counts a pixel already.
+    None,
+}
+
+impl Demosaic {
+    /// The name the Develop section writes.
+    pub fn label(self) -> &'static str {
+        match self {
+            Demosaic::Ahd => "AHD",
+            Demosaic::None => "none",
+        }
+    }
 }
 
 impl Development {
@@ -342,8 +366,9 @@ mod tests {
             black: vec![0.0; 3],
             stored,
             development: Development {
-                demosaic: Some("AHD"),
+                demosaic: Demosaic::Ahd,
                 balance: [2.0, 1.0, 1.5],
+                kelvin: Some(5200.0),
             },
         };
         assert_eq!(sensor.planes(), 3);
@@ -416,9 +441,11 @@ mod tests {
         let (_, exact) = recovery.counts([1.0, 0.5, 0.5], 0, 0);
         assert!(!exact, "a channel at the clamp");
         let balanced = Development {
-            demosaic: None,
+            demosaic: Demosaic::None,
             balance: [1.0, 1.0, 1.0004],
+            kelvin: None,
         };
+        assert_eq!(balanced.demosaic.label(), "none");
         assert!(balanced.balanced_as_stored());
     }
 }

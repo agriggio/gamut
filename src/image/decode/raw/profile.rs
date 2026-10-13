@@ -119,6 +119,18 @@ impl Profile {
         Ok(total.map(|row| row.map(|value| value as f32)))
     }
 
+    /// The correlated color temperature of the light the picture was
+    /// balanced for, in kelvin, or `None` where the file says nothing it
+    /// can be worked out from.
+    pub fn kelvin(&self) -> Option<f64> {
+        if self.color.is_empty() {
+            return None;
+        }
+        let analog = self.analog.unwrap_or([1.0; 3]);
+        let (_, white) = self.white(analog).ok()?;
+        Some(temperature(white)).filter(|kelvin| kelvin.is_finite() && *kelvin > 0.0)
+    }
+
     /// The camera's neutral and the chromaticity it is white at, from
     /// whichever of the two the file states. Where it states neither, the
     /// light is daylight.

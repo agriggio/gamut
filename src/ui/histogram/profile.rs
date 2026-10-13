@@ -209,7 +209,16 @@ pub(super) fn show(
         &font,
     );
     let trace = pixel.as_ref().map(Pixel::trace).unwrap_or_default();
-    row(pass, ui, section::trace_row(rect), PIXEL, &trace, &font);
+    let trace_row = section::trace_row(rect);
+    row(pass, ui, trace_row, PIXEL, &trace, &font);
+    // What the row's numbers are, under the pointer: the row has no room
+    // to say it.
+    let response = ui.interact(
+        egui::Rect::from(trace_row),
+        ui.id().with("profile trace"),
+        Sense::hover(),
+    );
+    pass.tooltip(response, Tip::ProfilePixel);
 }
 
 /// The histogram of the lift at `plot_rect`, with its row of stops.

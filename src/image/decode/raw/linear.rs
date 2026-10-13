@@ -122,8 +122,10 @@ pub struct Linear {
     matrix: [[f32; 3]; 3],
     /// `AsShotNeutral`: what the camera's channels read for white, which
     /// the matrix carries to white and the Develop section says the balance
-    /// from.
+    /// from; and the temperature of the light that neutral says the
+    /// picture was taken in.
     neutral: Option<[f64; 3]>,
+    kelvin: Option<f64>,
     /// How the profile says the picture should look, where it says
     /// anything.
     rendering: Option<Rendering>,
@@ -579,6 +581,7 @@ impl Linear {
             black_down,
             matrix,
             neutral: camera.neutral,
+            kelvin: camera.kelvin(),
             rendering,
         })
     }
@@ -726,8 +729,9 @@ impl Linear {
             black: self.black_codes(),
             stored: Arc::new(Stored::of_codes(tallies, full)),
             development: sensor::Development {
-                demosaic: None,
+                demosaic: sensor::Demosaic::None,
                 balance,
+                kelvin: self.kelvin.map(|kelvin| kelvin as f32),
             },
         })
     }
@@ -1094,7 +1098,8 @@ mod tests {
         let table = linear.table.as_deref().expect("the fixture's table");
         assert_eq!(sensor.white, (table.len() - 1) as f32);
         assert!(matches!(sensor.layout, Layout::Rgb(_)));
-        assert_eq!(sensor.development.demosaic, None);
+        assert_eq!(sensor.development.demosaic, sensor::Demosaic::None);
+        assert!(sensor.development.kelvin.is_some_and(|kelvin| kelvin > 0.0));
         assert!(sensor.development.balanced_as_stored());
         let pixels = (image.width * image.height) as f32;
         for plane in &sensor.stored.planes {

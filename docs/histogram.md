@@ -196,16 +196,30 @@ The Develop section's plots are the developed channels, drawn by the same
 code as the Image section's (`stored::body`, from `stored::Source::developed`),
 with the developed pixel's values in its header as the Image section's
 header writes the counts: read one above the other, the two headers are
-one pixel before and after development. Under the plots, three rows of
-words (`develop::show`): the demosaic the mosaic went through, by its
-name; the balance each plane was multiplied by, in stops in the plane's
-own ink — `as stored` for an iPhone's ProRAW, whose counts the camera
-balanced before writing — and the share of each developed channel
-standing at white, read off the stored tallies (`Plane::rank` at 1, doubled,
-since the rank counts half of what sits at a value). The balance row is
-the answer to the question the two sets of plots raise together, which is
-how a channel short of the sensor's white in the Image plot came to stand
-against it in the Develop plot. For a mosaic the section ends with the
+one pixel before and after development. The row under the plots counts
+stops from white (`Source::white_stops`), as the Display section's row
+does, rather than writing quarters of 65535: the developed picture is
+linear light with its white at full scale, so the stops are the same
+stops the Display row above and the Profile's parts count in, and the
+rule the pointer puts on a Develop plot stands at the number the
+Profile's trace starts from — the pixel's brightest channel in stops
+below white, which that row's tooltip (`Tip::ProfilePixel`) says, the row
+having no room to. Under the plots, rows of words (`develop::show`): the
+demosaic the mosaic went through, by its name, with what the name means
+under the pointer (`Tip::Demosaic`); the balance each plane was multiplied
+by, in stops in the plane's own ink — `applied in the file` for an
+iPhone's ProRAW, whose counts the camera balanced before writing; the
+light the balance is for, as a color temperature, where the file says
+enough to work one out — LibRaw's multipliers and matrix through McCamy's
+cubic for a mosaic (`Handle::kelvin`, the information panel's own
+number), the illuminant the color matrices are blended for
+(`Profile::kelvin`) for a Linear Raw — and the share of each developed
+channel standing at white, read off the stored tallies (`Plane::rank` at
+1, doubled, since the rank counts half of what sits at a value). The
+balance row is the answer to the question the two sets of plots raise
+together, which is how a channel short of the sensor's white in the Image
+plot came to stand against it in the Develop plot. For a mosaic the
+section ends with the
 photosites around the pointer (`develop::grid`): a 5-by-5 window of the
 counts the demosaic read to make the pixel, each cell washed with its
 plane's ink and the pointer's own outlined, read through the user's turn
