@@ -21,6 +21,15 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
   line edged in black, so it shows on light and dark pictures alike. The
   glass now centers on the middle of the pixel the readout reads and moves
   a pixel at a time.
+- The histogram panel's *Image* section plots what a camera raw actually
+  stores: the sensor's counts, a plot to the color under the filter, from
+  nothing to the white level with the black level on the axis, and the
+  pointer's one photosite in its color — or, for a raw stored three counts
+  a pixel, the three worked back from the developed pixel. The developed
+  picture's plots move up to a new *Develop* section, with the demosaic,
+  the balance in stops per color, the share of each channel clipped at
+  white, and for a mosaic the photosites around the pointer. A HEIC or a
+  JPEG has no Develop section, since nothing was developed.
 - An iPhone's ProRAW, whose picture is compressed with JPEG XL, is
   developed like any other raw — the camera's balance and color, in
   Rec. 2020 — and shown as its camera profile renders it: the baseline

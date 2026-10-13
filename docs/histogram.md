@@ -26,9 +26,11 @@ The panel is the picture's way from the file to the screen, a section to a
 stage, read from the screen back: **Output**, what goes out; **Display**,
 what the display starts from and what it does to it; **Gain map**, how far
 the map lifts the picture, for a picture that carries one; **Profile**, how
-a raw's profile renders it, for a raw whose profile says; **Image**, the
+a raw's profile renders it, for a raw whose profile says; **Develop**, how a
+raw was developed from the sensor's counts, for a raw; **Image**, the
 picture as the file stores it — named for the picture rather than the file,
-since the gain map is the file's too. `histogram::Section` is that list, in that
+since the gain map is the file's too, and for a raw the sensor's own counts,
+which are what the file stores. `histogram::Section` is that list, in that
 order, and `section::layout` lays out the ones the picture passes through
 (`Section::applies`).
 
@@ -176,6 +178,60 @@ with no table is the exposure alone, a level line. The exposure itself,
 being one number, is a row of words, as the Display section's settings
 are.
 
+The **Develop** section, with the Image section's change of meaning for a
+raw, is what makes the column honest about one. A raw's `DecodedImage` is
+the developed picture — demosaiced, balanced, carried into Rec. 2020, as
+[camera raw](formats.md#camera-raw) says — and before this section the
+Image section plotted it under a name that says the file stores it, which
+it does not: the counts a Canon file stores are one a photosite under the
+color filter, and the right edge of a developed red plot was as often the
+balance's doing as the sensor's. So the decoders hand the sensor's counts
+over beside the picture (`DecodedImage::sensor`, `image/sensor.rs`), the
+Image section plots those (`stored::Source::image`), and the developed
+picture moves up a section to where it stands in the flow: between the
+counts it was made from and the profile that is applied to it, under the
+name of the step that made it.
+
+The Develop section's plots are the developed channels, drawn by the same
+code as the Image section's (`stored::body`, from `stored::Source::developed`),
+with the developed pixel's values in its header as the Image section's
+header writes the counts: read one above the other, the two headers are
+one pixel before and after development. Under the plots, three rows of
+words (`develop::show`): the demosaic the mosaic went through, by its
+name; the balance each plane was multiplied by, in stops in the plane's
+own ink — `as stored` for an iPhone's ProRAW, whose counts the camera
+balanced before writing — and the share of each developed channel
+standing at white, read off the stored tallies (`Plane::rank` at 1, doubled,
+since the rank counts half of what sits at a value). The balance row is
+the answer to the question the two sets of plots raise together, which is
+how a channel short of the sensor's white in the Image plot came to stand
+against it in the Develop plot. For a mosaic the section ends with the
+photosites around the pointer (`develop::grid`): a 5-by-5 window of the
+counts the demosaic read to make the pixel, each cell washed with its
+plane's ink and the pointer's own outlined, read through the user's turn
+and the camera's as every pixel is (`Sensor::photosite`). It is the one
+thing on the panel that a histogram cannot show, which is why it is drawn
+rather than counted: a demosaiced pixel is a function of its neighbors,
+not of the one count under it, and the window is those neighbors.
+
+The gap the section leaves is on purpose. The counts and the developed
+pixel are not one quantity — a photosite holds one of them, a pixel three —
+so the Image section's header writes the one count in its plane's cell and
+leaves the other two cells empty, rather than interpolating two numbers the
+file does not hold. A raw stored three counts a pixel has no mosaic, so no
+window, and its counts are worked back from the developed pixel through
+the inverse of the development (`sensor::Recovery`) rather than kept, since
+a second copy of a 48-megapixel picture is too much to hold; where a
+developed channel sits at the clamp the inverse is a guess, and the header
+says so with a `~` before each count. The Image section's axis for a raw
+runs from nothing to the white level the file states, with the black level
+written on it (`Source::levels`), so that the room to the right of a plot
+is the sensor's own headroom; for a ProRAW, whose ten-bit codes go through
+a linearization table, the axis is the table's codes, which are what the
+file stores. The section is left out, with the Image section back to the
+decoded picture, while another of the file's images is shown in its place
+(`stored::sensor_of`), since the developed picture is then not on screen.
+
 The row of buttons — the marks on the picture, and at the far end the
 reset (`histogram::toolbar`) — acts on every plot in the column, or on the
 picture, and on no one section, so it stands above all of them and stays
@@ -189,7 +245,12 @@ into, and the side panel's width is worked out from it.
 **Image** is `Face::stored`, a `stats::Stored`: each of the file's channels
 as it stores them — no lift, the file's own primaries, and nothing the file
 does not hold, so no luminance, which is a weighting of the channels the
-display works out and, in the file's own primaries, not even that. It is a
+display works out and, in the file's own primaries, not even that. For a
+raw it is the sensor's `Stored` instead (`Sensor::stored`, tallied by
+`Mosaic::tally` or in `Linear::tile` as the picture is developed, through
+`Stored::of_codes`, a bin to the count), and `Face::stored` — the developed
+picture — is what the Develop section plots; `stored::Source` is which of
+the two a pass is drawing from. It is a
 plot to the channel (`stored::plots`), one under the other in the order the
 file keeps them, each poured from the channel's tally (`stats::Plane::plot`):
 a bin to the code for integer samples, so the plot is exact, and a bin to a
@@ -411,8 +472,10 @@ in stops the ticks are evenly spaced and the row runs the plot's width.
 `histogram::marked` hands every section its `Mark`: the bin its rule stands
 on and the words its header writes. A pointer on a pixel of the picture
 marks every section at once, each with the pixel as its own stage has it —
-the Image section reads `Current::sample_as_stored`, the Gain map section
-reads `GainMap::stops_at`,
+the Image section reads `Current::sample_as_stored`, or for a raw the
+sensor under the pixel (`stored::sensor_mark`, through `Sensor::at`), the
+Develop section reads `Current::sample_as_stored` in its turn, the Gain map
+section reads `GainMap::stops_at`,
 the Display section reads `Current::sample` and writes the value and what
 the display makes of it, and the Output section writes that response held
 to the surface's room. The rules down the column are one pixel's path from

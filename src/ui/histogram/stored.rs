@@ -1,7 +1,10 @@
 //! The Image section: the picture as the file stores it — no lift, and in
 //! its own primaries — at the foot of the column, where everything above it
 //! starts from. Named for the picture rather than for the file, since the
-//! gain map above it is the file's too.
+//! gain map above it is the file's too. And the plots of the Develop
+//! section, which are the same thing drawn of a raw's developed picture:
+//! a [`Source`] says which of the two a pass is drawing, and everything
+//! here is drawn from one.
 //!
 //! A plot to the stored channel, one under the other in the order the file
 //! keeps them, and nothing the file does not store: no luminance, which is
@@ -10,6 +13,17 @@
 //! on each plane's plot, and each channel's value in the header, in the
 //! plane's own color and in the units the file keeps it in, as the bottom
 //! bar's Decimal readout writes them.
+//!
+//! For a raw the file stores the sensor's counts, not the developed
+//! picture, and the Image section plots those ([`Source::image`], from
+//! [`crate::image::sensor`]): each plane's counts over the whole of the
+//! sensor's range, from nothing to the white level the file states, with
+//! the black and white levels written on the axis, so that how far the
+//! picture stands short of the sensor's saturation is the room to the right
+//! of it. The pointer's photosite is the one count the file holds there, in
+//! its plane's color, the other planes' cells left empty — or three counts
+//! worked back from the developed pixel for a raw stored three to a pixel,
+//! marked approximate where the development clamped a channel.
 //!
 //! The planes share one axis where the channels are compared against one
 //! another — a photograph's, over the whole range integer samples can hold,
@@ -27,6 +41,7 @@ use egui::FontId;
 use super::plot::{self, Counts, plane_bars};
 use super::*;
 use crate::image::Samples;
+use crate::image::sensor::Sensor;
 use crate::image::stats::{self, Axis, Stored};
 use crate::ui::pixel::component;
 
@@ -49,6 +64,111 @@ pub(super) const CHANNEL_PLOT_HEIGHT: f32 = 40.0;
 /// one.
 const PLANE_GAP: f32 = 3.0 * PLOT_INSET;
 
+/// What a count worked back from the developed pixel rather than read from
+/// the file is prefixed with: approximate, where the development clamped a
+/// channel and took what lay past the clamp with it.
+const APPROXIMATE: &str = "~";
+
+/// What one section's plots are of: the stored channels it draws, which
+/// section it is, and how a value along the axis is written. The Image
+/// section's is the file's — the sensor's counts for a raw, the decoded
+/// picture's otherwise — and the Develop section's is the developed
+/// picture's.
+pub(super) struct Source<'a> {
+    pub section: Section,
+    pub stored: &'a Arc<Stored>,
+    /// The code that is the top of the range: full scale for the decoded
+    /// picture's integer samples, the sensor's white level for a raw, and 1
+    /// for floats.
+    pub full: f32,
+    /// Whether the samples are floats, which are written as numbers rather
+    /// than as counts.
+    pub float: bool,
+    /// Whether the one plane is a gray picture's, drawn in the neutral.
+    pub gray: bool,
+    /// The levels written along the axis in place of its quarters, in the
+    /// units of `full`: a sensor's black and white.
+    pub levels: Option<Vec<f32>>,
+    /// The widest value a sample can be written as, which the header's
+    /// cells are sized to.
+    pub widest: String,
+}
+
+/// The sensor behind the picture on screen, while the picture itself is
+/// up: what the Image section plots in its place, and what the Develop
+/// section is about.
+pub(super) fn sensor_of(current: &Current) -> Option<&Sensor> {
+    (current.showing == Showing::Picture)
+        .then(|| current.picture_face().image.sensor.as_deref())
+        .flatten()
+}
+
+impl<'a> Source<'a> {
+    /// The Image section's: the sensor's counts for a raw, and the decoded
+    /// picture otherwise.
+    pub fn image(current: &'a Current) -> Self {
+        match sensor_of(current) {
+            Some(sensor) => {
+                // The levels on the axis: nothing, each distinct black, and
+                // white.
+                let mut levels = vec![0.0];
+                for &black in &sensor.black {
+                    if black > 0.0 && !levels.iter().any(|level| (level - black).abs() < 0.5) {
+                        levels.push(black);
+                    }
+                }
+                levels.push(sensor.white);
+                Self {
+                    section: Section::Image,
+                    stored: &sensor.stored,
+                    full: sensor.white,
+                    float: false,
+                    gray: sensor.planes() == 1,
+                    levels: Some(levels),
+                    widest: format!("{:.0}", sensor.white),
+                }
+            }
+            None => Self::decoded(current, Section::Image),
+        }
+    }
+
+    /// The Develop section's: the developed picture, as the decoder handed
+    /// it over.
+    pub fn developed(current: &'a Current) -> Self {
+        Self::decoded(current, Section::Develop)
+    }
+
+    /// The picture as the decoder handed it over, for `section`.
+    fn decoded(current: &'a Current, section: Section) -> Self {
+        let image = &current.image;
+        let float = matches!(image.samples, Samples::F32 { .. });
+        Self {
+            section,
+            stored: &current.stored,
+            full: image.samples.full_scale(),
+            float,
+            gray: image.is_gray(),
+            levels: None,
+            widest: match image.samples {
+                Samples::U8 { .. } => "255",
+                Samples::U16 { .. } => "65535",
+                Samples::F32 { .. } => "0.0000",
+            }
+            .to_string(),
+        }
+    }
+
+    /// The plane the `index`th stored channel is drawn as: a gray file's
+    /// one channel in the neutral, and a color file's in its channel's own.
+    fn plane_of(&self, index: usize) -> Plane {
+        if self.gray {
+            Plane::Luma
+        } else {
+            Plane::COLOR[index.min(Plane::COLOR.len() - 1)]
+        }
+    }
+}
+
 /// How the section is laid out for a file: how many channels it plots, and
 /// whether they share one axis, with one row of values under the last of
 /// them, or each has its own range and its own row.
@@ -65,10 +185,16 @@ impl Layout {
         shared: true,
     };
 
+    /// The Image section's layout for `current`.
     pub fn of(current: &Current) -> Self {
+        Self::of_source(&Source::image(current))
+    }
+
+    /// The layout of `source`'s plots.
+    pub(super) fn of_source(source: &Source) -> Self {
         Self {
-            planes: current.stored.planes.len().max(1),
-            shared: current.stored.shared,
+            planes: source.stored.planes.len().max(1),
+            shared: source.stored.shared,
         }
     }
 
@@ -130,7 +256,7 @@ pub(super) fn hovered(
         .find_map(|(plane, bars)| Some((plane, hovered_bin(bars, cursor)?)))
 }
 
-/// The section's plots, poured from the stored tallies once an arrival and
+/// A source's plots, poured from the stored tallies once an arrival and
 /// held between passes for as long as the stored scan is the same one: a
 /// plot per plane, and the count axis they share.
 pub(super) struct Plotted {
@@ -154,59 +280,40 @@ impl Plotted {
     }
 }
 
-/// The plots of `current`'s file as stored, from the pass before where the
-/// stored scan is the one they were poured from, and poured again where it
-/// is not.
-pub(super) fn plotted(ui: &egui::Ui, current: &Current) -> Arc<Plotted> {
-    let id = egui::Id::new("histogram image");
+/// The plots of `source`, from the pass before where the stored scan is the
+/// one they were poured from, and poured again where it is not. Each
+/// section keeps its own.
+pub(super) fn plotted(ui: &egui::Ui, source: &Source) -> Arc<Plotted> {
+    let id = egui::Id::new("histogram stored").with(source.section.title());
     if let Some(held) = ui.data(|data| data.get_temp::<Arc<Plotted>>(id))
-        && Arc::ptr_eq(&held.stored, &current.stored)
+        && Arc::ptr_eq(&held.stored, source.stored)
     {
         return held;
     }
-    let made = Arc::new(Plotted::of(&current.stored));
+    let made = Arc::new(Plotted::of(source.stored));
     ui.data_mut(|data| data.insert_temp(id, made.clone()));
     made
 }
 
-/// The plots of `current`'s file as stored, worked out afresh: what a test
-/// holds the trace against, with no pass to keep them in.
+/// The plots of `source`, worked out afresh: what a test holds the trace
+/// against, with no pass to keep them in.
 #[cfg(test)]
-pub(super) fn plotted_for(current: &Current) -> Plotted {
-    Plotted::of(&current.stored)
-}
-
-/// Whether the file's samples are floats, which are written as numbers
-/// rather than as counts.
-fn float(current: &Current) -> bool {
-    matches!(current.image.samples, Samples::F32 { .. })
-}
-
-/// The plane the `index`th stored channel is drawn as: a gray file's one
-/// channel in the neutral, and a color file's in its channel's own.
-fn plane_of(current: &Current, index: usize) -> Plane {
-    if current.image.is_gray() {
-        Plane::Luma
-    } else {
-        Plane::COLOR[index.min(Plane::COLOR.len() - 1)]
-    }
+pub(super) fn plotted_for(source: &Source) -> Plotted {
+    Plotted::of(source.stored)
 }
 
 /// A value on a plane's axis, in the units the file keeps its samples in:
 /// counts for integer samples, the number itself for floats, as
 /// [`component`] writes them. On an axis in stops the value is stops of
 /// the file's own 1, and the number is what stands there.
-fn stored_words(current: &Current, place: f32) -> String {
-    component(
-        stored_at(current, place) * current.image.samples.full_scale(),
-        float(current),
-    )
+fn stored_words(source: &Source, place: f32) -> String {
+    component(stored_at(source, place) * source.full, source.float)
 }
 
 /// The value as stored standing at `place` on a plane's axis: a fraction
 /// of full scale for integer samples, the number itself for floats.
-fn stored_at(current: &Current, place: f32) -> f32 {
-    match current.stored.axis {
+fn stored_at(source: &Source, place: f32) -> f32 {
+    match source.stored.axis {
         Axis::Stops => place.exp2(),
         Axis::Curve(_) => place,
     }
@@ -221,21 +328,29 @@ fn bin_value_in(range: [f32; 2], bin: usize) -> f32 {
 /// axis and in the units the file keeps its samples in. A photograph's
 /// integer samples have their whole range in quarters — 0, 64, 128, 192 and
 /// 255 for eight bits, the quarters of a power of two, the last held to the
-/// top — and any other plane its two ends. None on an axis in stops, which
-/// has a row of stops instead: see [`stop_across`].
-pub(super) fn ticks(current: &Current, plane: &stats::Plane) -> Vec<(f32, String)> {
+/// top — and any other plane its two ends; a sensor's has its levels
+/// instead, nothing, black and white, which are what its counts are read
+/// against. None on an axis in stops, which has a row of stops instead: see
+/// [`stop_across`].
+pub(super) fn ticks(source: &Source, plane: &stats::Plane) -> Vec<(f32, String)> {
     let [low, high] = plane.range;
     let span = high - low;
-    if span.is_nan() || span <= 0.0 || current.stored.axis == Axis::Stops {
+    if span.is_nan() || span <= 0.0 || source.stored.axis == Axis::Stops {
         return Vec::new();
     }
     let along = |axis: f32| (axis - low) / span;
-    let full = current.image.samples.full_scale();
-    let whole = !float(current) && current.stored.shared && plane.range == [0.0, 1.0];
+    let full = source.full;
+    if let Some(levels) = &source.levels {
+        return levels
+            .iter()
+            .map(|&level| (along(level / full), ends_words(level, false)))
+            .collect();
+    }
+    let whole = !source.float && source.stored.shared && plane.range == [0.0, 1.0];
     if !whole {
         return [low, high]
             .into_iter()
-            .map(|axis| (along(axis), ends_words(axis * full, float(current))))
+            .map(|axis| (along(axis), ends_words(axis * full, source.float)))
             .collect();
     }
     (0..=4)
@@ -272,16 +387,16 @@ fn ends_words(stored: f32, float: bool) -> String {
 /// What the section says with the pointer on the `plane`th plot at `bin`:
 /// the value the bin stands for, in the units the file keeps its samples
 /// in, in the plane's own color.
-pub(super) fn bin_mark(current: &Current, plane: usize, bin: usize) -> Mark {
-    let stored = &current.stored.planes[plane];
+pub(super) fn bin_mark(source: &Source, plane: usize, bin: usize) -> Mark {
+    let stored = &source.stored.planes[plane];
     let place = bin_value_in(stored.range, bin);
-    let words = stored_words(current, place);
-    let rank = stored.rank(stored_at(current, place));
+    let words = stored_words(source, place);
+    let rank = stored.rank(stored_at(source, place));
     Mark {
         bin: Some(bin),
         words: words.clone(),
         channels: vec![Channel {
-            plane: plane_of(current, plane),
+            plane: source.plane_of(plane),
             bin: Some(bin),
             words,
             rank,
@@ -289,12 +404,23 @@ pub(super) fn bin_mark(current: &Current, plane: usize, bin: usize) -> Mark {
     }
 }
 
-/// What the section says with the pointer on the picture's pixel `(x, y)`:
-/// the pixel as the file stores it, a channel at a time — red, green and
-/// blue as the file holds them, or a gray file's one channel — each with
-/// the bin of its own plane's plot.
+/// What the Image section says with the pointer on the picture's pixel
+/// `(x, y)`: the sensor's counts there for a raw, and the pixel as the
+/// decoded picture holds it otherwise.
+pub(super) fn image_mark(current: &Current, x: u32, y: u32) -> Option<Mark> {
+    match sensor_of(current) {
+        Some(sensor) => sensor_mark(current, sensor, x, y),
+        None => pixel_mark(current, x, y),
+    }
+}
+
+/// What a section says with the pointer on the picture's pixel `(x, y)`:
+/// the pixel as the decoded picture stores it, a channel at a time — red,
+/// green and blue as the file holds them, or a gray file's one channel —
+/// each with the bin of its own plane's plot.
 pub(super) fn pixel_mark(current: &Current, x: u32, y: u32) -> Option<Mark> {
     let sample = current.sample_as_stored(x, y)?;
+    let source = Source::decoded(current, Section::Image);
     let image = &current.image;
     let stored = &current.stored;
     let scale = 1.0 / image.samples.full_scale();
@@ -304,10 +430,50 @@ pub(super) fn pixel_mark(current: &Current, x: u32, y: u32) -> Option<Mark> {
         .zip(sample.stored())
         .enumerate()
         .map(|(index, (plane, &value))| Channel {
-            plane: plane_of(current, index),
+            plane: source.plane_of(index),
             bin: plane.bin_at(stored.axis.place_stored(value * scale)),
-            words: component(value, float(current)),
+            words: component(value, source.float),
             rank: plane.rank(value * scale),
+        })
+        .collect();
+    Some(Mark {
+        channels,
+        ..Mark::default()
+    })
+}
+
+/// What the Image section says of the pixel `(x, y)` for a raw: the counts
+/// the sensor holds under it, a cell to the plane — the one its photosite
+/// is under, the others empty — or the three worked back from the developed
+/// pixel, prefixed [`APPROXIMATE`] where they are not the file's own.
+fn sensor_mark(current: &Current, sensor: &Sensor, x: u32, y: u32) -> Option<Mark> {
+    let sample = current.sample_as_stored(x, y)?;
+    let image = &current.image;
+    let size = [image.width, image.height];
+    let at = current.turn.stored([x, y], size);
+    let full = image.samples.full_scale();
+    let pixel: Vec<f32> = sample.stored().iter().map(|value| value / full).collect();
+    let reading = sensor.at(at, size, &pixel)?;
+    let source = Source::image(current);
+    let channels = source
+        .stored
+        .planes
+        .iter()
+        .zip(&reading.counts)
+        .enumerate()
+        .map(|(index, (plane, count))| {
+            let fraction = count.map(|count| count / sensor.white);
+            Channel {
+                plane: source.plane_of(index),
+                bin: fraction
+                    .and_then(|fraction| plane.bin_at(source.stored.axis.place_stored(fraction))),
+                words: match count {
+                    Some(count) if reading.exact => component(*count, false),
+                    Some(count) => format!("{APPROXIMATE}{}", component(*count, false)),
+                    None => String::new(),
+                },
+                rank: fraction.and_then(|fraction| plane.rank(fraction)),
+            }
         })
         .collect();
     Some(Mark {
@@ -327,11 +493,44 @@ pub(super) fn show(
     plotted: &Plotted,
     mark: Option<&Mark>,
 ) {
-    let stored = &current.stored;
-    let layout = Layout::of(current);
+    let source = Source::image(current);
+    body(pass, ui, &source, rect, plotted, mark);
+    header(pass, ui, &source, rect, mark);
+}
+
+/// The section's header, with the pixel's values in it where the mark is
+/// the pixel's, and its words where it is a plot's.
+pub(super) fn header(pass: &Pass, ui: &egui::Ui, source: &Source, rect: Rect, mark: Option<&Mark>) {
+    match mark {
+        Some(mark) if !mark.channels.is_empty() => {
+            section::header(pass, ui, source.section, rect, None);
+            values(pass, ui, source, rect, mark);
+        }
+        _ => section::header(
+            pass,
+            ui,
+            source.section,
+            rect,
+            mark.map(|mark| mark.words.as_str()),
+        ),
+    }
+}
+
+/// A plot of each of `source`'s channels, with a rule in each plane's
+/// color for the pixel's channel and the rows of values under them.
+pub(super) fn body(
+    pass: &Pass,
+    ui: &egui::Ui,
+    source: &Source,
+    rect: Rect,
+    plotted: &Plotted,
+    mark: Option<&Mark>,
+) {
+    let stored = source.stored;
+    let layout = Layout::of_source(source);
     let rects = plots(rect, layout);
     for (index, (bars, counts)) in rects.iter().zip(&plotted.planes).enumerate() {
-        let plane = plane_of(current, index);
+        let plane = source.plane_of(index);
         // The pixel's rule on this plane, in the plane's color, with where
         // its value stands among the plane's pixels beside it.
         let marked: Vec<&Channel> = match mark {
@@ -349,7 +548,7 @@ pub(super) fn show(
         let stands = plane_bars(
             pass,
             ui,
-            Section::Image,
+            source.section,
             counts,
             plane.ink(),
             plotted.counts,
@@ -367,7 +566,7 @@ pub(super) fn show(
             && let Some(plane) = stored.planes.get(index)
         {
             let row = ev_row(*bars, bars.bottom() + PLOT_INSET);
-            plot::value_scale(pass, ui, row, &ticks(current, plane));
+            plot::value_scale(pass, ui, row, &ticks(source, plane));
         }
     }
     // The one row under the last plot, where the planes share an axis.
@@ -379,46 +578,30 @@ pub(super) fn show(
             Axis::Stops => {
                 plot::ev_scale(pass, ui, row, STOP_REACH, |stop| stop_across(range, stop))
             }
-            Axis::Curve(_) => plot::value_scale(pass, ui, row, &ticks(current, plane)),
+            Axis::Curve(_) => plot::value_scale(pass, ui, row, &ticks(source, plane)),
         }
-    }
-    match mark {
-        Some(mark) if !mark.channels.is_empty() => {
-            section::header(pass, ui, Section::Image, rect, None);
-            values(pass, ui, current, rect, mark);
-        }
-        _ => section::header(
-            pass,
-            ui,
-            Section::Image,
-            rect,
-            mark.map(|mark| mark.words.as_str()),
-        ),
     }
 }
 
 /// The pixel's values at the end of the header, each in its plane's ink:
 /// red, green and blue, in the order the file keeps them. Each is set right
 /// in a cell as wide as the widest value the file's samples can be written
-/// as, so that the numbers hold still as the pointer crosses the picture.
-fn values(pass: &Pass, ui: &egui::Ui, current: &Current, rect: Rect, mark: &Mark) {
+/// as, so that the numbers hold still as the pointer crosses the picture,
+/// and a plane the pixel has no value in — a photosite under another
+/// color — keeps its cell empty.
+fn values(pass: &Pass, ui: &egui::Ui, source: &Source, rect: Rect, mark: &Mark) {
     let painter = ui.painter();
     let font = FontId::proportional(ROW_TEXT);
     let line = section::header_line(rect);
     let middle = line.y + line.height / 2.0;
-    let widest = match current.image.samples {
-        Samples::U8 { .. } => "255",
-        Samples::U16 { .. } => "65535",
-        Samples::F32 { .. } => "0.0000",
-    };
     let width_of = |words: &str| {
         painter
             .layout_no_wrap(words.to_owned(), font.clone(), Color32::PLACEHOLDER)
             .size()
             .x
     };
-    let cell = width_of(widest);
-    let mut end = section::readout_end(Section::Image, line);
+    let cell = width_of(&source.widest);
+    let mut end = section::readout_end(source.section, line);
     for channel in mark.channels.iter().rev() {
         let galley =
             painter.layout_no_wrap(channel.words.clone(), font.clone(), Color32::PLACEHOLDER);

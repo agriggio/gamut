@@ -550,6 +550,7 @@ mod tests {
             gain_map: None,
             depth: None,
             opens_on: None,
+            sensor: None,
         }
     }
 
@@ -769,6 +770,7 @@ mod tests {
                     gain_map: None,
                     depth: None,
                     opens_on: None,
+                    sensor: None,
                 };
                 let plan = plan(&decoded, capabilities);
                 assert_eq!(

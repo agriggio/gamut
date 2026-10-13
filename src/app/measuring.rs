@@ -243,6 +243,7 @@ mod tests {
             })),
             depth: None,
             opens_on: None,
+            sensor: None,
         })
     }
 

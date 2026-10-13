@@ -669,6 +669,22 @@ plot counts how far that rendering lifts each pixel. The rows of stops
 under the tone curve and the gain table count the brightness going in,
 from white: the curve's toe, where it takes the deepest shadows to black,
 differs from one picture to the next.
+
+For a camera raw, the *Image* section at the foot is the sensor's own
+counts: a plot for each color under the filter, from nothing to the
+sensor's white level, with the black level marked on the axis, so the
+room to the right of a plot is how far the sensor was from saturating.
+Pointing at the picture writes the one count under the pointer in its
+color, since a photosite holds one color; a raw that stores three counts
+a pixel writes all three, with a `~` before them where the development
+clipped a channel and they can only be worked back approximately. Above
+it, the *Develop* section is the picture as it was developed from those
+counts, with the demosaic, the balance each color was multiplied by in
+stops, and the share of each channel standing at white: a channel against
+the right edge there and short of it in the *Image* plot below was put
+there by the balance, not by the sensor. Under the rows, for a mosaic, are
+the photosites around the pointer, a window of five by five counts in
+their colors, which is what the demosaic read to make the pixel.
 Pointing at a plot names the value under
 the pointer at that stage; pointing at the picture marks the pixel on every
 plot and writes its value at each stage, from the file at the foot of the

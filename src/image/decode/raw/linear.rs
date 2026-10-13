@@ -42,6 +42,8 @@ use jxl_oxide::{AllocTracker, JxlImage, PixelFormat};
 
 use super::profile::{self, Matrix, Profile};
 use crate::image::gain_map::{self, Data, GainMap, GainTable, Lift};
+use crate::image::sensor::{self, Sensor};
+use crate::image::stats::Stored;
 use crate::image::tiff::{self, Entry, Order};
 use crate::image::{
     AlphaMode, Channels, ColorSpace, DecodedImage, Primaries, Referred, Samples, Transfer,
@@ -107,8 +109,9 @@ pub struct Linear {
     tile: [u32; 2],
     /// Where each tile's codestream is in the file, row by row.
     tiles: Vec<std::ops::Range<usize>>,
-    /// What each stored value means, where the file says.
-    table: Option<Vec<f32>>,
+    /// What each stored value means, where the file says. Shared with the
+    /// sensor's recovery of a developed pixel's counts.
+    table: Option<Arc<Vec<f32>>>,
     /// Each channel's black and white, in the linearized values.
     black: [f32; 3],
     white: [f32; 3],
@@ -117,6 +120,10 @@ pub struct Linear {
     black_down: Vec<f32>,
     /// From the camera's values, scaled to 0..1, to linear Rec. 2020.
     matrix: [[f32; 3]; 3],
+    /// `AsShotNeutral`: what the camera's channels read for white, which
+    /// the matrix carries to white and the Develop section says the balance
+    /// from.
+    neutral: Option<[f64; 3]>,
     /// How the profile says the picture should look, where it says
     /// anything.
     rendering: Option<Rendering>,
@@ -520,7 +527,9 @@ impl Linear {
             Some(table) if table.is_empty() || table.len() > TABLE_MAX => {
                 bail!("the DNG's linearization table has {} entries", table.len())
             }
-            Some(table) => Some(table.into_iter().map(|value| value as f32).collect()),
+            Some(table) => Some(Arc::new(
+                table.into_iter().map(|value| value as f32).collect(),
+            )),
             None => None,
         };
 
@@ -555,7 +564,8 @@ impl Linear {
         let black_across = delta(tag::BLACK_LEVEL_DELTA_H, width)?;
         let black_down = delta(tag::BLACK_LEVEL_DELTA_V, height)?;
 
-        let matrix = color(first)?.to_bt2020()?;
+        let camera = color(first)?;
+        let matrix = camera.to_bt2020()?;
         let rendering = Rendering::read(first, picture)?;
         Ok(Self {
             width,
@@ -568,29 +578,61 @@ impl Linear {
             black_across,
             black_down,
             matrix,
+            neutral: camera.neutral,
             rendering,
         })
     }
 
-    /// The picture, as stored: the turn the file asks for is the caller's.
-    /// With `profile`, its profile's rendering beside it, where it has one,
-    /// as the gain map the display lifts it by.
-    pub fn develop(&self, bytes: &[u8], profile: bool) -> Result<DecodedImage> {
+    /// The code the stored values run up to, which is the Image section's
+    /// axis: the last entry of the linearization table where the file has
+    /// one — an iPhone stores ten-bit codes through a table of 1024 — and
+    /// the highest white level of the three channels otherwise.
+    fn full(&self) -> f32 {
+        match &self.table {
+            Some(table) => (table.len() - 1) as f32,
+            None => self.white.iter().copied().fold(1.0, f32::max),
+        }
+    }
+
+    /// Each channel's black as a stored code: the first code the table
+    /// takes to the black level or past it, or the level itself where there
+    /// is no table.
+    fn black_codes(&self) -> Vec<f32> {
+        self.black
+            .iter()
+            .map(|&black| match &self.table {
+                Some(table) => table.partition_point(|&value| value < black) as f32,
+                None => black,
+            })
+            .collect()
+    }
+
+    /// The picture, as stored: the turn the file asks for is the caller's,
+    /// and `turned` says which it will be, for the sensor's counts beside
+    /// the picture. With `profile`, its profile's rendering beside it, where
+    /// it has one, as the gain map the display lifts it by.
+    pub fn develop(
+        &self,
+        bytes: &[u8],
+        profile: bool,
+        turned: crate::image::orient::Orientation,
+    ) -> Result<DecodedImage> {
         let (width, height) = (self.width as usize, self.height as usize);
         let output = Mutex::new(vec![0u16; width * height * 3]);
         let rendering = self.rendering.as_ref().filter(|_| profile);
         let ratios = rendering.map(|_| Mutex::new(vec![f16::ONE; width * height * 3]));
         let range: Mutex<Range> = Mutex::new(None);
+        let tallies = Mutex::new(vec![vec![0u32; self.full() as usize + 1]; 3]);
         let across = self.width.div_ceil(self.tile[0]) as usize;
         let mut failures: Vec<Option<anyhow::Error>> =
             (0..self.tiles.len()).map(|_| None).collect();
         rayon_core::scope(|scope| {
             for (index, failure) in failures.iter_mut().enumerate() {
-                let (output, ratios, range) = (&output, ratios.as_ref(), &range);
+                let (output, ratios, range, tallies) = (&output, ratios.as_ref(), &range, &tallies);
                 scope.spawn(move |_| {
                     let at = [index % across, index / across];
                     let lifted = rendering.zip(ratios);
-                    match self.tile(bytes, index, at, output, lifted) {
+                    match self.tile(bytes, index, at, output, lifted, tallies) {
                         Ok(found) => {
                             if let Ok(mut range) = range.lock() {
                                 *range = widen(*range, found);
@@ -627,6 +669,10 @@ impl Linear {
         // As LibRaw's development is: linear, balanced, and 1.0 where the
         // sensor saturated.
         image.referred = Referred::Display;
+        let tallies = tallies
+            .into_inner()
+            .map_err(|_| anyhow!("a tile's thread panicked"))?;
+        image.sensor = Some(Arc::new(self.sensor(tallies, turned)?));
         if let (Some(rendering), Some(ratios)) = (rendering, ratios) {
             let ratios = ratios
                 .into_inner()
@@ -646,6 +692,46 @@ impl Linear {
         Ok(image)
     }
 
+    /// The sensor's counts beside the developed picture: the stored values
+    /// tallied a plane to the channel, and what works a developed pixel
+    /// back to them — the matrix undone, then the levels and the table. The
+    /// counts are balanced as stored where the neutral is white already,
+    /// and the Develop section's balance is otherwise what the matrix did
+    /// to carry the neutral to white, the green at 1.
+    fn sensor(
+        &self,
+        tallies: Vec<Vec<u32>>,
+        turned: crate::image::orient::Orientation,
+    ) -> Result<Sensor> {
+        let full = self.full();
+        let wide: Matrix = std::array::from_fn(|row| self.matrix[row].map(f64::from));
+        let inverse = profile::invert(wide)?;
+        let balance = match self.neutral {
+            Some(neutral) if neutral.iter().all(|value| *value > 0.0) => {
+                std::array::from_fn(|c| (neutral[1] / neutral[c]) as f32)
+            }
+            _ => [1.0; 3],
+        };
+        Ok(Sensor {
+            layout: sensor::Layout::Rgb(sensor::Recovery {
+                inverse: std::array::from_fn(|row| inverse[row].map(|value| value as f32)),
+                black: self.black,
+                white: self.white,
+                black_across: self.black_across.clone(),
+                black_down: self.black_down.clone(),
+                table: self.table.clone(),
+            }),
+            turned,
+            white: full,
+            black: self.black_codes(),
+            stored: Arc::new(Stored::of_codes(tallies, full)),
+            development: sensor::Development {
+                demosaic: None,
+                balance,
+            },
+        })
+    }
+
     /// Decodes tile `index`, the `at`th across and down, develops it in
     /// place, and copies the part of it inside the picture into `output`;
     /// with `lifted`, works out what the profile renders each pixel as, and
@@ -658,6 +744,7 @@ impl Linear {
         at: [usize; 2],
         output: &Mutex<Vec<u16>>,
         lifted: Option<(&Rendering, &Mutex<Vec<f16>>)>,
+        tallies: &Mutex<Vec<Vec<u32>>>,
     ) -> Result<Range> {
         let [tile_width, tile_height] = self.tile.map(|side| side as usize);
         let mut values = decode_tile(&bytes[self.tiles[index].clone()], self.tile)?;
@@ -668,6 +755,11 @@ impl Linear {
         let rows = tile_height.min(self.height as usize - top);
         let mut ratios = lifted.map(|_| vec![f16::ONE; columns * rows * 3]);
         let mut range: Range = None;
+        // The tile's own tallies of the stored values, merged into the
+        // picture's once at the end rather than under a lock a value at a
+        // time.
+        let codes = self.full() as usize + 1;
+        let mut tallied = vec![vec![0u32; codes]; 3];
         for row in 0..rows {
             let y = top + row;
             for column in 0..columns {
@@ -675,6 +767,7 @@ impl Linear {
                 let pixel = (row * tile_width + column) * 3;
                 let camera: [f32; 3] = std::array::from_fn(|c| {
                     let stored = values[pixel + c];
+                    tallied[c][usize::from(stored).min(codes - 1)] += 1;
                     let linear = match &self.table {
                         Some(table) => table[usize::from(stored).min(table.len() - 1)],
                         None => f32::from(stored),
@@ -712,6 +805,16 @@ impl Linear {
             output[to..to + columns * 3].copy_from_slice(&values[from..from + columns * 3]);
         }
         drop(output);
+        {
+            let mut tallies = tallies
+                .lock()
+                .map_err(|_| anyhow!("a tile's thread panicked"))?;
+            for (plane, counts) in tallies.iter_mut().zip(&tallied) {
+                for (sum, count) in plane.iter_mut().zip(counts) {
+                    *sum += count;
+                }
+            }
+        }
         if let (Some((_, map)), Some(ratios)) = (lifted, ratios) {
             let mut map = map
                 .lock()
@@ -836,6 +939,7 @@ fn per_channel(values: Option<Vec<f64>>, missing: f32, name: &str) -> Result<[f3
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::image::orient::Orientation;
 
     fn fixture(name: &str) -> Vec<u8> {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -947,7 +1051,9 @@ mod tests {
     fn the_fixtures_profile_bakes_the_ratios_it_states() {
         let bytes = fixture("dng-jxl.dng");
         let linear = Linear::read(&bytes).unwrap().unwrap();
-        let image = linear.develop(&bytes, true).unwrap();
+        let image = linear
+            .develop(&bytes, true, Orientation::NoTransforms)
+            .unwrap();
         let map = image.gain_map.as_deref().expect("a profile");
         let Lift::Profile(profile) = &map.lift else {
             panic!("a profile's lift");
@@ -964,7 +1070,74 @@ mod tests {
         assert_eq!(red[1..], [0.0, 0.0], "{red:?}");
         assert!(profile.range[0] <= -2.0 && profile.range[1] >= -2.0);
 
-        assert!(linear.develop(&bytes, false).unwrap().gain_map.is_none());
+        assert!(
+            linear
+                .develop(&bytes, false, Orientation::NoTransforms)
+                .unwrap()
+                .gain_map
+                .is_none()
+        );
+    }
+
+    /// The developed picture carries its sensor: the stored codes tallied a
+    /// plane to the channel over the linearization table's codes, and a
+    /// developed pixel worked back to the codes the tile holds.
+    #[test]
+    fn the_developed_picture_carries_the_stored_codes() {
+        use crate::image::sensor::Layout;
+        let bytes = fixture("dng-jxl.dng");
+        let linear = Linear::read(&bytes).unwrap().unwrap();
+        let image = linear
+            .develop(&bytes, true, Orientation::NoTransforms)
+            .unwrap();
+        let sensor = image.sensor.as_deref().expect("the sensor");
+        let table = linear.table.as_deref().expect("the fixture's table");
+        assert_eq!(sensor.white, (table.len() - 1) as f32);
+        assert!(matches!(sensor.layout, Layout::Rgb(_)));
+        assert_eq!(sensor.development.demosaic, None);
+        assert!(sensor.development.balanced_as_stored());
+        let pixels = (image.width * image.height) as f32;
+        for plane in &sensor.stored.planes {
+            // Every pixel counted: the share at or below the top is all.
+            assert_eq!(plane.rank(1.0).map(|rank| rank <= 1.0), Some(true));
+            assert!(plane.max <= 1.0 && plane.min >= 0.0, "{plane:?}");
+        }
+        // The first tile's pixels, as stored, are what the developed pixels
+        // work back to: the fixture's matrix is the identity, so even a
+        // primary — a channel at the clamp, which the reading calls
+        // approximate — comes back, short of the clamp only where the code
+        // itself ran past white.
+        let stored = decode_tile(&bytes[linear.tiles[0].clone()], linear.tile).unwrap();
+        let Samples::U16 { data, .. } = &image.samples else {
+            panic!("sixteen bits");
+        };
+        let mut approximate = 0;
+        for y in 0..image.height.min(linear.tile[1]) {
+            for x in 0..image.width.min(linear.tile[0]) {
+                let at = ((y * image.width + x) * 3) as usize;
+                let developed: Vec<f32> = data[at..at + 3]
+                    .iter()
+                    .map(|&value| f32::from(value) / 65535.0)
+                    .collect();
+                let reading = sensor
+                    .at([x, y], [image.width, image.height], &developed)
+                    .unwrap();
+                approximate += usize::from(!reading.exact);
+                let tile_at = ((y * linear.tile[0] + x) * 3) as usize;
+                for c in 0..3 {
+                    let count = reading.counts[c].unwrap();
+                    let held = f32::from(stored[tile_at + c]);
+                    let agrees = (count - held).abs() <= 1.0
+                        || (developed[c] >= 1.0 && held >= count)
+                        || (developed[c] <= 0.0 && held <= count);
+                    assert!(agrees, "({x}, {y}) channel {c}: {count} for {held}");
+                }
+            }
+        }
+        assert!(
+            approximate > 0,
+            "the primaries sit at the clamp, of {pixels}"
+        );
     }
 
     /// A profile tag that is not what the specification says never stops
@@ -974,7 +1147,9 @@ mod tests {
     fn a_profile_tag_never_refuses_the_develop() {
         let bytes = fixture("dng-jxl-profile-cut.dng");
         let linear = Linear::read(&bytes).unwrap().unwrap();
-        let image = linear.develop(&bytes, true).unwrap();
+        let image = linear
+            .develop(&bytes, true, Orientation::NoTransforms)
+            .unwrap();
         let Some(Lift::Profile(profile)) = image.gain_map.as_deref().map(|map| &map.lift) else {
             panic!("the rest of the profile");
         };

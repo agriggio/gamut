@@ -2257,6 +2257,33 @@ impl Stored {
         }
     }
 
+    /// `counts`, a plane to the channel and a bin to the code over
+    /// `0..=full`, as the planes of a picture whose codes they are: on a
+    /// linear axis, every plane over the whole of the range, so that how far
+    /// a channel stands short of `full` is the room to the right of it.
+    /// What a raw's sensor is tallied into — see [`crate::image::sensor`].
+    pub fn of_codes(counts: Vec<Vec<u32>>, full: f32) -> Self {
+        let planes = counts
+            .into_iter()
+            .map(|counts| {
+                let tally = Tally::Codes { counts, full };
+                let (min, max) = tally.extremes();
+                Plane {
+                    min,
+                    max,
+                    range: [0.0, 1.0],
+                    tally: Arc::new(tally),
+                    binned: None,
+                }
+            })
+            .collect();
+        Self {
+            axis: Axis::Curve(Transfer::Linear),
+            planes,
+            shared: true,
+        }
+    }
+
     /// The range every plane is plotted over where they share one.
     pub fn shared_range(&self) -> Option<[f32; 2]> {
         self.shared
@@ -2288,6 +2315,7 @@ mod tests {
             gain_map: None,
             depth: None,
             opens_on: None,
+            sensor: None,
         }
     }
 
@@ -2388,6 +2416,7 @@ mod tests {
             gain_map: None,
             depth: None,
             opens_on: None,
+            sensor: None,
         };
         let key = Stats::scan(&element).key.unwrap();
         assert!((key - 0.5).abs() < 1e-3, "{key}");
@@ -2427,6 +2456,7 @@ mod tests {
             gain_map: None,
             depth: None,
             opens_on: None,
+            sensor: None,
         }
     }
 
@@ -2509,6 +2539,7 @@ mod tests {
             gain_map: None,
             depth: None,
             opens_on: None,
+            sensor: None,
         }
     }
 
@@ -2618,6 +2649,7 @@ mod tests {
                                 gain_map: None,
                                 depth: None,
                                 opens_on: None,
+                                sensor: None,
                             };
                             let table = lifted.then(|| {
                                 let map = GainMap {
@@ -2840,6 +2872,7 @@ mod tests {
             gain_map: None,
             depth: None,
             opens_on: None,
+            sensor: None,
         };
 
         let p3 = Stats::scan(&red(Primaries::DisplayP3));
@@ -2907,6 +2940,7 @@ mod tests {
             gain_map: None,
             depth: None,
             opens_on: None,
+            sensor: None,
         };
         let stats = Stats::scan(&image);
         let plot = &stats.plot;
@@ -2955,6 +2989,7 @@ mod tests {
             gain_map: None,
             depth: None,
             opens_on: None,
+            sensor: None,
         };
         // BT.709 luminance weights green at 0.7152.
         assert!((Stats::scan(&green).max - 0.7152).abs() < 1e-4);
@@ -2976,6 +3011,7 @@ mod tests {
             gain_map: None,
             depth: None,
             opens_on: None,
+            sensor: None,
         }
     }
 
@@ -3156,6 +3192,7 @@ mod tests {
             gain_map: None,
             depth: None,
             opens_on: None,
+            sensor: None,
         }
     }
 
@@ -3395,6 +3432,7 @@ mod tests {
             gain_map: None,
             depth: None,
             opens_on: None,
+            sensor: None,
         };
         let stats = Stats::scan(&image);
         assert!((stats.min - 0.25).abs() < 1e-6);

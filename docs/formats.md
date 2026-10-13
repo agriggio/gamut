@@ -419,7 +419,13 @@ wide, and the color count. `build.rs` pins the library at 0.21 or newer,
 where those structs took their present shape, and `Handle::check_layout`
 compares the transcription against the accessors the library does have when
 a file is opened, so a layout that has moved is an error rather than a
-garbled size.
+garbled size. Two more fields sit too deep in the struct to transcribe —
+the mosaic as the sensor made it, and the black levels, behind the maker
+notes and the output parameters, whose layouts move between versions — so
+`raw/shim.c`, three accessors in C, is compiled against the installed
+library's own header by `build.rs` through the `cc` crate, which the
+Wayland crates already build with. The header says where the fields are,
+whatever the version.
 
 Every other decoder is pure Rust or, for HEIF, a crate's binding; this one
 is a binding of its own. It is also the second system library the package
@@ -444,6 +450,23 @@ which is dcraw's `-g 1 1`; sixteen bits; and Rec. 2020 as the output space,
 the widest this program names, so that a saturated flower the sensor
 recorded clips less than it would in sRGB. The result is linear light with
 1.0 at the sensor's saturation point.
+
+Beside it goes what the file actually stores (`DecodedImage::sensor`,
+`image/sensor.rs`): the mosaic, copied out of the library's frame inside
+its margins once the file is unpacked and before it is developed
+(`Handle::sensor`), since developing takes the black off every count and
+zeroes the levels it took; the pattern, dcraw's `filters` word or the
+X-Trans grid, with each color's plane read off `cdesc`; the black level and
+what each color adds to it, the white level from `libraw_get_color_maximum`,
+and the multipliers the development will apply. Each plane is tallied a bin
+to the count as it is copied (`Mosaic::tally`), which is what the
+[histogram](histogram.md#a-column-of-stages)'s Image section plots for a
+raw, and the mosaic itself is kept for the pointer's readout and the window
+of photosites around it: a third the size of the developed picture. A
+sensor that is not a mosaic under red, green and blue — Foveon's layers, a
+four-color filter, a frame the library describes in a way the copy cannot
+follow, or one whose turned size is not the developed picture's — is left
+out, and the Image section plots the developed picture as it did.
 
 The file's `linear_max`, which LibRaw reads for several makers, is not used
 as the white, though for Canon it is the level the maker calls the end of
@@ -530,6 +553,16 @@ Turning is LibRaw's reading of the orientation, as for the developed frame,
 and LibRaw's size for the file is the full picture with no crop, so the
 probe and the develop agree. A 48-megapixel ProRAW develops in about a
 second on this machine.
+
+Its sensor (`Linear::sensor`) is the stored codes tallied a plane to the
+channel in the tile pass, before the table and the levels, over the
+linearization table's codes where the file has one — an iPhone's are
+ten-bit codes through a table of 1024 — and the white levels otherwise.
+The codes themselves are not kept: three counts a pixel at sixteen bits
+is the developed picture over again. The pointer's are worked back from the
+developed pixel instead (`sensor::Recovery`): the matrix undone through
+its inverse, then the levels and the table, which is exact wherever no
+developed channel was clamped and marked approximate where one was.
 
 **The profile's rendering.** The file also says how it should *look*, in
 three tags of its camera profile: `BaselineExposure`, `ProfileGainTableMap`

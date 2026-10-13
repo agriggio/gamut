@@ -319,7 +319,8 @@ fn apply(matrix: Matrix, vector: [f64; 3]) -> [f64; 3] {
     })
 }
 
-fn invert(m: Matrix) -> Result<Matrix> {
+/// The inverse of `m`, or an error for a matrix with none to speak of.
+pub(super) fn invert(m: Matrix) -> Result<Matrix> {
     let cofactor = |row: usize, column: usize| {
         let (r0, r1) = ((row + 1) % 3, (row + 2) % 3);
         let (c0, c1) = ((column + 1) % 3, (column + 2) % 3);

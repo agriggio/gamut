@@ -244,7 +244,7 @@ fn every_section_is_laid_out_at_its_own_height_whatever_the_room() {
     for (section, rect) in &layout {
         assert_eq!(
             rect.height,
-            section.height(false, false, image),
+            section.height(false, false, image, develop::Shape::NONE),
             "{section:?}"
         );
         assert_eq!((rect.x, rect.width), (column.x, COLUMN_WIDTH));
@@ -270,7 +270,7 @@ fn every_section_is_laid_out_at_its_own_height_whatever_the_room() {
         2.0 * PANEL_INSET
             + TOOLBAR_HEIGHT
             + HEADER_GAP
-            + Section::Output.height(false, false, stored::Layout::ONE),
+            + Section::Output.height(false, false, stored::Layout::ONE, develop::Shape::NONE),
         "the row of buttons and the head section are the least the panel needs"
     );
 }
@@ -741,11 +741,12 @@ fn a_pixel_is_traced_down_every_section() {
     let layout = laid_out(&current, 600.0);
     let binned = output::binned_for(&current, Headroom::None, 1.0);
     let lift = current.image.gain_map.as_ref().unwrap().lift_plot();
-    let image = stored::plotted_for(&current);
+    let image = stored::plotted_for(&stored::Source::image(&current));
     let plots = Plots {
         output: &binned,
         lift: lift.as_ref(),
         image: &image,
+        develop: None,
         counts: input_counts(&current),
         output_counts: plot::Counts::of(&binned.plot),
         lift_counts: plot::Counts::of(lift.as_ref().unwrap()),
@@ -860,7 +861,7 @@ fn the_image_section_writes_each_channel_as_the_file_keeps_it() {
     let color = picture(false);
     let mark = stored::pixel_mark(&color, 60, 0).expect("on the picture");
     assert_eq!(words(&mark), ["240", "240", "240"]);
-    let plotted = stored::plotted_for(&color);
+    let plotted = stored::plotted_for(&stored::Source::image(&color));
     assert_eq!(plotted.planes.len(), 3);
     for (index, channel) in mark.channels.iter().enumerate() {
         assert!(
@@ -1036,11 +1037,12 @@ fn a_bar_on_the_image_plot_says_its_value_and_ranks_it() {
     ));
     let layout = laid_out(&current, 600.0);
     let binned = output::binned_for(&current, Headroom::None, 1.0);
-    let image = stored::plotted_for(&current);
+    let image = stored::plotted_for(&stored::Source::image(&current));
     let plots = Plots {
         output: &binned,
         lift: None,
         image: &image,
+        develop: None,
         counts: input_counts(&current),
         output_counts: plot::Counts::of(&binned.plot),
         lift_counts: input_counts(&current),
@@ -1205,7 +1207,7 @@ fn scene_light_is_plotted_in_stops() {
     let plane = &current.stored.planes[0];
     assert_eq!(current.stored.axis, Axis::Stops);
     assert_eq!(plane.range, [-14.0, 8.0]);
-    assert!(stored::ticks(&current, plane).is_empty());
+    assert!(stored::ticks(&stored::Source::image(&current), plane).is_empty());
     assert_eq!(stored::stop_across(plane.range, 0), Some(14.0 / 22.0));
     assert_eq!(stored::stop_across(plane.range, 8), Some(1.0));
 
@@ -1259,7 +1261,7 @@ fn the_image_axis_is_the_whole_range_of_integer_samples() {
     assert!(plot[past..].iter().all(|&count| count == 0));
     let mark = stored::pixel_mark(&counts, 1, 0).expect("on the picture");
     assert_eq!(mark.channels[0].bin, plane.bin_at(32768.0 / 65535.0));
-    let ticks: Vec<String> = stored::ticks(&counts, plane)
+    let ticks: Vec<String> = stored::ticks(&stored::Source::image(&counts), plane)
         .into_iter()
         .map(|(_, words)| words)
         .collect();
@@ -1273,7 +1275,7 @@ fn the_image_axis_is_the_whole_range_of_integer_samples() {
     assert_eq!(data.image.referred, Referred::Measured);
     let plane = &data.stored.planes[0];
     assert_eq!(plane.range, [16384.0 / 65535.0, 32768.0 / 65535.0]);
-    let ticks: Vec<String> = stored::ticks(&data, plane)
+    let ticks: Vec<String> = stored::ticks(&stored::Source::image(&data), plane)
         .into_iter()
         .map(|(_, words)| words)
         .collect();
@@ -1285,7 +1287,7 @@ fn the_image_axis_is_the_whole_range_of_integer_samples() {
     });
     let plane = &floats.stored.planes[0];
     assert_eq!(plane.range, [0.5, 4.0]);
-    let ticks: Vec<String> = stored::ticks(&floats, plane)
+    let ticks: Vec<String> = stored::ticks(&stored::Source::image(&floats), plane)
         .into_iter()
         .map(|(_, words)| words)
         .collect();
@@ -1296,4 +1298,232 @@ fn the_image_axis_is_the_whole_range_of_integer_samples() {
         Some([0.0, 1.0]),
         "on a curve already"
     );
+}
+
+/// The same color picture as the development of a mosaic: one count a
+/// photosite under RGGB, `64 × x` across the one row, white at 4095 and
+/// black at 64, balanced by two stops of red and a stop of blue, as the
+/// camera was held.
+fn developed() -> Current {
+    use crate::image::sensor::{Development, Layout, Mosaic, Pattern, Sensor};
+    let mut image = picture(false).image.as_ref().clone();
+    let mosaic = Mosaic {
+        width: 64,
+        height: 1,
+        counts: (0..64u16).map(|x| x * 64).collect(),
+        pattern: Pattern::Bayer {
+            filters: 0x9494_9494,
+            planes: [0, 1, 2, 1],
+        },
+    };
+    let stored = std::sync::Arc::new(mosaic.tally(4095.0));
+    image.sensor = Some(std::sync::Arc::new(Sensor {
+        layout: Layout::Mosaic(mosaic),
+        turned: crate::image::orient::Orientation::NoTransforms,
+        white: 4095.0,
+        black: vec![64.0; 3],
+        stored,
+        development: Development {
+            demosaic: Some("AHD"),
+            balance: [4.0, 1.0, 2.0],
+        },
+    }));
+    shown(image)
+}
+
+/// The same as a raw stored three counts a pixel, worked back from the
+/// developed pixel through the identity.
+fn recovered() -> Current {
+    use crate::image::sensor::{Development, Layout, Recovery, Sensor};
+    let mut image = picture(false).image.as_ref().clone();
+    let stored = std::sync::Arc::new(crate::image::stats::Stored::of_codes(
+        vec![vec![1; 256]; 3],
+        255.0,
+    ));
+    image.sensor = Some(std::sync::Arc::new(Sensor {
+        layout: Layout::Rgb(Recovery {
+            inverse: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            black: [0.0; 3],
+            white: [255.0; 3],
+            black_across: Vec::new(),
+            black_down: Vec::new(),
+            table: None,
+        }),
+        turned: crate::image::orient::Orientation::NoTransforms,
+        white: 255.0,
+        black: vec![0.0; 3],
+        stored,
+        development: Development {
+            demosaic: None,
+            balance: [1.0; 3],
+        },
+    }));
+    shown(image)
+}
+
+/// A raw has a Develop section between the stages applied to the
+/// developed picture and the Image section, which then plots the sensor's
+/// counts: a plane to the color under the filter, over the whole of the
+/// sensor's range with its levels on the axis. The Develop section's
+/// plots are the developed channels, and for a mosaic it ends with the
+/// photosites around the pointer.
+#[test]
+fn a_raw_has_a_develop_section_over_the_sensors_counts() {
+    let current = developed();
+    let layout = laid_out(&current, 600.0);
+    let sections: Vec<Section> = layout.iter().map(|(section, _)| *section).collect();
+    assert_eq!(
+        sections,
+        [
+            Section::Output,
+            Section::Display,
+            Section::Develop,
+            Section::Image
+        ]
+    );
+    assert!(!Section::Develop.applies(&picture(false)));
+    assert!(!Section::Develop.applies(&gain_mapped()));
+    assert!(!Section::Develop.has_button());
+
+    // The Image section is the sensor's: three planes, one axis, the
+    // levels along it.
+    let image = stored::Layout::of(&current);
+    assert_eq!(
+        image,
+        stored::Layout {
+            planes: 3,
+            shared: true
+        }
+    );
+    let source = stored::Source::image(&current);
+    assert_eq!(source.section, Section::Image);
+    assert_eq!(source.full, 4095.0);
+    let ticks: Vec<String> = stored::ticks(&source, &source.stored.planes[0])
+        .into_iter()
+        .map(|(_, words)| words)
+        .collect();
+    assert_eq!(ticks, ["0", "64", "4095"]);
+    let developed_source = stored::Source::developed(&current);
+    assert_eq!(developed_source.section, Section::Develop);
+    assert_eq!(developed_source.full, 255.0);
+
+    // The Develop section: the developed channels' plots at the Image
+    // section's heights, three rows, and the photosites.
+    let shape = develop::Shape::of(&current);
+    assert_eq!(
+        shape,
+        develop::Shape {
+            layout: stored::Layout {
+                planes: 3,
+                shared: true
+            },
+            grid: true
+        }
+    );
+    let rect = rect_of(&layout, Section::Develop);
+    assert_eq!(
+        rect.height,
+        Section::Develop.height(false, false, image, shape)
+    );
+    let plots = stored::plots(rect, shape.layout);
+    assert_eq!(plots.len(), 3);
+    let first_row = develop::row(rect, shape, 0);
+    assert!(first_row.y > plots[2].bottom());
+    let (caption, ground) = develop::grid_part(rect, shape);
+    assert!(caption.y > develop::row(rect, shape, 2).bottom());
+    assert!(ground.y > caption.bottom());
+    assert_eq!(ground.bottom() + PLOT_INSET, rect.bottom());
+    // Without the mosaic, no photosites.
+    let plain = develop::Shape::of(&recovered());
+    assert!(!plain.grid);
+    assert!(plain.height() < shape.height());
+    assert_eq!(develop::Shape::of(&picture(false)), develop::Shape::NONE);
+}
+
+/// The pointer's pixel is traced through the development: the Image
+/// section marks the one photosite under it, its count in its plane's
+/// cell and the other cells empty, and the Develop section marks the
+/// developed pixel as the Image section marks a decoded one. A raw stored
+/// three counts a pixel has all three worked back, approximate where the
+/// development clamped a channel.
+#[test]
+fn a_raws_pixel_is_marked_on_the_sensor_and_as_developed() {
+    let current = developed();
+    // Pixel 5 is under green: the second column of RGGB.
+    let mark = stored::image_mark(&current, 5, 0).expect("on the picture");
+    assert_eq!(mark.channels.len(), 3);
+    assert_eq!(
+        mark.channels
+            .iter()
+            .map(|channel| channel.words.as_str())
+            .collect::<Vec<_>>(),
+        ["", "320", ""]
+    );
+    assert_eq!(mark.channels[1].plane, Plane::Green);
+    assert!(mark.channels[1].bin.is_some());
+    assert!(mark.channels[0].bin.is_none() && mark.channels[2].bin.is_none());
+    assert!(mark.channels[1].rank.is_some());
+    let red = stored::image_mark(&current, 4, 0).expect("on the picture");
+    assert_eq!(red.channels[0].words, "256");
+    assert_eq!(red.channels[0].plane, Plane::Red);
+    // The developed pixel, as the decoded picture holds it.
+    let developed = stored::pixel_mark(&current, 5, 0).expect("on the picture");
+    assert_eq!(
+        developed
+            .channels
+            .iter()
+            .map(|channel| channel.words.as_str())
+            .collect::<Vec<_>>(),
+        ["20", "20", "20"]
+    );
+    // Traced down the column: both sections mark the pixel at once.
+    let layout = laid_out(&current, 600.0);
+    let binned = output::binned_for(&current, Headroom::None, 1.0);
+    let image = stored::plotted_for(&stored::Source::image(&current));
+    let develop = stored::plotted_for(&stored::Source::developed(&current));
+    let plots = Plots {
+        output: &binned,
+        lift: None,
+        image: &image,
+        develop: Some(&develop),
+        counts: input_counts(&current),
+        output_counts: plot::Counts::of(&binned.plot),
+        lift_counts: input_counts(&current),
+    };
+    let traced = marked(
+        &current,
+        &layout,
+        None,
+        Some([5, 0]),
+        Headroom::None,
+        &plots,
+    );
+    assert_eq!(
+        traced.develop.as_ref().map(|mark| mark.channels.len()),
+        Some(3)
+    );
+    assert_eq!(traced.image.as_ref(), Some(&mark));
+    // The pointer on a Develop plot marks that plane's bin alone.
+    let rect = rect_of(&layout, Section::Develop);
+    let bars = stored::plots(rect, develop::Shape::of(&current).layout)[1];
+    let traced = marked(
+        &current,
+        &layout,
+        Some([bars.x + 0.5, bars.y + 1.0]),
+        Some([5, 0]),
+        Headroom::None,
+        &plots,
+    );
+    assert!(traced.image.is_none());
+    let hovered = traced.develop.expect("the plot under the pointer");
+    assert_eq!(hovered.channels[0].plane, Plane::Green);
+    assert_eq!(hovered.words, "0");
+
+    // Three counts a pixel: the first pixel is black, which sits at the
+    // clamp, and the middle one is clear of it.
+    let recovered = recovered();
+    let mark = stored::image_mark(&recovered, 0, 0).expect("on the picture");
+    assert_eq!(mark.channels[0].words, "~0");
+    let mark = stored::image_mark(&recovered, 32, 0).expect("on the picture");
+    assert_eq!(mark.channels[1].words, "128");
 }

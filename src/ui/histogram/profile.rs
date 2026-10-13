@@ -273,7 +273,14 @@ fn dot(ui: &egui::Ui, at: egui::Pos2) {
 /// A part's caption at `caption`: its name over what its axes are, in the
 /// plot's small words, and on the right of the name what the pointer's
 /// pixel reads on it.
-fn caption(pass: &Pass, ui: &egui::Ui, caption: Rect, name: &str, axes: &str, reading: &str) {
+pub(super) fn caption(
+    pass: &Pass,
+    ui: &egui::Ui,
+    caption: Rect,
+    name: &str,
+    axes: &str,
+    reading: &str,
+) {
     let painter = ui.painter();
     let font = FontId::proportional(CLIP_TEXT);
     let line = caption.height / 2.0;

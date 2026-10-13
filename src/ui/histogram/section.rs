@@ -30,20 +30,25 @@ pub enum Section {
     /// How a raw's profile renders it, where it says: how far each pixel
     /// is lifted, and under it the profile's parts read upward in the order
     /// they are applied — the exposure, the gain table, the tone curve.
-    /// Nearest the file, since the profile is applied to the values the
-    /// file stores before anything else.
+    /// Applied to the developed picture before anything else is.
     Profile,
-    /// The picture as the file stores it.
+    /// How a raw was developed from the sensor's counts: the developed
+    /// channels, what the development did to them, and the photosites
+    /// under the pointer. Between the profile, which is applied to the
+    /// developed picture, and the counts it was developed from.
+    Develop,
+    /// The picture as the file stores it: the sensor's counts for a raw.
     Image,
 }
 
 impl Section {
     /// Every section there can be, in the order the column lays them out.
-    pub const ALL: [Section; 5] = [
+    pub const ALL: [Section; 6] = [
         Section::Output,
         Section::Display,
         Section::GainMap,
         Section::Profile,
+        Section::Develop,
         Section::Image,
     ];
 
@@ -54,6 +59,7 @@ impl Section {
             Section::Display => "Display",
             Section::GainMap => "Gain map",
             Section::Profile => "Profile",
+            Section::Develop => "Develop",
             Section::Image => "Image",
         }
     }
@@ -61,14 +67,15 @@ impl Section {
     /// The mark beside its name, in the accent, as the information panel's
     /// sections wear theirs: a screen for what goes out, the sliders the
     /// display is set by, the sun the gain map is known by elsewhere in the
-    /// window, and a picture for the image, as the information panel's
-    /// Image section wears.
+    /// window, the flask the development is done in, and a picture for the
+    /// image, as the information panel's Image section wears.
     pub(in crate::ui) fn mark(self) -> &'static [icon::Mark] {
         match self {
             Section::Output => icon::MONITOR,
             Section::Display => icon::SLIDERS_HORIZONTAL,
             Section::GainMap => icon::SUN,
             Section::Profile => icon::SPLINE,
+            Section::Develop => icon::FLASK_CONICAL,
             Section::Image => icon::IMAGE,
         }
     }
@@ -89,7 +96,10 @@ impl Section {
     /// it nor the picture under it.
     ///
     /// A raw's profile is a gain map of its own kind, and has the Profile
-    /// section instead of the Gain map one; the two never meet.
+    /// section instead of the Gain map one; the two never meet. The Develop
+    /// section is a raw's, while the picture itself is on screen: its plots
+    /// are of the developed picture, which another of the file's images
+    /// shown in its place is not.
     pub fn applies(self, current: &Current) -> bool {
         let lifted = |profile: bool| {
             current
@@ -106,6 +116,7 @@ impl Section {
         match self {
             Section::GainMap => lifted(false),
             Section::Profile => lifted(true),
+            Section::Develop => stored::sensor_of(current).is_some(),
             Section::Image => current.showing != Showing::Auxiliary(Auxiliary::GainMap),
             Section::Output | Section::Display => true,
         }
@@ -114,11 +125,18 @@ impl Section {
     /// How tall the section stands: its header, its plot, and what hangs
     /// under the plot. Fixed but for the Display section's row of false
     /// colors, which only a `gray` image has, and its row of windows, which
-    /// only an image read as `data` has, and the Image section's plots,
-    /// one to the stored channel, laid out as `image` says — so that one
+    /// only an image read as `data` has, the Image section's plots,
+    /// one to the stored channel, laid out as `image` says, and the Develop
+    /// section's, as `develop` says — so that one
     /// file's column is laid out where the last one's was, and a section is
     /// never shrunk to fit a short window — the column scrolls instead.
-    pub const fn height(self, gray: bool, data: bool, image: stored::Layout) -> f32 {
+    pub const fn height(
+        self,
+        gray: bool,
+        data: bool,
+        image: stored::Layout,
+        develop: develop::Shape,
+    ) -> f32 {
         let head = LABEL_HEIGHT + HEAD_GAP + PLOT_INSET;
         let band = PLOT_INSET + RAMP_GAP + RAMP_HEIGHT;
         match self {
@@ -151,6 +169,10 @@ impl Section {
                     + 2.0 * PART_HEIGHT
                     + 2.0 * (display::ROW_GAP + display::ROW_HEIGHT)
             }
+            // The developed channels' plots as the Image section's, the
+            // rows of what the development did, and the photosites: see
+            // `develop::Shape`.
+            Section::Develop => head + develop.height(),
             // A plot to the stored channel, and the rows of values under
             // them: see `stored::Layout`.
             Section::Image => head + image.body_height(),
@@ -170,7 +192,7 @@ impl Section {
             Section::Output => Rect::new(x, y, width, PLOT_HEIGHT),
             Section::Display => display::plot_area(rect),
             Section::GainMap | Section::Profile => Rect::new(x, y, width, SHORT_PLOT_HEIGHT),
-            Section::Image => stored::first_plot(rect, stored::Layout::ONE),
+            Section::Develop | Section::Image => stored::first_plot(rect, stored::Layout::ONE),
         }
     }
 }
@@ -225,9 +247,9 @@ pub fn trace_row(rect: Rect) -> Rect {
     )
 }
 
-/// Above each of the Profile section's parts: the gap from the row of stops
-/// above.
-const PART_GAP: f32 = 8.0;
+/// Above each of the Profile section's parts, and the Develop section's
+/// photosites: the gap from the row above.
+pub const PART_GAP: f32 = 8.0;
 
 /// A part's caption: two lines of the plot's small words, the part's name
 /// and the pointer's reading on it over what its axes are.
@@ -256,9 +278,10 @@ pub fn height(current: &Current) -> f32 {
         .collect();
     let (gray, data) = (current.image.is_gray(), is_data(current));
     let image = stored::Layout::of(current);
+    let develop = develop::Shape::of(current);
     sections
         .iter()
-        .map(|section| section.height(gray, data, image))
+        .map(|section| section.height(gray, data, image, develop))
         .sum::<f32>()
         + (sections.len().saturating_sub(1)) as f32 * SECTION_GAP
 }
@@ -270,11 +293,17 @@ pub fn layout(column: Rect, current: &Current) -> Vec<(Section, Rect)> {
     let mut y = column.y;
     let (gray, data) = (current.image.is_gray(), is_data(current));
     let image = stored::Layout::of(current);
+    let develop = develop::Shape::of(current);
     Section::ALL
         .into_iter()
         .filter(|section| section.applies(current))
         .map(|section| {
-            let rect = Rect::new(column.x, y, column.width, section.height(gray, data, image));
+            let rect = Rect::new(
+                column.x,
+                y,
+                column.width,
+                section.height(gray, data, image, develop),
+            );
             y += rect.height + SECTION_GAP;
             (section, rect)
         })

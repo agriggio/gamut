@@ -49,11 +49,16 @@ use anyhow::{Result, anyhow, bail};
 
 use super::{Kept, ReadSeek};
 use crate::image::exif::Entry;
+use crate::image::sensor::{self, Sensor};
 use crate::image::{
     AlphaMode, Channels, ColorSpace, DecodedImage, Primaries, Referred, Samples, Transfer,
 };
 
 pub struct Raw;
+
+/// The demosaic the development asks for, by the name the Develop section
+/// gives it: `ffi::DEMOSAIC_AHD`.
+const DEMOSAIC: &str = "AHD";
 
 impl super::Decoder for Raw {
     fn name(&self) -> &'static str {
@@ -170,8 +175,9 @@ impl super::Decoder for Raw {
         // rendering comes with it as a gain map, which the flag that leaves
         // a photograph's gain map behind leaves behind too.
         if let Some(linear) = linear::Linear::read(&handle.bytes)? {
-            let image = linear.develop(&handle.bytes, overrides.gain_map)?;
-            return Ok(crate::image::orient::apply(image, handle.orientation()));
+            let orientation = handle.orientation();
+            let image = linear.develop(&handle.bytes, overrides.gain_map, orientation)?;
+            return Ok(crate::image::orient::apply(image, orientation));
         }
         let (width, height) = handle.output_size();
         if width == 0 || height == 0 {
@@ -183,10 +189,23 @@ impl super::Decoder for Raw {
 
         handle.configure();
         handle.call("unpacking", ffi::libraw_unpack)?;
+        // The sensor's counts and levels, before developing takes the black
+        // off and zeroes the levels it took.
+        let sensor = handle.sensor();
         handle.call("developing", ffi::libraw_dcraw_process)?;
         let developed = handle.make_image()?;
 
         let (width, height, channels, data) = developed.take()?;
+        // The mosaic turned as the picture was is the picture's size, or
+        // the library's frame is not what this read it as, and the counts
+        // are left out rather than put under the wrong pixels.
+        let sensor = sensor.filter(|sensor| match &sensor.layout {
+            sensor::Layout::Mosaic(mosaic) => {
+                crate::image::orient::size(mosaic.width, mosaic.height, sensor.turned)
+                    == (width, height)
+            }
+            sensor::Layout::Rgb(_) => false,
+        });
         let mut image = DecodedImage::new(
             width,
             height,
@@ -201,6 +220,7 @@ impl super::Decoder for Raw {
         // and 1.0 is where the sensor saturates, which is as much of a white
         // as a photograph states.
         image.referred = Referred::Display;
+        image.sensor = sensor.map(std::sync::Arc::new);
         Ok(image)
     }
 }
@@ -521,6 +541,171 @@ impl Handle {
                 }
             }
         }
+    }
+
+    /// The sensor's counts behind the frame, once it is unpacked and before
+    /// it is developed: the mosaic copied out of the library's frame, each
+    /// plane tallied, the levels the library read, and the balance it will
+    /// apply. `None` for a sensor that is not a mosaic under red, green and
+    /// blue — Foveon's layers, a linear DNG, a four-color filter — or a
+    /// frame the library describes in a way this cannot follow, and the
+    /// Image section then plots the developed picture as it did.
+    ///
+    /// Read before developing, which takes the black off the counts and
+    /// zeroes the levels it took, and lowers the maximum by them.
+    fn sensor(&self) -> Option<Sensor> {
+        let params = self.params();
+        let sizes = self.sizes();
+        // SAFETY: accessors on an unpacked handle. The mosaic is a pointer
+        // into the handle's own allocation, `raw_pitch` bytes a row for
+        // `raw_height` rows, read below within those bounds; the blacks are
+        // `CBLACK_SIZE` long by the library's own definition.
+        let (raw, black, cblack, maximum) = unsafe {
+            (
+                ffi::gamut_libraw_raw_image(self.data),
+                ffi::gamut_libraw_black(self.data),
+                std::slice::from_raw_parts(ffi::gamut_libraw_cblack(self.data), ffi::CBLACK_SIZE),
+                ffi::libraw_get_color_maximum(self.data),
+            )
+        };
+        if raw.is_null() || maximum <= 0 {
+            return None;
+        }
+        // Which plane each of the filter's colors is, by the library's
+        // description of them: `RGBG` for nearly every camera.
+        let plane_of: Vec<Option<u8>> = params
+            .cdesc
+            .iter()
+            .take(4)
+            .map(|&letter| match letter as u8 {
+                b'R' => Some(0),
+                b'G' => Some(1),
+                b'B' => Some(2),
+                _ => None,
+            })
+            .collect();
+        let pattern = if params.colors == 1 {
+            sensor::Pattern::Mono
+        } else if params.filters == 9 {
+            let mut cells = [[0u8; 6]; 6];
+            for (row, line) in params.xtrans.iter().enumerate() {
+                for (column, &color) in line.iter().enumerate() {
+                    cells[row][column] = (*plane_of.get(color as u8 as usize)?)?;
+                }
+            }
+            sensor::Pattern::XTrans(cells)
+        } else if params.filters >= 1000 {
+            let mut planes = [0u8; 4];
+            for (color, plane) in planes.iter_mut().enumerate() {
+                *plane = (*plane_of.get(color)?)?;
+            }
+            sensor::Pattern::Bayer {
+                filters: params.filters,
+                planes,
+            }
+        } else {
+            return None;
+        };
+        // The frame inside the library's margins, which is what it develops.
+        let (width, height) = (u32::from(sizes.width), u32::from(sizes.height));
+        let pitch = sizes.raw_pitch as usize / 2;
+        let (top, left) = (
+            usize::from(sizes.top_margin),
+            usize::from(sizes.left_margin),
+        );
+        if width == 0
+            || height == 0
+            || left + width as usize > pitch
+            || top + height as usize > usize::from(sizes.raw_height)
+        {
+            return None;
+        }
+        let mut counts = Vec::with_capacity(width as usize * height as usize);
+        for row in 0..height as usize {
+            // SAFETY: the row is inside the frame checked above, which the
+            // library allocated whole.
+            let line = unsafe {
+                std::slice::from_raw_parts(raw.add((top + row) * pitch + left), width as usize)
+            };
+            counts.extend_from_slice(line);
+        }
+        let white = maximum as f32;
+        let planes = pattern.planes();
+        // Each plane's black: the shared level and what its colors add,
+        // averaged over the colors under the plane — the two greens — and
+        // the pattern of blacks over the frame averaged in where there is
+        // one.
+        let patterned = {
+            let (rows, columns) = (cblack[4] as usize, cblack[5] as usize);
+            let cells = rows * columns;
+            if cells > 0 && 6 + cells <= ffi::CBLACK_SIZE {
+                cblack[6..6 + cells]
+                    .iter()
+                    .map(|&value| value as f32)
+                    .sum::<f32>()
+                    / cells as f32
+            } else {
+                0.0
+            }
+        };
+        let black: Vec<f32> = (0..planes)
+            .map(|plane| {
+                let own: Vec<f32> = (0..4)
+                    .filter(|&color| {
+                        matches!(pattern, sensor::Pattern::Mono) && color == 0
+                            || plane_of.get(color).copied().flatten() == Some(plane as u8)
+                    })
+                    .map(|color| black as f32 + cblack[color] as f32)
+                    .collect();
+                let own = if own.is_empty() {
+                    black as f32
+                } else {
+                    own.iter().sum::<f32>() / own.len() as f32
+                };
+                own + patterned
+            })
+            .collect();
+        // The balance the development applies: the camera's multipliers
+        // where it recorded them, as `configure` hands them back, and the
+        // daylight ones the library falls back on otherwise; the green at 1.
+        // SAFETY: accessors on an open handle.
+        let (camera, daylight) = unsafe {
+            let each = |get: unsafe extern "C" fn(*mut ffi::Data, c_int) -> f32| -> [f32; 3] {
+                [0, 1, 2].map(|index| get(self.data, index as c_int))
+            };
+            (each(ffi::libraw_get_cam_mul), each(ffi::libraw_get_pre_mul))
+        };
+        let multipliers = if camera[0] > 0.0 && camera[2] > 0.0 {
+            camera
+        } else {
+            daylight
+        };
+        let balance = if multipliers
+            .iter()
+            .all(|value| *value > 0.0 && value.is_finite())
+        {
+            multipliers.map(|value| value / multipliers[1])
+        } else {
+            [1.0; 3]
+        };
+        let mosaic = sensor::Mosaic {
+            width,
+            height,
+            counts,
+            pattern,
+        };
+        let stored = std::sync::Arc::new(mosaic.tally(white));
+        Some(Sensor {
+            layout: sensor::Layout::Mosaic(mosaic),
+            turned: self.orientation(),
+            white,
+            black,
+            stored,
+            development: sensor::Development {
+                demosaic: Some(DEMOSAIC),
+                balance,
+            },
+        })
     }
 
     /// One step of the pipeline, by the error it would raise.
@@ -948,6 +1133,52 @@ mod tests {
 
     use super::*;
     use crate::image::decode::Decoder;
+
+    /// A mosaiced DNG developed by LibRaw carries its sensor beside the
+    /// picture: the counts as the file stores them, under the pattern the
+    /// file states, with the levels the library read and no balance where
+    /// the file's neutral is white already.
+    #[test]
+    fn a_developed_raw_carries_the_sensors_counts() {
+        use crate::image::sensor::{Layout, Pattern};
+        let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("test_images")
+            .join("dng-cfa.dng");
+        let bytes = std::fs::read(&fixture).unwrap();
+        let image =
+            crate::image::decode::load(&fixture, super::super::Overrides::default()).unwrap();
+        let sensor = image.sensor.as_deref().expect("a mosaic's sensor");
+        let Layout::Mosaic(mosaic) = &sensor.layout else {
+            panic!("a mosaic");
+        };
+        assert_eq!((mosaic.width, mosaic.height), (32, 24));
+        // The counts are the file's last 32 × 24 sixteen-bit words.
+        let start = bytes.len() - 32 * 24 * 2;
+        let stored: Vec<u16> = bytes[start..]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|word| u16::from_le_bytes(*word))
+            .collect();
+        assert_eq!(mosaic.counts, stored);
+        // RGGB, as the file's CFAPattern says.
+        assert!(matches!(mosaic.pattern, Pattern::Bayer { .. }));
+        assert_eq!(
+            [(0, 0), (1, 0), (0, 1), (1, 1)].map(|(x, y)| mosaic.pattern.plane(x, y)),
+            [0, 1, 1, 2]
+        );
+        assert_eq!(sensor.white, 4095.0);
+        assert_eq!(sensor.black, vec![0.0; 3]);
+        assert_eq!(sensor.stored.planes.len(), 3);
+        assert_eq!(sensor.development.demosaic, Some("AHD"));
+        assert!(sensor.development.balanced_as_stored());
+        // The white quadrant's red is at white, and a pixel of it reads
+        // its one photosite.
+        let reading = sensor.at([24, 18], [32, 24], &[1.0; 3]).unwrap();
+        assert!(reading.exact);
+        assert_eq!(reading.counts.iter().flatten().count(), 1, "one photosite");
+        assert_eq!(sensor.photosite([24, 18], [32, 24]), Some((0, 4095)));
+    }
 
     /// A raw is named for what its leading bytes say it is: the
     /// container's signature, a DNG's tag, or the make in a TIFF-shaped

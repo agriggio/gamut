@@ -15,7 +15,7 @@
 
 use std::sync::Arc;
 
-use ::image::metadata::Orientation;
+pub use ::image::metadata::Orientation;
 
 use crate::image::depth::DepthMap;
 use crate::image::gain_map::{Data, GainMap};

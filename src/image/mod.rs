@@ -24,6 +24,7 @@ pub mod metadata_region;
 pub mod orient;
 pub mod region;
 pub mod resample;
+pub mod sensor;
 pub mod sequence;
 pub mod stats;
 pub mod tiff;
@@ -368,6 +369,11 @@ pub struct DecodedImage {
     ///
     /// [`AutoWindow::default_for`]: display::AutoWindow::default_for
     pub opens_on: Option<display::AutoWindow>,
+    /// The sensor's own counts behind a developed raw, which `samples` is
+    /// the development of: what the histogram's Image section plots for a
+    /// raw, and the Develop section says what was done to. `None` for a
+    /// picture that is what its file holds. See [`sensor`].
+    pub sensor: Option<sensor::Shared>,
 }
 
 impl DecodedImage {
@@ -393,6 +399,7 @@ impl DecodedImage {
             gain_map: None,
             depth: None,
             opens_on: None,
+            sensor: None,
         }
     }
 
@@ -779,6 +786,7 @@ mod tests {
             gain_map: None,
             depth: None,
             opens_on: None,
+            sensor: None,
         }
     }
 
@@ -849,6 +857,7 @@ mod tests {
             gain_map: None,
             depth: None,
             opens_on: None,
+            sensor: None,
         };
 
         let sample = image.sample(0, 0, None).expect("inside the image");
