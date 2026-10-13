@@ -220,6 +220,15 @@ impl Component for u16 {
     }
 }
 
+impl Component for half::f16 {
+    fn to_f64(self) -> f64 {
+        f64::from(self.to_f32())
+    }
+    fn from_f64(mean: f64) -> Self {
+        half::f16::from_f64(mean)
+    }
+}
+
 impl Component for f32 {
     fn to_f64(self) -> f64 {
         f64::from(self)

@@ -1743,6 +1743,7 @@ fn gain_map_facts(current: &Current) -> Vec<(&'static str, String)> {
             match map.lift {
                 Lift::Iso(_) => "ISO 21496-1",
                 Lift::Apple { .. } => "Apple",
+                Lift::Profile(_) => "camera profile",
             }
             .to_string(),
         ),

@@ -17,6 +17,9 @@ use anyhow::{Result, bail};
 
 pub type Matrix = [[f64; 3]; 3];
 
+/// A matrix as the development applies it, a pixel at a time.
+pub type Narrow = [[f32; 3]; 3];
+
 /// What the file says about its camera's color, as the DNG tags hold it.
 #[derive(Clone, Debug, Default)]
 pub struct Profile {
@@ -46,6 +49,14 @@ const XYZ_TO_BT2020: Matrix = [
     [1.716_651_2, -0.355_670_8, -0.253_366_3],
     [-0.666_684_4, 1.616_481_2, 0.015_768_5],
     [0.017_639_9, -0.042_770_6, 0.942_103_1],
+];
+
+/// Linear ProPhoto RGB (ROMM) to CIE XYZ, under D50: the space the DNG
+/// specification applies a profile's tone curve in.
+const PROPHOTO_TO_XYZ_D50: Matrix = [
+    [0.797_674_9, 0.135_191_7, 0.031_353_4],
+    [0.288_040_2, 0.711_874_1, 0.000_085_7],
+    [0.0, 0.0, 0.825_210_0],
 ];
 
 /// Bradford's cone responses, from XYZ.
@@ -175,6 +186,42 @@ impl Profile {
         }
         ((1.0 / kelvin - 1.0 / second) / (1.0 / first - 1.0 / second)).clamp(0.0, 1.0)
     }
+}
+
+/// The pair of matrices between linear Rec. 2020 under D65 and linear
+/// ProPhoto under D50, white carried to white by Bradford's transform: the
+/// first into ProPhoto, the second back.
+pub fn prophoto() -> Result<(Narrow, Narrow)> {
+    let into = multiply(
+        invert(PROPHOTO_TO_XYZ_D50)?,
+        multiply(adaptation(xyz(D65), xyz(D50))?, invert(XYZ_TO_BT2020)?),
+    );
+    let back = invert(into)?;
+    let narrow = |matrix: Matrix| matrix.map(|row| row.map(|value| value as f32));
+    Ok((narrow(into), narrow(back)))
+}
+
+/// A tone curve applied to a color as the DNG SDK's `RGBTone` applies a
+/// profile's: the curve on the largest channel and the smallest, and the
+/// middle one put where it stood between them, so that the hue holds
+/// rather than sliding toward a primary as a curve on each channel would.
+/// The channels are taken to 0..1 first, the curve's own domain.
+pub fn rgb_tone(curve: impl Fn(f32) -> f32, color: [f32; 3]) -> [f32; 3] {
+    let color = color.map(|value| value.clamp(0.0, 1.0));
+    let mut order = [0, 1, 2];
+    order.sort_by(|a, b| color[*b].total_cmp(&color[*a]));
+    let [high, middle, low] = order;
+    let (top, bottom) = (curve(color[high]), curve(color[low]));
+    let mut out = [0.0; 3];
+    out[high] = top;
+    out[low] = bottom;
+    let span = color[high] - color[low];
+    out[middle] = if span > 0.0 {
+        bottom + (top - bottom) * (color[middle] - color[low]) / span
+    } else {
+        top
+    };
+    out
 }
 
 /// The color temperature, in kelvin, of the illuminant an EXIF light source
@@ -370,6 +417,44 @@ mod tests {
         assert!(middle > 0.0 && middle < 1.0, "{middle}");
         // With no neutral, the light is D65, and so all daylight.
         near(profile.to_bt2020().unwrap(), IDENTITY, 1e-3);
+    }
+
+    /// Rec. 2020's white is ProPhoto's white once the eye has adapted, and
+    /// the two matrices undo each other.
+    #[test]
+    fn rec_2020_white_is_prophoto_white() {
+        let (into, back) = prophoto().unwrap();
+        let apply32 = |m: [[f32; 3]; 3], v: [f32; 3]| -> [f32; 3] {
+            std::array::from_fn(|row| (0..3).map(|c| m[row][c] * v[c]).sum())
+        };
+        // Within the rounding of ROMM's published matrix, whose white is
+        // D50 to four places rather than the chromaticity used here.
+        for value in apply32(into, [1.0; 3]) {
+            assert!((value - 1.0).abs() < 5e-4, "{value}");
+        }
+        let red = [0.8, 0.1, 0.05];
+        let there_and_back = apply32(back, apply32(into, red));
+        for (a, b) in there_and_back.iter().zip(red) {
+            assert!((a - b).abs() < 1e-5);
+        }
+    }
+
+    /// The curve goes on the largest and the smallest channel; the middle
+    /// one keeps its place between them, and a gray stays gray.
+    #[test]
+    fn rgb_tone_keeps_the_middle_channel_between_the_others() {
+        let square = |value: f32| value * value;
+        assert_eq!(rgb_tone(square, [0.5; 3]), [0.25; 3]);
+        let toned = rgb_tone(square, [0.2, 0.8, 0.5]);
+        assert!((toned[1] - 0.64).abs() < 1e-6);
+        assert!((toned[0] - 0.04).abs() < 1e-6);
+        // Half way between the others before, half way between them after.
+        assert!((toned[2] - (0.04 + 0.64) / 2.0).abs() < 1e-6, "{toned:?}");
+        let same = rgb_tone(|value| value, [0.3, 0.1, 0.9]);
+        for (a, b) in same.iter().zip([0.3, 0.1, 0.9]) {
+            assert!((a - b).abs() < 1e-6, "{same:?}");
+        }
+        assert_eq!(rgb_tone(|value| value, [1.5, -0.5, 0.5]), [1.0, 0.0, 0.5]);
     }
 
     #[test]

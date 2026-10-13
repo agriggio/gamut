@@ -5,6 +5,7 @@
 //! and not the other fails silently, as the wrong branch rather than an error.
 
 use crate::image::display::{Colormap, Headroom, ToneMap};
+use crate::image::gain_map::{Data, GainMap};
 use crate::image::orient::Turn;
 use crate::image::{AlphaMode, Channels};
 
@@ -16,6 +17,20 @@ use super::placement::Upscale;
 /// whose corners are `orient::stored`'s reading of the same turn.
 pub fn turn(turn: Turn) -> u32 {
     turn.quarters()
+}
+
+/// How the shader reads the picture's gain map, at `weight` of its lift:
+/// 0 not at all — no map, or none of its lift, which is what a raw's profile
+/// switched off is — 1 and 3 codes through the table, one channel or three,
+/// and 4 the ratios of a raw's profile, read as they are. Matches the
+/// comparisons on `lift` in `gains` and `load` in `shaders/texel.wgsl`.
+pub fn lift(map: &GainMap, weight: f32) -> u32 {
+    match &map.data {
+        Data::Ratios(_) if weight <= 0.0 => 0,
+        Data::Ratios(_) => 4,
+        Data::Codes(_) if map.channels == 1 => 1,
+        Data::Codes(_) => 3,
+    }
 }
 
 /// How the shader should expand the sampled components to RGBA.
@@ -375,6 +390,55 @@ mod tests {
             }
             assert!(source.contains("load("));
         }
+    }
+
+    /// The lift is compared rather than switched on: anything but 0 is
+    /// lifted, 1 is a one-channel map read through the table, and 4 a map
+    /// of ratios read without it; a three-channel map of codes falls to
+    /// the reading of a channel each.
+    #[test]
+    fn the_lifts_are_the_shaders_comparisons() {
+        use crate::image::gain_map::{Lift, Profile};
+        let codes = |channels| GainMap {
+            width: 1,
+            height: 1,
+            channels,
+            data: Data::Codes(vec![0; channels as usize]),
+            lift: Lift::Apple { headroom: 2.0 },
+        };
+        let ratios = GainMap {
+            width: 1,
+            height: 1,
+            channels: 3,
+            data: Data::Ratios(vec![half::f16::ONE; 3]),
+            lift: Lift::Profile(Profile {
+                baseline: 0.0,
+                table: None,
+                curve: None,
+                range: [0.0; 2],
+            }),
+        };
+        for source in [IMAGE_SHADER, REDUCE_SHADER] {
+            let module = wgsl::parse(source);
+            assert_eq!(
+                wgsl::comparisons(&module, "gains", "lift"),
+                [
+                    (BinaryOperator::Equal, lift(&ratios, 1.0)),
+                    (BinaryOperator::Equal, lift(&codes(1), 1.0)),
+                ]
+            );
+            assert_eq!(
+                wgsl::comparisons(&module, "load", "lift"),
+                [(BinaryOperator::NotEqual, 0)]
+            );
+        }
+        assert_eq!(lift(&ratios, 0.0), 0, "a profile switched off");
+        assert_eq!(
+            lift(&codes(3), 0.0),
+            3,
+            "a map at no weight reads its table"
+        );
+        assert_ne!(lift(&codes(3), 1.0), lift(&ratios, 1.0));
     }
 
     /// Alpha is compared rather than switched on: straight alpha is the

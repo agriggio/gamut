@@ -874,23 +874,33 @@ DNG
 # dark. The pattern is padded to whole tiles with black, as a tiled TIFF's
 # last row and column are. The matrix is `dng-cfa.dng`'s, making the
 # camera's space Rec. 2020.
-#   dng_jxl OUT TILE...
+#
+# PROFILE is the profile's rendering beside it: `whole` is a baseline
+# exposure of -2 EV, a gain table of 2 x 2 points whose every gain is 2,
+# written big-endian as an iPhone writes it, and a tone curve through
+# (0.5, 0.25) — so that white is rendered at a quarter, two stops down —
+# `cut` the same with the gain table's last gain cut off, and `none` no
+# profile at all.
+#   dng_jxl OUT PROFILE TILE...
 dng_jxl() {
-  local out=$1; shift
+  local out=$1 profile=$2; shift 2
   magick "$work/color.png" -quality 95 "$work/dng-preview.jpg"
-  python3 - "$out" "$work/dng-preview.jpg" "$@" <<'DNG'
+  python3 - "$out" "$profile" "$work/dng-preview.jpg" "$@" <<'DNG'
 import struct, sys
 
-out, preview = sys.argv[1], open(sys.argv[2], "rb").read()
-tiles = [open(path, "rb").read() for path in sys.argv[3:]]
+out, profile, preview = sys.argv[1], sys.argv[2], open(sys.argv[3], "rb").read()
+tiles = [open(path, "rb").read() for path in sys.argv[4:]]
 WIDTH, HEIGHT, TILE = 32, 24, 16
 
 matrix = [1716651, -355671, -253366, -666684, 1616481, 15769, 17640, -42771, 942103]
 SHORT, LONG, RATIONAL, SRATIONAL, ASCII, BYTE = 3, 4, 5, 10, 2, 1
+FLOAT, UNDEFINED = 11, 7
 
 def pack(kind, values):
-    if kind in (ASCII, BYTE):
+    if kind in (ASCII, BYTE, UNDEFINED):
         return bytes(values)
+    if kind == FLOAT:
+        return struct.pack(f"<{len(values)}f", *values)
     if kind == SHORT:
         return struct.pack(f"<{len(values)}H", *values)
     if kind == LONG:
@@ -925,6 +935,18 @@ raw = [
     (50712, SHORT, [round(65535 * (code / 1023) ** 2) for code in range(1024)]),
     (50717, LONG, [65535] * 3),                        # WhiteLevel
 ]
+if profile != "none":
+    # ProfileGainTableMap: 2 x 2 points over the picture, two steps each,
+    # weighted by red, green and blue, every gain 2.
+    table = struct.pack(">IIddddI5f", 2, 2, 1.0, 1.0, 0.0, 0.0, 2, 0.3, 0.6, 0.1, 0.0, 0.0)
+    table += struct.pack(">8f", *[2.0] * 8)
+    if profile == "cut":
+        table = table[:-4]
+    first += [
+        (50730, SRATIONAL, [(-2, 1)]),                 # BaselineExposure
+        (50940, FLOAT, [0.0, 0.0, 0.5, 0.25, 1.0, 1.0]),  # ProfileToneCurve
+    ]
+    raw += [(52525, UNDEFINED, table)]
 
 def padded(data):
     return data + (b"\0" if len(data) % 2 else b"")
@@ -973,7 +995,10 @@ magick "$work/color.png" +repage -background black -extent 32x32 \
 for i in 0 1 2 3; do
   cjxl -d 0 -e 1 --quiet "$work/dng-tile-$i.png" "$work/dng-tile-$i.jxl"
 done
-dng_jxl dng-jxl.dng "$work"/dng-tile-{0,1,2,3}.jxl
+dng_jxl dng-jxl.dng whole "$work"/dng-tile-{0,1,2,3}.jxl
+# The same with its gain table cut short: it develops, the profile left
+# behind with a warning.
+dng_jxl dng-jxl-profile-cut.dng cut "$work"/dng-tile-{0,1,2,3}.jxl
 
 # ------------------------------------------------------- negative fixtures
 # A DNG cut off inside its directory: claimed by the raw decoder, since the
@@ -984,7 +1009,7 @@ head -c 100 dng-cfa.dng > bad-truncated.dng
 for i in 0 1 2 3; do
   head -c 40 "$work/dng-tile-$i.jxl" > "$work/dng-tile-cut-$i.jxl"
 done
-dng_jxl bad-dng-jxl.dng "$work"/dng-tile-cut-{0,1,2,3}.jxl
+dng_jxl bad-dng-jxl.dng none "$work"/dng-tile-cut-{0,1,2,3}.jxl
 # A PNG header followed by rubbish: the decoder is chosen, then fails.
 { printf '\211PNG\r\n\032\n'; head -c 64 /dev/zero | tr '\0' 'X'; } > bad-truncated.png
 # A real image in a format this build does not include. Targa has no decoder

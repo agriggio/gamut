@@ -910,16 +910,68 @@ fn gain_mapped() -> DecodedImage {
         width: WIDTH / 2,
         height: HEIGHT / 2,
         channels: 1,
-        data: (0..WIDTH / 2 * HEIGHT / 2)
-            .map(|index| {
-                if index % (WIDTH / 2) < WIDTH / 4 {
-                    0
-                } else {
-                    255
-                }
-            })
-            .collect(),
+        data: crate::image::gain_map::Data::Codes(
+            (0..WIDTH / 2 * HEIGHT / 2)
+                .map(|index| {
+                    if index % (WIDTH / 2) < WIDTH / 4 {
+                        0
+                    } else {
+                        255
+                    }
+                })
+                .collect(),
+        ),
         lift: Lift::Iso(metadata),
+    }));
+    image
+}
+
+/// A raw's development with its profile beside it: 32 wide, 8 high, a ramp
+/// across in sixteen bits of linear Rec. 2020, and a map of ratios its own
+/// size, a channel each, lifting the left half and darkening the right as
+/// a profile's local tone map does.
+fn profiled() -> DecodedImage {
+    use crate::image::gain_map::{Data, GainMap, Lift, Profile};
+    use std::sync::Arc;
+
+    const WIDTH: u32 = 32;
+    const HEIGHT: u32 = 8;
+    let data: Vec<u16> = (0..WIDTH * HEIGHT)
+        .flat_map(|index| {
+            let x = index % WIDTH;
+            [(x * 2000) as u16, 1000, (65535 - x * 2000) as u16]
+        })
+        .collect();
+    let mut image = DecodedImage::new(
+        WIDTH,
+        HEIGHT,
+        Samples::U16 {
+            channels: Channels::Rgb,
+            data,
+        },
+        ColorSpace {
+            transfer: Transfer::Linear,
+            primaries: Primaries::Bt2020,
+        },
+        AlphaMode::Opaque,
+    );
+    let ratios = (0..WIDTH * HEIGHT)
+        .flat_map(|index| {
+            let lift = if index % WIDTH < WIDTH / 2 { 8.0 } else { 0.5 };
+            [lift, lift * 1.5, lift * 0.75].map(f16::from_f32)
+        })
+        .collect();
+    image.gain_map = Some(Arc::new(GainMap {
+        width: WIDTH,
+        height: HEIGHT,
+        channels: 3,
+        data: Data::Ratios(ratios),
+        lift: Lift::Profile(Profile {
+            baseline: 3.0,
+            table: None,
+            curve: None,
+            range: [-1.415, 3.585],
+        }),
     }));
     image
 }
@@ -927,26 +979,36 @@ fn gain_mapped() -> DecodedImage {
 /// The shader lifts the picture through the same map and the same table
 /// the readout reads it through: at a weight, every texel drawn 1:1 is
 /// what `DecodedImage::sample` says it is; at no weight it is the base;
-/// and the weight is changed on the picture already on the device.
+/// and the weight is changed on the picture already on the device. A map
+/// of codes is read at any weight, and a raw's profile, a map of ratios,
+/// on and off and on again.
 #[test]
 fn the_lift_on_the_device_agrees_with_the_readout() {
     let Some(gpu) = gpu::test_context() else {
         return;
     };
-    let image = gain_mapped();
+    for (image, weights) in [
+        (gain_mapped(), &[1.0f32, 0.0, 0.5][..]),
+        (profiled(), &[1.0, 0.0, 1.0][..]),
+    ] {
+        the_lift_on_the_device_agrees_at(gpu, &image, weights);
+    }
+}
+
+fn the_lift_on_the_device_agrees_at(gpu: &gpu::TestContext, image: &DecodedImage, weights: &[f32]) {
     let map = image.gain_map.as_ref().unwrap();
     let target = [image.width, image.height];
 
     let mut layer = ImageLayer::new(&gpu.device, &gpu.queue, WORKING_FORMAT);
     let uploaded = layer
         .uploader(&gpu.device, &gpu.queue, gpu.capabilities)
-        .run(&image)
+        .run(image)
         .expect("the image uploads");
     layer.install(uploaded);
 
-    for weight in [1.0f32, 0.0, 0.5] {
+    for &weight in weights {
         let table = map.table(weight);
-        let mut quads = Draw::plain(whole(target, &image), None);
+        let mut quads = Draw::plain(whole(target, image), None);
         quads.lift = Some(&table);
         let pixels = draw_layer(gpu, &mut layer, target, quads);
         for y in 0..image.height {
@@ -970,13 +1032,19 @@ fn the_lift_on_the_device_agrees_with_the_readout() {
 /// The coarse chain is reduced from lifted light, so a minified draw of a
 /// lifted picture is the average of the lifted texels — and it is built
 /// again when the weight changes, or the old lift would stay on screen at
-/// every zoom past the chain's first level.
+/// every zoom past the chain's first level. A raw's profile is reduced the
+/// same way, switched on and off.
 #[test]
 fn the_coarse_chain_is_reduced_from_lifted_light() {
     let Some(gpu) = gpu::test_context() else {
         return;
     };
-    let image = gain_mapped();
+    for image in [gain_mapped(), profiled()] {
+        the_coarse_chain_is_reduced_from(gpu, &image);
+    }
+}
+
+fn the_coarse_chain_is_reduced_from(gpu: &gpu::TestContext, image: &DecodedImage) {
     let map = image.gain_map.as_ref().unwrap();
     // Sixteen to one across: 32 wide to 2, 8 high to 1 — wide enough to
     // force the chain.
@@ -993,7 +1061,7 @@ fn the_coarse_chain_is_reduced_from_lifted_light() {
     let mut layer = ImageLayer::new(&gpu.device, &gpu.queue, WORKING_FORMAT);
     let uploaded = layer
         .uploader(&gpu.device, &gpu.queue, gpu.capabilities)
-        .run(&image)
+        .run(image)
         .expect("the image uploads");
     layer.install(uploaded);
 

@@ -2539,7 +2539,7 @@ fn the_gain_map_toggle_shows_the_map_in_stops() {
         width: 2,
         height: 1,
         channels: 1,
-        data: vec![0, 255],
+        data: crate::image::gain_map::Data::Codes(vec![0, 255]),
         lift: Lift::Apple { headroom: 4.0 },
     }));
     image.depth = Some(Arc::new(DepthMap {
@@ -4515,7 +4515,7 @@ fn an_unknown_room_takes_the_whole_lift() {
         width: 2,
         height: 1,
         channels: 1,
-        data: vec![0, 255],
+        data: crate::image::gain_map::Data::Codes(vec![0, 255]),
         lift: Lift::Apple { headroom: 4.0 },
     }));
     current.image = Arc::new(image);
@@ -4547,7 +4547,7 @@ fn the_lift_follows_the_room_as_it_ramps() {
         width: 2,
         height: 1,
         channels: 1,
-        data: vec![0, 255],
+        data: crate::image::gain_map::Data::Codes(vec![0, 255]),
         lift: Lift::Apple { headroom: 4.0 },
     }));
     current.image = Arc::new(image);
@@ -4609,7 +4609,7 @@ fn the_numbers_follow_the_lift_off_the_loop() {
         width: 2,
         height: 1,
         channels: 1,
-        data: vec![0, 255],
+        data: crate::image::gain_map::Data::Codes(vec![0, 255]),
         lift: Lift::Apple { headroom: 4.0 },
     }));
     current.image = Arc::new(image);

@@ -159,16 +159,18 @@ impl super::Decoder for Raw {
     fn decode(
         &self,
         source: &mut dyn super::ReadSeek,
-        _overrides: super::Overrides,
+        overrides: super::Overrides,
     ) -> Result<DecodedImage> {
         // Taken rather than borrowed: developing the frame rewrites the
         // handle's multipliers, so it could not answer for the camera's
         // balance again, and is spent here.
         let handle = take_handle(source)?;
         // A DNG whose picture LibRaw cannot unpack, developed here instead;
-        // turned as the developed frame and the preview are.
+        // turned as the developed frame and the preview are. Its profile's
+        // rendering comes with it as a gain map, which the flag that leaves
+        // a photograph's gain map behind leaves behind too.
         if let Some(linear) = linear::Linear::read(&handle.bytes)? {
-            let image = linear.develop(&handle.bytes)?;
+            let image = linear.develop(&handle.bytes, overrides.gain_map)?;
             return Ok(crate::image::orient::apply(image, handle.orientation()));
         }
         let (width, height) = handle.output_size();

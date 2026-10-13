@@ -20,6 +20,14 @@
 //! lets the room switch without the file being read again — and what keeps
 //! a 24-megapixel photograph at four bytes a pixel rather than sixteen.
 //!
+//! A camera raw's profile is a lift too, of another kind: the exposure, the
+//! local tone map and the tone curve a DNG says the camera rendered its
+//! picture with ([`Lift::Profile`]). It is worked out when the raw is
+//! developed, a ratio a channel for every pixel of the picture
+//! ([`Data::Ratios`]), and read through the same machinery — the shader,
+//! the readout, the statistics and the copy — at a weight that is the
+//! switch's, on or off, rather than the display's room.
+//!
 //! [`Table`] is what a weight makes of the map: the linear gain each of its
 //! 256 values stands for. It is worked out once on the CPU, in
 //! [`GainMap::table`], and goes to the shader as a lookup texture, so the
@@ -29,6 +37,8 @@
 //! what the screen shows.
 
 use std::sync::Arc;
+
+use half::f16;
 
 use crate::image::color::{ColorSpace, Transfer};
 use crate::image::display::AutoWindow;
@@ -44,8 +54,33 @@ pub struct GainMap {
     pub height: u32,
     /// One for a luminance map, three for a map with a channel each.
     pub channels: u8,
-    pub data: Vec<u8>,
+    pub data: Data,
     pub lift: Lift,
+}
+
+/// The map's values: codes read through a [`Table`], as a file stores its
+/// gain map, or the gains themselves, as a profile's lift is worked out.
+#[derive(Clone, Debug)]
+pub enum Data {
+    /// Eight-bit codes, `channels` to a pixel, row by row.
+    Codes(Vec<u8>),
+    /// The linear gain itself, `channels` to a pixel, row by row: what the
+    /// whole of the lift multiplies each channel by.
+    Ratios(Vec<f16>),
+}
+
+impl Data {
+    /// How many values the map holds, `channels` to a pixel.
+    pub fn len(&self) -> usize {
+        match self {
+            Data::Codes(codes) => codes.len(),
+            Data::Ratios(ratios) => ratios.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 /// How the map's values are to be read.
@@ -62,6 +97,68 @@ pub enum Lift {
     /// of the picture's brightest white to SDR white, as the maker note
     /// works it out.
     Apple { headroom: f32 },
+    /// A camera raw's profile: the rendering its DNG says the camera meant
+    /// — a baseline exposure, a gain table that is a local tone map, and a
+    /// tone curve — worked out per pixel as [`Data::Ratios`] when the raw
+    /// was developed. Applied whole or not at all.
+    Profile(Profile),
+}
+
+/// What a raw's profile said, kept for the panels that say it: the map
+/// itself is the ratios it made.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Profile {
+    /// `BaselineExposure`, in stops.
+    pub baseline: f32,
+    /// The gain table's grid and its length, where the file has one.
+    pub table: Option<GainTableFacts>,
+    /// `ProfileToneCurve`, its points from black to white, where the file
+    /// has one.
+    pub curve: Option<Arc<Vec<[f32; 2]>>>,
+    /// The least and the most any channel of any pixel is lifted by, in
+    /// stops: found as the ratios were made, since a walk over a map the
+    /// picture's size is too much for every frame that asks.
+    pub range: [f32; 2],
+}
+
+/// A profile's gain table, as the information panel describes it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GainTableFacts {
+    /// Its grid's points, across and down.
+    pub points: [u32; 2],
+    /// The steps each point's table has.
+    pub steps: u32,
+}
+
+impl Profile {
+    /// The tone curve at `input`, through its points, linear between them:
+    /// what the histogram draws. The identity where there is no curve.
+    pub fn curve_at(&self, input: f32) -> f32 {
+        let Some(points) = self.curve.as_deref() else {
+            return input;
+        };
+        curve_through(points, input)
+    }
+}
+
+/// `points`, from black to white, read at `input` linearly between them,
+/// held at the ends.
+pub fn curve_through(points: &[[f32; 2]], input: f32) -> f32 {
+    let (Some(first), Some(last)) = (points.first(), points.last()) else {
+        return input;
+    };
+    if input <= first[0] {
+        return first[1];
+    }
+    if input >= last[0] {
+        return last[1];
+    }
+    let after = points.partition_point(|point| point[0] <= input);
+    let ([x0, y0], [x1, y1]) = (points[after - 1], points[after]);
+    if x1 <= x0 {
+        return y1;
+    }
+    y0 + (y1 - y0) * (input - x0) / (x1 - x0)
 }
 
 impl GainMap {
@@ -72,6 +169,21 @@ impl GainMap {
                 (metadata.alternate_hdr_headroom - metadata.base_hdr_headroom) as f32
             }
             Lift::Apple { headroom } => headroom.log2(),
+            Lift::Profile(profile) => profile.baseline,
+        }
+    }
+
+    /// Whether the map is a raw's profile rather than a picture's lift
+    /// above white.
+    pub fn is_profile(&self) -> bool {
+        matches!(self.lift, Lift::Profile(_))
+    }
+
+    /// The profile the map was made from, where it was made from one.
+    pub fn profile(&self) -> Option<&Profile> {
+        match &self.lift {
+            Lift::Profile(profile) => Some(profile),
+            _ => None,
         }
     }
 
@@ -80,14 +192,20 @@ impl GainMap {
     /// weight, where the display's headroom sits between the base's and the
     /// alternate's, from none of it to all of it. An infinite `headroom`
     /// is a display whose room is not known, which gets all of it.
+    ///
+    /// A profile is the camera's rendering rather than room above white,
+    /// and is the same on every display: all of it, whatever the room.
     pub fn weight(&self, headroom: f32) -> f32 {
+        if self.is_profile() {
+            return 1.0;
+        }
         let stops = self.stops();
         if stops.is_nan() || stops <= 0.0 || headroom.is_nan() {
             return 0.0;
         }
         let base = match &self.lift {
             Lift::Iso(metadata) => metadata.base_hdr_headroom as f32,
-            Lift::Apple { .. } => 0.0,
+            Lift::Apple { .. } | Lift::Profile(_) => 0.0,
         };
         ((headroom.max(1.0).log2() - base) / stops).clamp(0.0, 1.0)
     }
@@ -126,6 +244,13 @@ impl GainMap {
                 }
                 ([0.0; 3], [0.0; 3])
             }
+            // The ratios are the gains themselves, read without a table:
+            // a gain of one throughout, which is also what the lookup
+            // texture is written with, unread.
+            Lift::Profile(_) => {
+                gains.fill(1.0);
+                ([0.0; 3], [0.0; 3])
+            }
         };
         Table {
             weight,
@@ -142,18 +267,22 @@ impl GainMap {
     /// spans — so that what is lifted most is brightest, and the readout
     /// under the pointer reads stops.
     pub fn image(&self) -> DecodedImage {
-        let stops = self.stops_table();
         let channels = self.channels.max(1) as usize;
-        let data = self
-            .data
-            .chunks_exact(channels)
-            .flat_map(|values| {
-                values
-                    .iter()
-                    .enumerate()
-                    .map(|(channel, &value)| stops[channel.min(2) * 256 + value as usize])
-            })
-            .collect();
+        let data = match &self.data {
+            Data::Codes(codes) => {
+                let stops = self.stops_table();
+                codes
+                    .chunks_exact(channels)
+                    .flat_map(|values| {
+                        values
+                            .iter()
+                            .enumerate()
+                            .map(|(channel, &value)| stops[channel.min(2) * 256 + value as usize])
+                    })
+                    .collect()
+            }
+            Data::Ratios(ratios) => ratios.iter().map(|ratio| ratio.to_f32().log2()).collect(),
+        };
         let mut image = DecodedImage::new(
             self.width,
             self.height,
@@ -178,12 +307,19 @@ impl GainMap {
     /// may be less than the headroom it is described for. `None` for a map
     /// with no pixels.
     pub fn lift_range(&self) -> Option<[f32; 2]> {
+        let codes = match (&self.data, &self.lift) {
+            (_, Lift::Profile(profile)) => {
+                return (!self.data.is_empty()).then_some(profile.range);
+            }
+            (Data::Ratios(ratios), _) => return ratio_range(ratios),
+            (Data::Codes(codes), _) => codes,
+        };
         let stops = &self.stops_table();
         let channels = self.channels.max(1) as usize;
         // Which values each channel holds, so that a map of millions of
         // pixels is read through the table 256 times at most a channel.
         let mut held = [[false; 256]; 3];
-        for values in self.data.chunks_exact(channels) {
+        for values in codes.chunks_exact(channels) {
             for (channel, &value) in values.iter().enumerate().take(3) {
                 held[channel][value as usize] = true;
             }
@@ -251,6 +387,10 @@ impl GainMap {
         if span.partial_cmp(&f32::MIN_POSITIVE) != Some(std::cmp::Ordering::Greater) {
             return None;
         }
+        let stored = match &self.data {
+            Data::Codes(codes) => codes,
+            Data::Ratios(ratios) => return Some(self.ratio_plot(ratios, low, high)),
+        };
         let stops = self.stops_table();
         let channels = self.channels.max(1) as usize;
         let color = channels >= COLOR;
@@ -290,14 +430,14 @@ impl GainMap {
             }
         };
 
-        let pixels = self.data.len() / channels;
+        let pixels = stored.len() / channels;
         let stride = pixels.div_ceil(MAX_PLOTTED).max(1);
         // Counted by code first, so that a channel's spreading is done once
         // a code rather than once a pixel; the luminance of a map with three
         // is the one thing that has to be spread pixel by pixel.
         let mut codes = [[0u64; 256]; COLOR];
         let mut luma = [0f64; BINS];
-        for values in self.data.chunks_exact(channels).step_by(stride) {
+        for values in stored.chunks_exact(channels).step_by(stride) {
             for (channel, &value) in values.iter().enumerate().take(COLOR) {
                 codes[channel][value as usize] += 1;
             }
@@ -339,7 +479,13 @@ impl GainMap {
     /// stops, at the whole of the lift: the range the file describes its map
     /// over, from its lowest code to its highest, whatever this picture's
     /// map holds of it. `None` where no code says anything finite.
+    ///
+    /// A map of ratios describes nothing beyond what it holds: its range is
+    /// [`GainMap::lift_range`]'s.
     pub fn described_range(&self) -> Option<[f32; 2]> {
+        if matches!(self.data, Data::Ratios(_)) {
+            return self.lift_range();
+        }
         let channels = if self.channels >= 3 { COLOR } else { 1 };
         self.stops_table()[..channels * 256]
             .iter()
@@ -350,6 +496,42 @@ impl GainMap {
                     [low.min(stops), high.max(stops)]
                 }))
             })
+    }
+
+    /// The histogram of a map of ratios, over `low..high` stops: each
+    /// value is a gain of its own rather than a code standing for a
+    /// stretch, so each pixel's stops fall in the one bin they round to, a
+    /// channel each and their mean for the luminance.
+    fn ratio_plot(&self, ratios: &[f16], low: f32, high: f32) -> Plot {
+        let channels = self.channels.max(1) as usize;
+        let color = channels >= COLOR;
+        let scale = (BINS - 1) as f32 / (high - low);
+        let bin = |stops: f32| {
+            let at = ((stops - low) * scale + 0.5).clamp(0.0, (BINS - 1) as f32);
+            at as usize
+        };
+        let share = SHARES as u32;
+        let mut luma = [0u32; BINS];
+        let mut planes = [[0u32; BINS]; COLOR];
+        let pixels = ratios.len() / channels;
+        let stride = pixels.div_ceil(MAX_PLOTTED).max(1);
+        for values in ratios.chunks_exact(channels).step_by(stride) {
+            let mut mean = 0.0;
+            for (channel, value) in values.iter().enumerate().take(COLOR) {
+                let stops = value.to_f32().log2();
+                mean += stops / values.len().min(COLOR) as f32;
+                if color {
+                    planes[channel][bin(stops)] += share;
+                }
+            }
+            luma[bin(mean)] += share;
+        }
+        Plot {
+            min: low,
+            max: high,
+            luma,
+            color: color.then_some(planes),
+        }
     }
 
     /// Each value of each channel as the stops it lifts by at the whole of
@@ -367,7 +549,18 @@ impl GainMap {
     /// table, blended by the pixel's distance from them, as the standard's
     /// reference samples it. The twin of `gain` in `shaders/image.wgsl`
     /// and `shaders/reduce.wgsl`; keep the three in step.
+    ///
+    /// A map of ratios holds the gains themselves, which the table's
+    /// weight raises to its power: none of the lift at no weight, all of it
+    /// at one. A map the base's own size is read at the pixel itself, which
+    /// is where the blend lands anyway.
     pub fn gain_at(&self, table: &Table, x: u32, y: u32, width: u32, height: u32) -> [f32; 3] {
+        let codes = match &self.data {
+            Data::Codes(codes) => codes,
+            Data::Ratios(ratios) => {
+                return self.ratio_at(ratios, table.weight, x, y, width, height);
+            }
+        };
         let column = Tap::at(x, width, self.width);
         let row = Tap::at(y, height, self.height);
         let stride = self.width as usize;
@@ -379,7 +572,7 @@ impl GainMap {
             corner(column.far, row.far),
         );
         let blend = |channel: usize| {
-            let gain = |corner: usize| table.gain(self.data[corner + channel], channel);
+            let gain = |corner: usize| table.gain(codes[corner + channel], channel);
             let top = gain(c00) * (1.0 - column.fraction) + gain(c10) * column.fraction;
             let bottom = gain(c01) * (1.0 - column.fraction) + gain(c11) * column.fraction;
             top * (1.0 - row.fraction) + bottom * row.fraction
@@ -391,6 +584,58 @@ impl GainMap {
             [blend(0), blend(1), blend(2)]
         }
     }
+
+    /// [`GainMap::gain_at`] for a map of ratios, at `weight` of the lift.
+    fn ratio_at(
+        &self,
+        ratios: &[f16],
+        weight: f32,
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+    ) -> [f32; 3] {
+        if weight <= 0.0 {
+            return [1.0; 3];
+        }
+        let channels = self.channels.max(1) as usize;
+        let ratio = |channel: usize| -> f32 {
+            let read = |x: usize, y: usize| {
+                ratios
+                    .get((y * self.width as usize + x) * channels + channel.min(channels - 1))
+                    .map_or(1.0, |ratio| ratio.to_f32())
+            };
+            if (width, height) == (self.width, self.height) {
+                return read(x as usize, y as usize);
+            }
+            let column = Tap::at(x, width, self.width);
+            let row = Tap::at(y, height, self.height);
+            let top = read(column.near, row.near) * (1.0 - column.fraction)
+                + read(column.far, row.near) * column.fraction;
+            let bottom = read(column.near, row.far) * (1.0 - column.fraction)
+                + read(column.far, row.far) * column.fraction;
+            top * (1.0 - row.fraction) + bottom * row.fraction
+        };
+        let gains = [ratio(0), ratio(1), ratio(2)];
+        if weight >= 1.0 {
+            gains
+        } else {
+            gains.map(|gain| gain.powf(weight))
+        }
+    }
+}
+
+/// The least and the most of `ratios` in stops, where any is finite.
+fn ratio_range(ratios: &[f16]) -> Option<[f32; 2]> {
+    ratios
+        .iter()
+        .map(|ratio| ratio.to_f32().log2())
+        .filter(|stops| stops.is_finite())
+        .fold(None, |range: Option<[f32; 2]>, stops| {
+            Some(range.map_or([stops, stops], |[low, high]| {
+                [low.min(stops), high.max(stops)]
+            }))
+        })
 }
 
 /// What each of the map's 256 values means at one weight: the linear gain
@@ -500,7 +745,7 @@ mod tests {
             width: 2,
             height: 1,
             channels: 1,
-            data: vec![0, 255],
+            data: Data::Codes(vec![0, 255]),
             lift,
         }
     }
@@ -608,7 +853,7 @@ mod tests {
             width: 1,
             height: 1,
             channels: 3,
-            data: vec![0, 128, 255],
+            data: Data::Codes(vec![0, 128, 255]),
             lift: Lift::Apple { headroom: 8.0 },
         };
         let Samples::F32 { channels, data } = color.image().samples else {
@@ -634,7 +879,7 @@ mod tests {
             width: 2001,
             height: 1,
             channels: 1,
-            data,
+            data: Data::Codes(data),
             lift: Lift::Iso(iso(2.0)),
         };
         let image = map.image();
@@ -676,7 +921,7 @@ mod tests {
             width: 1,
             height: 1,
             channels: 3,
-            data: vec![0, 0, 255],
+            data: Data::Codes(vec![0, 0, 255]),
             lift: Lift::Iso(iso(3.0)),
         };
         let plot = color.lift_plot().expect("a lift to plot");
@@ -695,7 +940,7 @@ mod tests {
             width: 3,
             height: 1,
             channels: 1,
-            data: vec![200, 220, 255],
+            data: Data::Codes(vec![200, 220, 255]),
             lift: Lift::Iso(darkening),
         };
         let plot = partway.lift_plot().expect("a lift to plot");
@@ -718,7 +963,7 @@ mod tests {
             width: 256,
             height: 1,
             channels: 1,
-            data: (0..=255).collect(),
+            data: Data::Codes((0..=255).collect()),
             lift: Lift::Apple { headroom: 4.5 },
         };
         let plot = apple.lift_plot().expect("a lift to plot");
@@ -748,5 +993,90 @@ mod tests {
         // Pixel 1 is half way: half way between the two gains.
         assert!((gain(1) - 1.5).abs() < 1e-6);
         assert!((gain(3) - 2.0).abs() < 1e-6);
+    }
+
+    fn profile(baseline: f32, ratios: &[f32], width: u32) -> GainMap {
+        let data: Vec<f16> = ratios.iter().copied().map(f16::from_f32).collect();
+        let range = ratio_range(&data).unwrap_or([0.0; 2]);
+        GainMap {
+            width,
+            height: (data.len() / 3) as u32 / width,
+            channels: 3,
+            data: Data::Ratios(data),
+            lift: Lift::Profile(Profile {
+                baseline,
+                table: None,
+                curve: None,
+                range,
+            }),
+        }
+    }
+
+    /// A profile's ratios are the gains themselves: all of each at the
+    /// whole of the lift, none at no weight, and a channel the developed
+    /// picture held nothing of is left as it was.
+    #[test]
+    fn a_ratio_map_reads_its_ratios_directly() {
+        let map = profile(2.0, &[4.0, 0.5, 1.0, 2.0, 2.0, 2.0], 2);
+        let on = map.table(map.weight(1.0));
+        let off = map.table(0.0);
+        assert_eq!(map.gain_at(&on, 0, 0, 2, 1), [4.0, 0.5, 1.0]);
+        assert_eq!(map.gain_at(&on, 1, 0, 2, 1), [2.0, 2.0, 2.0]);
+        assert_eq!(map.gain_at(&off, 0, 0, 2, 1), [1.0; 3]);
+        let mut color = [0.25, 0.5, 0.0];
+        on.apply(&mut color, map.gain_at(&on, 0, 0, 2, 1));
+        assert_eq!(color, [1.0, 0.25, 0.0]);
+        assert_eq!(map.stops_at(0, 0, 2, 1), [2.0, -1.0, 0.0]);
+    }
+
+    /// A profile is the camera's rendering, the same on every display:
+    /// all of it whatever the room, and whichever way its baseline goes.
+    #[test]
+    fn the_profile_weight_ignores_the_room() {
+        for baseline in [4.12, 0.0, -1.27] {
+            let map = profile(baseline, &[1.0, 1.0, 1.0], 1);
+            for room in [1.0, 2.0, f32::INFINITY, f32::NAN] {
+                assert_eq!(map.weight(room), 1.0, "{baseline} at {room}");
+            }
+            assert_eq!(map.stops(), baseline);
+        }
+    }
+
+    /// A map of ratios is plotted over the stops it holds, a pixel to the
+    /// bin its stops round to, a plane a channel and their mean for the
+    /// luminance; shown, it reads in stops.
+    #[test]
+    fn a_ratio_map_is_plotted_and_shown_in_stops() {
+        let map = profile(0.0, &[0.25, 0.25, 0.25, 4.0, 4.0, 4.0, 1.0, 1.0, 1.0], 3);
+        assert_eq!(map.lift_range(), Some([-2.0, 2.0]));
+        assert_eq!(map.described_range(), Some([-2.0, 2.0]));
+        let plot = map.lift_plot().expect("a lift to plot");
+        assert_eq!((plot.min, plot.max), (-2.0, 2.0));
+        assert!(plot.luma[0] > 0 && plot.luma[BINS - 1] > 0);
+        assert!(plot.luma[plot.bin_at(0.0).expect("on the axis")] > 0);
+        assert_eq!(plot.luma.iter().sum::<u32>(), 3 * SHARES as u32);
+        let planes = plot.color.expect("a plane a channel");
+        assert_eq!(planes[1][0], SHARES as u32);
+
+        let Samples::F32 { channels, data } = map.image().samples else {
+            panic!("float samples");
+        };
+        assert_eq!(channels, Channels::Rgb);
+        assert_eq!(data[..3], [-2.0; 3]);
+        assert_eq!(data[3..6], [2.0; 3]);
+    }
+
+    /// The curve is read linearly between its points and held at its
+    /// ends; a profile without one reads the identity.
+    #[test]
+    fn the_tone_curve_is_read_between_its_points() {
+        let points = [[0.0, 0.0], [0.5, 0.25], [1.0, 1.0]];
+        assert_eq!(curve_through(&points, 0.5), 0.25);
+        assert_eq!(curve_through(&points, 0.25), 0.125);
+        assert_eq!(curve_through(&points, 0.75), 0.625);
+        assert_eq!(curve_through(&points, 2.0), 1.0);
+        assert_eq!(curve_through(&points, -1.0), 0.0);
+        let none = profile(0.0, &[1.0; 3], 1);
+        assert_eq!(none.profile().expect("a profile").curve_at(0.3), 0.3);
     }
 }

@@ -90,6 +90,10 @@ struct Fixture {
     /// The size of the camera's JPEG the file carries beside its picture,
     /// where it carries one. Every other fixture carries none.
     camera_jpeg: Option<[u32; 2]>,
+    /// For a raw whose profile says how it should look, how far the
+    /// rendering lifts the white quadrant, in stops. Every other fixture
+    /// carries no profile.
+    profile: Option<f32>,
 }
 
 /// A depth map as the four probes read it: the code the map holds at each,
@@ -117,6 +121,7 @@ const PLAIN: Fixture = Fixture {
     first_frame: None,
     depth: None,
     camera_jpeg: None,
+    profile: None,
 };
 
 /// Two frames or pages, playing for ever where it plays.
@@ -1746,6 +1751,8 @@ const FIXTURES: &[Fixture] = &[
     // codes through a linearization table, the camera's JPEG beside it.
     // LibRaw cannot unpack it, so `decode::raw::linear` develops it; the
     // matrix makes the camera's space Rec. 2020, and the pattern comes back.
+    // Its profile renders white two stops down: -2 EV, a gain of 2 from the
+    // table, and a curve taking a half to a quarter.
     Fixture {
         file: "dng-jxl.dng",
         covers: "DNG 1.7, Linear Raw in JPEG XL tiles developed without LibRaw",
@@ -1758,6 +1765,25 @@ const FIXTURES: &[Fixture] = &[
         nodata: None,
         tolerance: DEVELOPED,
         camera_jpeg: Some([32, 24]),
+        profile: Some(-2.0),
+        ..PLAIN
+    },
+    // The same with its gain table cut short: the picture develops, and so
+    // does the rest of the profile, white at a quarter through the curve
+    // with no table to double it first.
+    Fixture {
+        file: "dng-jxl-profile-cut.dng",
+        covers: "a DNG profile's malformed gain table passed over",
+        channels: Channels::Rgb,
+        kind: Kind::U16,
+        color: LINEAR_2020,
+        alpha: AlphaMode::Opaque,
+        tone: Tone::Color,
+        coverage: Coverage::Opaque,
+        nodata: None,
+        tolerance: DEVELOPED,
+        camera_jpeg: Some([32, 24]),
+        profile: Some(-3.0),
         ..PLAIN
     },
     // A PNG under a TIFF name, decoded by sniffing rather than extension.
@@ -2063,6 +2089,29 @@ fn every_fixture_carries_the_depth_map_it_says_it_does() {
                 ),
                 None => assert_eq!(distance, None, "{}", fixture.file),
             }
+        }
+    }
+}
+
+/// A raw whose profile says how it should look carries the rendering as a
+/// gain map of its own kind, lifting white by what its entry says; no other
+/// fixture carries one.
+#[test]
+fn every_fixture_carries_the_profile_it_says_it_does() {
+    for (fixture, image) in fixtures() {
+        let map = image.gain_map.as_deref().filter(|map| map.is_profile());
+        let Some(want) = fixture.profile else {
+            assert!(map.is_none(), "{}: a profile", fixture.file);
+            continue;
+        };
+        let map = map.unwrap_or_else(|| panic!("{}: no profile", fixture.file));
+        let (x, y) = PROBES[3];
+        for stops in map.stops_at(x, y, image.width, image.height) {
+            assert!(
+                (stops - want).abs() < 0.01,
+                "{}: white lifted {stops} stops",
+                fixture.file
+            );
         }
     }
 }

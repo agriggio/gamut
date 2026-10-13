@@ -194,6 +194,20 @@ impl<'a> Plan<'a> {
         Self::new(layout, pixels, width, None)
     }
 
+    /// Half floats stored as they are, RGB widened to RGBA: what a gain map
+    /// of ratios takes, whose values are gains the shader multiplies by.
+    pub fn float16(data: &'a [f16], channels: Channels, width: u32) -> Self {
+        let layout = Layout {
+            components: Components::of(channels),
+            storage: Storage::Float16,
+        };
+        let pixels = match expand(data, channels, layout.components.count(), f16::ONE) {
+            Some(out) => Pixels::F16(out),
+            None => Pixels::Borrowed(bytemuck::cast_slice(data)),
+        };
+        Self::new(layout, pixels, width, None)
+    }
+
     pub fn format(&self) -> wgpu::TextureFormat {
         self.layout.format()
     }

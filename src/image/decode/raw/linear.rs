@@ -10,22 +10,38 @@
 //! specification's arithmetic: each tile decoded by `jxl-oxide`, each value
 //! put through the linearization table, the black and white levels, and the
 //! color matrix [`super::profile`] works out, into sixteen bits of linear
-//! Rec. 2020 at the same 1.0 a developed raw has. The file's other
-//! instructions about how it should look — its baseline exposure, its tone
-//! curve, the gain table map that is Apple's local tone mapping — are left
-//! alone, as LibRaw's development leaves a camera's curve alone.
+//! Rec. 2020 at the same 1.0 a developed raw has.
+//!
+//! The file's other instructions, about how it should *look*, are its
+//! profile's: a baseline exposure, a gain table that is Apple's local tone
+//! mapping, and a tone curve. Together they are what the camera's JPEG was
+//! rendered from, and none of them alone is: the exposure lifts the whole
+//! picture stops past white, and the table, indexed by how bright each
+//! pixel then is, takes the highlights back down to where they were and
+//! leaves the shadows lifted. They are not applied to the picture, which
+//! stays as developed, but worked out beside it as the ratio each channel
+//! of each pixel is lifted by — a gain map of [`Lift::Profile`], which the
+//! display applies or not. They are worked out as the DNG SDK renders, in
+//! linear ProPhoto: the exposure as a plain multiply (the SDK's ramp adds a
+//! small toe at black, from a shadows setting the file does not carry), the
+//! table's gain on every channel alike, and the curve on the largest and
+//! smallest channels with the middle kept between them. A profile tag that
+//! is not what the specification says is passed over with a warning, and
+//! the picture develops without it.
 //!
 //! A file of this compression holding anything else — a mosaic, a picture
 //! of other than three channels — is refused by name; where the file
 //! carries the camera's JPEG, the loader shows that instead.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, anyhow, bail};
+use half::f16;
 use jxl_oxide::image::BitDepth;
 use jxl_oxide::{AllocTracker, JxlImage, PixelFormat};
 
 use super::profile::{self, Matrix, Profile};
+use crate::image::gain_map::{self, Data, GainMap, GainTableFacts, Lift};
 use crate::image::tiff::{self, Entry, Order};
 use crate::image::{
     AlphaMode, Channels, ColorSpace, DecodedImage, Primaries, Referred, Samples, Transfer,
@@ -65,6 +81,12 @@ mod tag {
     pub const CALIBRATION_ILLUMINANT_2: u16 = 50779;
     pub const FORWARD_MATRIX_1: u16 = 50964;
     pub const FORWARD_MATRIX_2: u16 = 50965;
+    pub const BASELINE_EXPOSURE: u16 = 50730;
+    pub const PROFILE_TONE_CURVE: u16 = 50940;
+    /// DNG 1.6's gain table, which an iPhone writes in the picture's
+    /// directory. DNG 1.7's `ProfileGainTableMap2`, 52544, adds a version,
+    /// other sample types and a gamma, and is not read yet.
+    pub const PROFILE_GAIN_TABLE_MAP: u16 = 52525;
 }
 
 /// The compression code DNG 1.7 gives JPEG XL.
@@ -95,7 +117,293 @@ pub struct Linear {
     black_down: Vec<f32>,
     /// From the camera's values, scaled to 0..1, to linear Rec. 2020.
     matrix: [[f32; 3]; 3],
+    /// How the profile says the picture should look, where it says
+    /// anything.
+    rendering: Option<Rendering>,
 }
+
+/// A profile's rendering, as it is worked out pixel by pixel.
+struct Rendering {
+    /// `2^BaselineExposure`.
+    exposure: f32,
+    baseline: f32,
+    table: Option<GainTable>,
+    curve: Option<Arc<Vec<[f32; 2]>>>,
+    /// Linear Rec. 2020 into linear ProPhoto, and back.
+    into: [[f32; 3]; 3],
+    back: [[f32; 3]; 3],
+}
+
+/// `ProfileGainTableMap`: a grid over the picture, and at each of its
+/// points a table of gains by how bright a pixel is.
+#[derive(Debug, PartialEq)]
+struct GainTable {
+    /// Points down and across.
+    points: [usize; 2],
+    /// The distance between points, down and across, as a share of the
+    /// picture's height and width.
+    spacing: [f64; 2],
+    /// Where the first point is, down and across, in the same shares.
+    origin: [f64; 2],
+    /// Each point's table's length.
+    steps: usize,
+    /// What red, green, blue, the least of the three and the most of them
+    /// are each weighted by in the brightness the table is indexed by.
+    weights: [f32; 5],
+    /// The tables, point by point across each row of the grid in turn.
+    gains: Vec<f32>,
+}
+
+/// The tag's header: two counts, four doubles, a count and five floats.
+const GAIN_TABLE_HEADER: usize = 64;
+
+/// The most gains a gain table may hold: sixteen million, which is four
+/// times what a grid at the picture's every eighth pixel would need of an
+/// iPhone's tables.
+const GAIN_TABLE_MAX: usize = 1 << 24;
+
+impl GainTable {
+    /// The tag's bytes, in `order`: the specification gives the tag no
+    /// byte order of its own, and an iPhone writes it big-endian inside a
+    /// little-endian file, so the caller tries both.
+    fn parse(bytes: &[u8], order: Order) -> Result<Self> {
+        let u32_at = |at: usize| {
+            order
+                .read_u32(bytes, at)
+                .context("the gain table is cut short")
+        };
+        let f64_at = |at: usize| -> Result<f64> {
+            let (first, second) = (u64::from(u32_at(at)?), u64::from(u32_at(at + 4)?));
+            Ok(f64::from_bits(match order {
+                Order::Little => first | second << 32,
+                Order::Big => first << 32 | second,
+            }))
+        };
+        let f32_at = |at: usize| -> Result<f32> { Ok(f32::from_bits(u32_at(at)?)) };
+        let points = [u32_at(0)? as usize, u32_at(4)? as usize];
+        let spacing = [f64_at(8)?, f64_at(16)?];
+        let origin = [f64_at(24)?, f64_at(32)?];
+        let steps = u32_at(40)? as usize;
+        let weights: [f32; 5] = [
+            f32_at(44)?,
+            f32_at(48)?,
+            f32_at(52)?,
+            f32_at(56)?,
+            f32_at(60)?,
+        ];
+        if points.contains(&0) || steps < 2 {
+            bail!("a gain table of {points:?} points and {steps} steps");
+        }
+        let count = points[0]
+            .checked_mul(points[1])
+            .and_then(|count| count.checked_mul(steps))
+            .filter(|count| *count <= GAIN_TABLE_MAX)
+            .context("a gain table larger than any picture needs")?;
+        if bytes.len() != GAIN_TABLE_HEADER + count * 4 {
+            bail!(
+                "a gain table of {count} gains in {} bytes",
+                bytes.len() - GAIN_TABLE_HEADER.min(bytes.len())
+            );
+        }
+        if !spacing
+            .iter()
+            .all(|value| value.is_finite() && *value > 0.0)
+            || !origin.iter().all(|value| value.is_finite())
+            || !weights.iter().all(|value| value.is_finite())
+        {
+            bail!("a gain table placed or weighted by numbers that are not");
+        }
+        let gains = (0..count)
+            .map(|index| f32_at(GAIN_TABLE_HEADER + index * 4))
+            .collect::<Result<Vec<_>>>()?;
+        if !gains.iter().all(|gain| gain.is_finite() && *gain >= 0.0) {
+            bail!("a gain table holding gains that are not");
+        }
+        Ok(Self {
+            points,
+            spacing,
+            origin,
+            steps,
+            weights,
+            gains,
+        })
+    }
+
+    /// The table read in whichever order makes sense of it: big-endian
+    /// first, as an iPhone writes it, then the file's own.
+    fn read(bytes: &[u8], file: Order) -> Result<Self> {
+        Self::parse(bytes, Order::Big).or_else(|error| match file {
+            Order::Big => Err(error),
+            Order::Little => Self::parse(bytes, Order::Little).map_err(|_| error),
+        })
+    }
+
+    /// The gain for `color` at `[down, across]`, each a share of the
+    /// picture's height and width: the table indexed by the color's
+    /// weighted brightness, linear between its steps, and blended between
+    /// the four points of the grid around the place, the edge's held past
+    /// it. The weights' order — red, green, blue, the least, the most — and
+    /// the index running to `steps` rather than one short of it are as the
+    /// one open reading of the tag found has them; the specification was
+    /// not to hand.
+    fn gain_at(&self, color: [f32; 3], place: [f32; 2]) -> f32 {
+        let [r, g, b] = color;
+        let w = &self.weights;
+        let input =
+            (w[0] * r + w[1] * g + w[2] * b + w[3] * r.min(g).min(b) + w[4] * r.max(g).max(b))
+                .clamp(0.0, 1.0);
+        let position = (input * self.steps as f32).min((self.steps - 1) as f32);
+        let step = (position as usize).min(self.steps - 2);
+        let along = position - step as f32;
+        let tap = |axis: usize| {
+            let at = ((f64::from(place[axis]) - self.origin[axis]) / self.spacing[axis])
+                .clamp(0.0, (self.points[axis] - 1) as f64);
+            let near = (at as usize).min(self.points[axis] - 1);
+            let far = (near + 1).min(self.points[axis] - 1);
+            (near, far, (at - near as f64) as f32)
+        };
+        let (top, bottom, down) = tap(0);
+        let (left, right, across) = tap(1);
+        let point = |row: usize, column: usize| {
+            let start = (row * self.points[1] + column) * self.steps + step;
+            let pair = &self.gains[start..start + 2];
+            pair[0] + (pair[1] - pair[0]) * along
+        };
+        let upper = point(top, left) + (point(top, right) - point(top, left)) * across;
+        let lower = point(bottom, left) + (point(bottom, right) - point(bottom, left)) * across;
+        upper + (lower - upper) * down
+    }
+}
+
+impl Rendering {
+    /// What the file's profile says, or `None` where it says nothing of
+    /// how the picture should look. A tag that is not what the
+    /// specification says is passed over, said on the terminal.
+    fn read(first: &Directory, picture: &Directory) -> Result<Option<Self>> {
+        let baseline = first.number(tag::BASELINE_EXPOSURE).unwrap_or(0.0) as f32;
+        let baseline = if baseline.is_finite() && baseline.abs() <= 16.0 {
+            baseline
+        } else {
+            warn(&format!("a baseline exposure of {baseline} EV"));
+            0.0
+        };
+        let table = [picture, first]
+            .iter()
+            .find_map(|directory| {
+                directory
+                    .entries
+                    .iter()
+                    .find(|entry| entry.tag == tag::PROFILE_GAIN_TABLE_MAP)
+                    .map(|entry| (directory, entry))
+            })
+            .and_then(|(directory, entry)| {
+                let read = entry
+                    .bytes(directory.bytes)
+                    .context("the gain table runs past the end of the file")
+                    .and_then(|bytes| GainTable::read(bytes, directory.order));
+                read.map_err(|error| warn(&format!("{error:#}"))).ok()
+            });
+        let curve = first.numbers(tag::PROFILE_TONE_CURVE).and_then(|values| {
+            let points: Vec<[f32; 2]> = values
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|[input, output]| [*input as f32, *output as f32])
+                .collect();
+            let rising = points.windows(2).all(|pair| pair[1][0] > pair[0][0]);
+            let inside = points
+                .iter()
+                .flatten()
+                .all(|value| value.is_finite() && (0.0..=1.0).contains(value));
+            if values.len() % 2 == 0 && points.len() >= 2 && rising && inside {
+                Some(Arc::new(points))
+            } else {
+                warn("a tone curve that does not run from black to white");
+                None
+            }
+        });
+        if baseline == 0.0 && table.is_none() && curve.is_none() {
+            return Ok(None);
+        }
+        let (into, back) = profile::prophoto()?;
+        Ok(Some(Self {
+            exposure: baseline.exp2(),
+            baseline,
+            table,
+            curve,
+            into,
+            back,
+        }))
+    }
+
+    /// What the profile renders `developed`, linear Rec. 2020, as, at
+    /// `place` — down and across, as shares of the picture.
+    fn render(&self, developed: [f32; 3], place: [f32; 2]) -> [f32; 3] {
+        let mut color = apply(self.into, developed).map(|value| value * self.exposure);
+        if let Some(table) = &self.table {
+            let gain = table.gain_at(color, place);
+            color = color.map(|value| value * gain);
+        }
+        let toned = match &self.curve {
+            Some(points) => {
+                profile::rgb_tone(|value| gain_map::curve_through(points, value), color)
+            }
+            None => profile::rgb_tone(|value| value, color),
+        };
+        apply(self.back, toned)
+    }
+
+    /// What the information panel and the histogram say of it, with the
+    /// least and the most it lifted any channel by.
+    fn lift(&self, range: [f32; 2]) -> Lift {
+        Lift::Profile(gain_map::Profile {
+            baseline: self.baseline,
+            table: self.table.as_ref().map(|table| GainTableFacts {
+                points: [table.points[1] as u32, table.points[0] as u32],
+                steps: table.steps as u32,
+            }),
+            curve: self.curve.clone(),
+            range,
+        })
+    }
+}
+
+fn apply(matrix: [[f32; 3]; 3], color: [f32; 3]) -> [f32; 3] {
+    std::array::from_fn(|row| (0..3).map(|c| matrix[row][c] * color[c]).sum())
+}
+
+/// Says on the terminal that the profile's `what` is passed over.
+fn warn(what: &str) {
+    eprintln!(
+        "{}: {}; the DNG's profile is applied without it",
+        crate::PROGRAM,
+        crate::escape_controls(what)
+    );
+}
+
+/// The least and the most of what ratios were made, in stops.
+type Range = Option<[f32; 2]>;
+
+fn widen(range: Range, other: Range) -> Range {
+    match (range, other) {
+        (Some([a, b]), Some([c, d])) => Some([a.min(c), b.max(d)]),
+        (range, None) | (None, range) => range,
+    }
+}
+
+/// The ratio a gain map holds for `out` over `stored`, a sixteen-bit code:
+/// one where nothing was stored, since nothing lifted is nothing; and kept
+/// to what a half float holds with its precision, a stop either side of
+/// anything a profile does.
+fn ratio(out: f32, stored: u16) -> f32 {
+    if stored == 0 {
+        return 1.0;
+    }
+    (out / (f32::from(stored) / 65535.0)).clamp(RATIO_LEAST, RATIO_MOST)
+}
+
+const RATIO_LEAST: f32 = 1.0 / 16384.0;
+const RATIO_MOST: f32 = 16384.0;
 
 /// One directory's entries, with the block they point into.
 struct Directory<'a> {
@@ -302,6 +610,7 @@ impl Linear {
         let black_down = delta(tag::BLACK_LEVEL_DELTA_V, height)?;
 
         let matrix = color(first)?.to_bt2020()?;
+        let rendering = Rendering::read(first, picture)?;
         Ok(Self {
             width,
             height,
@@ -313,23 +622,35 @@ impl Linear {
             black_across,
             black_down,
             matrix,
+            rendering,
         })
     }
 
     /// The picture, as stored: the turn the file asks for is the caller's.
-    pub fn develop(&self, bytes: &[u8]) -> Result<DecodedImage> {
+    /// With `profile`, its profile's rendering beside it, where it has one,
+    /// as the gain map the display lifts it by.
+    pub fn develop(&self, bytes: &[u8], profile: bool) -> Result<DecodedImage> {
         let (width, height) = (self.width as usize, self.height as usize);
         let output = Mutex::new(vec![0u16; width * height * 3]);
+        let rendering = self.rendering.as_ref().filter(|_| profile);
+        let ratios = rendering.map(|_| Mutex::new(vec![f16::ONE; width * height * 3]));
+        let range: Mutex<Range> = Mutex::new(None);
         let across = self.width.div_ceil(self.tile[0]) as usize;
         let mut failures: Vec<Option<anyhow::Error>> =
             (0..self.tiles.len()).map(|_| None).collect();
         rayon_core::scope(|scope| {
             for (index, failure) in failures.iter_mut().enumerate() {
-                let output = &output;
+                let (output, ratios, range) = (&output, ratios.as_ref(), &range);
                 scope.spawn(move |_| {
                     let at = [index % across, index / across];
-                    if let Err(error) = self.tile(bytes, index, at, output) {
-                        *failure = Some(error);
+                    let lifted = rendering.zip(ratios);
+                    match self.tile(bytes, index, at, output, lifted) {
+                        Ok(found) => {
+                            if let Ok(mut range) = range.lock() {
+                                *range = widen(*range, found);
+                            }
+                        }
+                        Err(error) => *failure = Some(error),
                     }
                 });
             }
@@ -360,18 +681,38 @@ impl Linear {
         // As LibRaw's development is: linear, balanced, and 1.0 where the
         // sensor saturated.
         image.referred = Referred::Display;
+        if let (Some(rendering), Some(ratios)) = (rendering, ratios) {
+            let ratios = ratios
+                .into_inner()
+                .map_err(|_| anyhow!("a tile's thread panicked"))?;
+            let range = range
+                .into_inner()
+                .map_err(|_| anyhow!("a tile's thread panicked"))?
+                .unwrap_or([0.0; 2]);
+            image.gain_map = Some(Arc::new(GainMap {
+                width: self.width,
+                height: self.height,
+                channels: 3,
+                data: Data::Ratios(ratios),
+                lift: rendering.lift(range),
+            }));
+        }
         Ok(image)
     }
 
     /// Decodes tile `index`, the `at`th across and down, develops it in
-    /// place, and copies the part of it inside the picture into `output`.
+    /// place, and copies the part of it inside the picture into `output`;
+    /// with `lifted`, works out what the profile renders each pixel as, and
+    /// copies the ratio into its map. Says the least and the most it lifted
+    /// anything by, in stops.
     fn tile(
         &self,
         bytes: &[u8],
         index: usize,
         at: [usize; 2],
         output: &Mutex<Vec<u16>>,
-    ) -> Result<()> {
+        lifted: Option<(&Rendering, &Mutex<Vec<f16>>)>,
+    ) -> Result<Range> {
         let [tile_width, tile_height] = self.tile.map(|side| side as usize);
         let mut values = decode_tile(&bytes[self.tiles[index].clone()], self.tile)?;
         let left = at[0] * tile_width;
@@ -379,6 +720,8 @@ impl Linear {
         // A tile at the right or the bottom is padded past the picture.
         let columns = tile_width.min(self.width as usize - left);
         let rows = tile_height.min(self.height as usize - top);
+        let mut ratios = lifted.map(|_| vec![f16::ONE; columns * rows * 3]);
+        let mut range: Range = None;
         for row in 0..rows {
             let y = top + row;
             for column in 0..columns {
@@ -393,9 +736,23 @@ impl Linear {
                     let black = self.black[c] + self.black_across[x] + self.black_down[y];
                     ((linear - black) / (self.white[c] - black)).clamp(0.0, 1.0)
                 });
-                for (c, row) in self.matrix.iter().enumerate() {
-                    let value = row[0] * camera[0] + row[1] * camera[1] + row[2] * camera[2];
-                    values[pixel + c] = (value.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16;
+                let developed = apply(self.matrix, camera).map(|value| value.clamp(0.0, 1.0));
+                for (c, value) in developed.iter().enumerate() {
+                    values[pixel + c] = (value * 65535.0 + 0.5) as u16;
+                }
+                if let (Some((rendering, _)), Some(ratios)) = (lifted, ratios.as_mut()) {
+                    let place = [
+                        (y as f32 + 0.5) / self.height as f32,
+                        (x as f32 + 0.5) / self.width as f32,
+                    ];
+                    let out = rendering.render(developed, place);
+                    let at = (row * columns + column) * 3;
+                    for c in 0..3 {
+                        let lift = ratio(out[c], values[pixel + c]);
+                        ratios[at + c] = f16::from_f32(lift);
+                        let stops = f16::from_f32(lift).to_f32().log2();
+                        range = widen(range, Some([stops, stops]));
+                    }
                 }
             }
         }
@@ -408,7 +765,18 @@ impl Linear {
             let to = ((top + row) * width + left) * 3;
             output[to..to + columns * 3].copy_from_slice(&values[from..from + columns * 3]);
         }
-        Ok(())
+        drop(output);
+        if let (Some((_, map)), Some(ratios)) = (lifted, ratios) {
+            let mut map = map
+                .lock()
+                .map_err(|_| anyhow!("a tile's thread panicked"))?;
+            for row in 0..rows {
+                let from = row * columns * 3;
+                let to = ((top + row) * width + left) * 3;
+                map[to..to + columns * 3].copy_from_slice(&ratios[from..from + columns * 3]);
+            }
+        }
+        Ok(range)
     }
 }
 
@@ -554,5 +922,122 @@ mod tests {
         bytes[at + 8..at + 10].copy_from_slice(&32803u16.to_le_bytes());
         let error = Linear::read(&bytes).err().expect("refused");
         assert!(format!("{error:#}").contains("not Linear Raw"), "{error:#}");
+    }
+
+    /// A gain table as the tag holds it, in `order`: a header and the
+    /// gains, row by row of the grid, a table to a point.
+    fn table_bytes(order: Order, points: [u32; 2], steps: u32, gains: &[f32]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        let u32s = |value: u32| match order {
+            Order::Little => value.to_le_bytes(),
+            Order::Big => value.to_be_bytes(),
+        };
+        let f64s = |value: f64| match order {
+            Order::Little => value.to_le_bytes(),
+            Order::Big => value.to_be_bytes(),
+        };
+        let f32s = |value: f32| u32s(value.to_bits());
+        bytes.extend(u32s(points[0]));
+        bytes.extend(u32s(points[1]));
+        for value in [1.0, 1.0, 0.0, 0.0] {
+            bytes.extend(f64s(value));
+        }
+        bytes.extend(u32s(steps));
+        for weight in [1.0, 0.0, 0.0, 0.0, 0.0] {
+            bytes.extend(f32s(weight));
+        }
+        for gain in gains {
+            bytes.extend(f32s(*gain));
+        }
+        bytes
+    }
+
+    /// The tag has no byte order of its own: big-endian, as an iPhone
+    /// writes it inside a little-endian file, is tried first, and the
+    /// file's own order after.
+    #[test]
+    fn a_gain_table_is_read_in_either_byte_order() {
+        let gains = [1.0, 2.0, 1.0, 2.0];
+        for order in [Order::Big, Order::Little] {
+            let table = GainTable::read(&table_bytes(order, [1, 2], 2, &gains), Order::Little)
+                .expect("a table");
+            assert_eq!(table.points, [1, 2]);
+            assert_eq!(table.steps, 2);
+            assert_eq!(table.gains, gains);
+        }
+        let mut cut = table_bytes(Order::Big, [1, 2], 2, &gains);
+        cut.pop();
+        assert!(GainTable::read(&cut, Order::Little).is_err());
+        assert!(GainTable::read(&table_bytes(Order::Big, [0, 2], 2, &[]), Order::Big).is_err());
+    }
+
+    /// The table is read along its steps by the weighted brightness, and
+    /// blended between the grid's points by the place, held at its edges.
+    #[test]
+    fn the_gain_table_is_sampled_along_its_steps_and_across_its_grid() {
+        // One row of two points, three steps each: the left point's gains
+        // rise 1, 2, 3 and the right point's are 4 throughout.
+        let bytes = table_bytes(Order::Big, [1, 2], 3, &[1.0, 2.0, 3.0, 4.0, 4.0, 4.0]);
+        let table = GainTable::read(&bytes, Order::Little).unwrap();
+        let left = |red: f32| table.gain_at([red, 0.0, 0.0], [0.5, 0.0]);
+        assert_eq!(left(0.0), 1.0);
+        // A third of the way in is the second step.
+        assert!((left(1.0 / 3.0) - 2.0).abs() < 1e-5);
+        assert!((left(0.5) - 2.5).abs() < 1e-5);
+        // The top is held at the last step.
+        assert_eq!(left(1.0), 3.0);
+        assert_eq!(left(4.0), 3.0, "clamped first");
+        // Half way across is half way between the two points.
+        let middle = table.gain_at([0.0; 3], [0.5, 0.5]);
+        assert!((middle - 2.5).abs() < 1e-5, "{middle}");
+        assert_eq!(table.gain_at([0.0; 3], [0.5, 1.0]), 4.0);
+        assert_eq!(table.gain_at([0.0; 3], [0.5, 7.0]), 4.0, "past the edge");
+    }
+
+    /// The fixture's profile renders white two stops down; a primary is
+    /// left alone in the channels it holds nothing of; and asked not to,
+    /// the develop leaves the profile behind.
+    #[test]
+    fn the_fixtures_profile_bakes_the_ratios_it_states() {
+        let bytes = fixture("dng-jxl.dng");
+        let linear = Linear::read(&bytes).unwrap().unwrap();
+        let image = linear.develop(&bytes, true).unwrap();
+        let map = image.gain_map.as_deref().expect("a profile");
+        let Lift::Profile(profile) = &map.lift else {
+            panic!("a profile's lift");
+        };
+        assert_eq!(profile.baseline, -2.0);
+        assert_eq!(
+            profile.table,
+            Some(GainTableFacts {
+                points: [2, 2],
+                steps: 2
+            })
+        );
+        assert_eq!(profile.curve.as_deref().map(Vec::len), Some(3));
+        let white = map.stops_at(24, 18, 32, 24);
+        for stops in white {
+            assert!((stops + 2.0).abs() < 0.01, "{white:?}");
+        }
+        let red = map.stops_at(8, 6, 32, 24);
+        assert_eq!(red[1..], [0.0, 0.0], "{red:?}");
+        assert!(profile.range[0] <= -2.0 && profile.range[1] >= -2.0);
+
+        assert!(linear.develop(&bytes, false).unwrap().gain_map.is_none());
+    }
+
+    /// A profile tag that is not what the specification says never stops
+    /// the picture developing: a cut gain table is passed over, and the
+    /// rest of the profile still applies.
+    #[test]
+    fn a_profile_tag_never_refuses_the_develop() {
+        let bytes = fixture("dng-jxl-profile-cut.dng");
+        let linear = Linear::read(&bytes).unwrap().unwrap();
+        let image = linear.develop(&bytes, true).unwrap();
+        let Some(Lift::Profile(profile)) = image.gain_map.as_deref().map(|map| &map.lift) else {
+            panic!("the rest of the profile");
+        };
+        assert_eq!(profile.table, None);
+        assert_eq!(profile.baseline, -2.0);
     }
 }

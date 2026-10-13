@@ -2660,7 +2660,7 @@ fn the_gain_map_toggle_is_there_only_for_a_picture_with_a_gain_map() {
         width: 2,
         height: 2,
         channels: 1,
-        data: vec![0, 85, 170, 255],
+        data: crate::image::gain_map::Data::Codes(vec![0, 85, 170, 255]),
         lift: Lift::Apple { headroom: 4.0 },
     }));
     current.image = Arc::new(image);
@@ -2710,7 +2710,7 @@ fn the_histogram_has_a_section_for_each_stage_the_picture_passes_through() {
         width: 2,
         height: 2,
         channels: 1,
-        data: vec![0, 85, 170, 255],
+        data: crate::image::gain_map::Data::Codes(vec![0, 85, 170, 255]),
         lift: Lift::Apple { headroom: 4.0 },
     }));
     current.image = Arc::new(image);

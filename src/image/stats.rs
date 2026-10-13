@@ -2624,7 +2624,9 @@ mod tests {
                                     width: 3,
                                     height: 2,
                                     channels: 1,
-                                    data: vec![0, 64, 128, 192, 255, 32],
+                                    data: crate::image::gain_map::Data::Codes(vec![
+                                        0, 64, 128, 192, 255, 32,
+                                    ]),
                                     lift: Lift::Apple { headroom: 4.0 },
                                 };
                                 let table = map.table(1.0);

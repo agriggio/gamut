@@ -18,7 +18,7 @@ use std::sync::Arc;
 use ::image::metadata::Orientation;
 
 use crate::image::depth::DepthMap;
-use crate::image::gain_map::GainMap;
+use crate::image::gain_map::{Data, GainMap};
 use crate::image::{Component, DecodedImage, Rebuild};
 
 /// The size a picture has once it is turned the way `orientation` says: a
@@ -127,13 +127,22 @@ fn turn_map(map: &GainMap, orientation: Orientation) -> Arc<GainMap> {
         width,
         height,
         channels: map.channels,
-        data: turn(
-            &map.data,
-            map.width,
-            map.height,
-            map.channels as usize,
-            orientation,
-        ),
+        data: match &map.data {
+            Data::Codes(codes) => Data::Codes(turn(
+                codes,
+                map.width,
+                map.height,
+                map.channels as usize,
+                orientation,
+            )),
+            Data::Ratios(ratios) => Data::Ratios(turn(
+                ratios,
+                map.width,
+                map.height,
+                map.channels as usize,
+                orientation,
+            )),
+        },
         lift: map.lift.clone(),
     })
 }
@@ -453,7 +462,7 @@ mod tests {
             width: 2,
             height: 1,
             channels: 1,
-            data: vec![0, 255],
+            data: crate::image::gain_map::Data::Codes(vec![0, 255]),
             lift: Lift::Apple { headroom: 4.0 },
         }));
         let table = image.gain_map.as_ref().unwrap().table(1.0);

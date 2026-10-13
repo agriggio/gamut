@@ -405,7 +405,7 @@ fn a_gain_map_is_described_after_the_image() {
         width: 2,
         height: 3,
         channels: 1,
-        data: vec![0, 0, 0, 0, 0, 255],
+        data: crate::image::gain_map::Data::Codes(vec![0, 0, 0, 0, 0, 255]),
         lift: Lift::Apple { headroom: 8.0 },
     };
     let mut image = (*current.image).clone();
