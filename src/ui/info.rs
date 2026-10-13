@@ -51,6 +51,8 @@ const REGIONS: &str = "Regions";
 const DEPTH_MAP: &str = "Depth map";
 /// The heading of the gain map the picture carries.
 const GAIN_MAP: &str = "Gain map";
+/// The heading of a raw's profile, where it says how the raw should look.
+const PROFILE: &str = "Profile";
 /// What the pill at the end of a heading says while its section is on
 /// screen in the picture's place.
 const SHOWING: &str = "Showing";
@@ -1382,6 +1384,19 @@ fn contents(current: &Current) -> Contents {
         )
     });
     sections.push(Section {
+        showing: current.showing == Showing::Auxiliary(Auxiliary::GainMap),
+        ..Section::new(
+            PROFILE,
+            Face::Headed {
+                mark: icon::APERTURE,
+                head: &[],
+                button: None,
+                reading: false,
+            },
+            fields(profile_facts(current)),
+        )
+    });
+    sections.push(Section {
         showing: current.showing == Showing::Auxiliary(Auxiliary::Depth),
         ..Section::new(
             DEPTH_MAP,
@@ -1715,7 +1730,12 @@ fn image_facts(current: &Current) -> Vec<(&'static str, String)> {
 /// where the picture carries no map.
 fn gain_map_facts(current: &Current) -> Vec<(&'static str, String)> {
     let face = current.picture_face();
-    let Some(map) = face.image.gain_map.as_deref() else {
+    let Some(map) = face
+        .image
+        .gain_map
+        .as_deref()
+        .filter(|map| !map.is_profile())
+    else {
         return Vec::new();
     };
     let stops = map.stops();
@@ -1753,6 +1773,43 @@ fn gain_map_facts(current: &Current) -> Vec<(&'static str, String)> {
             "Applied",
             applied(face.lift.as_ref().map_or(0.0, |lift| lift.weight()), map),
         ),
+    ]
+}
+
+/// What the panel says about a raw's profile, where it says how the raw
+/// should look: its baseline exposure, the grid and the steps of its gain
+/// table, the points of its tone curve, and whether its rendering is on
+/// screen. Nothing for a picture with no profile.
+fn profile_facts(current: &Current) -> Vec<(&'static str, String)> {
+    let face = current.picture_face();
+    let Some(profile) = face.image.gain_map.as_deref().and_then(GainMap::profile) else {
+        return Vec::new();
+    };
+    let applied = face.lift.as_ref().is_some_and(|lift| lift.weight() > 0.0);
+    vec![
+        (
+            "Baseline exposure",
+            format!("{:+.2} EV", profile.baseline + 0.0).replace('-', "\u{2212}"),
+        ),
+        (
+            "Gain table",
+            profile.table.map_or("none".to_string(), |table| {
+                format!(
+                    "{} \u{00d7} {} points, {} steps",
+                    table.points[0], table.points[1], table.steps
+                )
+            }),
+        ),
+        (
+            "Tone curve",
+            profile
+                .curve
+                .as_deref()
+                .map_or("none".to_string(), |points| {
+                    format!("{} points", points.len())
+                }),
+        ),
+        ("Applied", if applied { "yes" } else { "no" }.to_string()),
     ]
 }
 
