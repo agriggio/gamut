@@ -620,7 +620,15 @@ without them: much darker for most iPhone pictures. The choice holds for
 every raw, and for the next time `gamut` starts. Nothing is read again, so
 the switch is immediate, and the view and the display settings stay as they
 are. `G` shows how far the profile brightens each pixel in the picture's
-place, in stops, as it shows a gain map; such a raw has no sun button.
+place, in stops, as it shows a gain map — the profile's effective gain map
+— and its button, just before `HDR`, wears a dimmed sun.
+
+Under the *Profile* plot are the rendering's three parts, read upward in
+the order they are applied: the tone curve; the exposure and the gain
+table together, how far they lift a pixel by how bright it is, coming down
+to no lift at white, with the spread across the picture as a band and the
+pixel under the pointer as a line and a dot; and the exposure on its own
+row.
 
 The window is the one place the case of a key matters: `a` and `s` move
 the value that comes out black, `A` and `S` the value that comes out white.
@@ -651,10 +659,10 @@ the Output and Display plots counts from white — 0 is what comes out white,
 `-2` is two stops under it, and on an HDR screen `+1` is a stop over — and
 the one under the gain map's plot counts how far the map lifts the picture.
 A raw that says how it should look has a *Profile* section instead, whose
-plot counts how far that rendering lifts each pixel, and under it the raw's
-own tone curve, both of its axes in stops below white: the curve's toe,
-where it takes the deepest shadows to black, differs from one picture to
-the next.
+plot counts how far that rendering lifts each pixel. The rows of stops
+under the tone curve and the gain table count the brightness going in,
+from white: the curve's toe, where it takes the deepest shadows to black,
+differs from one picture to the next.
 Pointing at a plot names the value under
 the pointer at that stage; pointing at the picture marks the pixel on every
 plot and writes its value at each stage, from the file at the foot of the

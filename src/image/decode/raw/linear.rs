@@ -41,7 +41,7 @@ use jxl_oxide::image::BitDepth;
 use jxl_oxide::{AllocTracker, JxlImage, PixelFormat};
 
 use super::profile::{self, Matrix, Profile};
-use crate::image::gain_map::{self, Data, GainMap, GainTableFacts, Lift};
+use crate::image::gain_map::{self, Data, GainMap, GainTable, Lift};
 use crate::image::tiff::{self, Entry, Order};
 use crate::image::{
     AlphaMode, Channels, ColorSpace, DecodedImage, Primaries, Referred, Samples, Transfer,
@@ -127,31 +127,11 @@ struct Rendering {
     /// `2^BaselineExposure`.
     exposure: f32,
     baseline: f32,
-    table: Option<GainTable>,
+    table: Option<Arc<GainTable>>,
     curve: Option<Arc<Vec<[f32; 2]>>>,
     /// Linear Rec. 2020 into linear ProPhoto, and back.
     into: [[f32; 3]; 3],
     back: [[f32; 3]; 3],
-}
-
-/// `ProfileGainTableMap`: a grid over the picture, and at each of its
-/// points a table of gains by how bright a pixel is.
-#[derive(Debug, PartialEq)]
-struct GainTable {
-    /// Points down and across.
-    points: [usize; 2],
-    /// The distance between points, down and across, as a share of the
-    /// picture's height and width.
-    spacing: [f64; 2],
-    /// Where the first point is, down and across, in the same shares.
-    origin: [f64; 2],
-    /// Each point's table's length.
-    steps: usize,
-    /// What red, green, blue, the least of the three and the most of them
-    /// are each weighted by in the brightness the table is indexed by.
-    weights: [f32; 5],
-    /// The tables, point by point across each row of the grid in turn.
-    gains: Vec<f32>,
 }
 
 /// The tag's header: two counts, four doubles, a count and five floats.
@@ -162,6 +142,8 @@ const GAIN_TABLE_HEADER: usize = 64;
 /// iPhone's tables.
 const GAIN_TABLE_MAX: usize = 1 << 24;
 
+/// Reading the tag, which is the developer's business; what the table
+/// means is [`GainTable`]'s own.
 impl GainTable {
     /// The tag's bytes, in `order`: the specification gives the tag no
     /// byte order of its own, and an iPhone writes it big-endian inside a
@@ -237,42 +219,6 @@ impl GainTable {
             Order::Little => Self::parse(bytes, Order::Little).map_err(|_| error),
         })
     }
-
-    /// The gain for `color` at `[down, across]`, each a share of the
-    /// picture's height and width: the table indexed by the color's
-    /// weighted brightness, linear between its steps, and blended between
-    /// the four points of the grid around the place, the edge's held past
-    /// it. The weights' order — red, green, blue, the least, the most — and
-    /// the index running to `steps` rather than one short of it are as the
-    /// one open reading of the tag found has them; the specification was
-    /// not to hand.
-    fn gain_at(&self, color: [f32; 3], place: [f32; 2]) -> f32 {
-        let [r, g, b] = color;
-        let w = &self.weights;
-        let input =
-            (w[0] * r + w[1] * g + w[2] * b + w[3] * r.min(g).min(b) + w[4] * r.max(g).max(b))
-                .clamp(0.0, 1.0);
-        let position = (input * self.steps as f32).min((self.steps - 1) as f32);
-        let step = (position as usize).min(self.steps - 2);
-        let along = position - step as f32;
-        let tap = |axis: usize| {
-            let at = ((f64::from(place[axis]) - self.origin[axis]) / self.spacing[axis])
-                .clamp(0.0, (self.points[axis] - 1) as f64);
-            let near = (at as usize).min(self.points[axis] - 1);
-            let far = (near + 1).min(self.points[axis] - 1);
-            (near, far, (at - near as f64) as f32)
-        };
-        let (top, bottom, down) = tap(0);
-        let (left, right, across) = tap(1);
-        let point = |row: usize, column: usize| {
-            let start = (row * self.points[1] + column) * self.steps + step;
-            let pair = &self.gains[start..start + 2];
-            pair[0] + (pair[1] - pair[0]) * along
-        };
-        let upper = point(top, left) + (point(top, right) - point(top, left)) * across;
-        let lower = point(bottom, left) + (point(bottom, right) - point(bottom, left)) * across;
-        upper + (lower - upper) * down
-    }
 }
 
 impl Rendering {
@@ -301,7 +247,9 @@ impl Rendering {
                     .bytes(directory.bytes)
                     .context("the gain table runs past the end of the file")
                     .and_then(|bytes| GainTable::read(bytes, directory.order));
-                read.map_err(|error| warn(&format!("{error:#}"))).ok()
+                read.map_err(|error| warn(&format!("{error:#}")))
+                    .ok()
+                    .map(Arc::new)
             });
         let curve = first.numbers(tag::PROFILE_TONE_CURVE).and_then(|values| {
             let points: Vec<[f32; 2]> = values
@@ -358,10 +306,7 @@ impl Rendering {
     fn lift(&self, range: [f32; 2]) -> Lift {
         Lift::Profile(gain_map::Profile {
             baseline: self.baseline,
-            table: self.table.as_ref().map(|table| GainTableFacts {
-                points: [table.points[1] as u32, table.points[0] as u32],
-                steps: table.steps as u32,
-            }),
+            table: self.table.clone(),
             curve: self.curve.clone(),
             range,
             to_curve: self.into,
@@ -962,8 +907,8 @@ mod tests {
         for order in [Order::Big, Order::Little] {
             let table = GainTable::read(&table_bytes(order, [1, 2], 2, &gains), Order::Little)
                 .expect("a table");
-            assert_eq!(table.points, [1, 2]);
-            assert_eq!(table.steps, 2);
+            assert_eq!(table.points(), [2, 1]);
+            assert_eq!(table.steps(), 2);
             assert_eq!(table.gains, gains);
         }
         let mut cut = table_bytes(Order::Big, [1, 2], 2, &gains);
@@ -1008,13 +953,8 @@ mod tests {
             panic!("a profile's lift");
         };
         assert_eq!(profile.baseline, -2.0);
-        assert_eq!(
-            profile.table,
-            Some(GainTableFacts {
-                points: [2, 2],
-                steps: 2
-            })
-        );
+        let table = profile.table.as_deref().expect("a gain table");
+        assert_eq!((table.points(), table.steps()), ([2, 2], 2));
         assert_eq!(profile.curve.as_deref().map(Vec::len), Some(3));
         let white = map.stops_at(24, 18, 32, 24);
         for stops in white {
@@ -1038,7 +978,7 @@ mod tests {
         let Some(Lift::Profile(profile)) = image.gain_map.as_deref().map(|map| &map.lift) else {
             panic!("the rest of the profile");
         };
-        assert_eq!(profile.table, None);
+        assert!(profile.table.is_none());
         assert_eq!(profile.baseline, -2.0);
     }
 }

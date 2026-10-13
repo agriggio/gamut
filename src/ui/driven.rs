@@ -2732,8 +2732,9 @@ fn the_histogram_has_a_section_for_each_stage_the_picture_passes_through() {
 }
 
 /// A raw's profile has the Profile section in the Gain map's place, its
-/// square the profile's switch; and the bottom bar has no gain map toggle
-/// for it, the switch being the section's.
+/// square the profile's switch and its parts under its lift in the order
+/// they are applied, read upward; and the bottom bar's toggle shows the
+/// gain map it amounts to.
 #[test]
 fn a_raws_profile_has_a_section_and_a_switch_of_its_own() {
     use crate::image::gain_map::{Data, GainMap, Lift, Profile};
@@ -2771,14 +2772,24 @@ fn a_raws_profile_has_a_section_and_a_switch_of_its_own() {
     let file = painted_in_side(&harness, "Image").expect("Image");
     assert!(display.min.y < profile.min.y && profile.min.y < file.min.y);
     assert!(painted_in_side(&harness, "Gain map").is_none());
-    assert!(painted_in_side(&harness, super::histogram::TONE_CURVE).is_some());
+    let curve = painted_in_side(&harness, super::histogram::TONE_CURVE).expect("the curve");
+    let table = painted_in_side(&harness, super::histogram::GAIN_TABLE).expect("the table");
+    // The exposure's row, by its value: the Display section has a row of
+    // its own called Exposure above.
+    let exposure = painted_in_side(&harness, "+4.12 EV").expect("the exposure's row");
     assert!(
-        harness.query_by_label(&Control::GainMap.label()).is_none(),
-        "no gain map toggle in the bottom bar"
+        profile.min.y < curve.min.y && curve.min.y < table.min.y && table.min.y < exposure.min.y,
+        "read upward in the order they are applied"
     );
+    assert!(exposure.min.y < file.min.y);
     assert_eq!(
         click(&mut harness, &Control::Profile.label()),
         [Command::Press(Control::Profile)]
+    );
+    assert_eq!(
+        click(&mut harness, &Control::GainMap.label()),
+        [Command::Press(Control::GainMap)],
+        "the effective gain map's toggle in the bottom bar"
     );
 }
 

@@ -110,8 +110,9 @@ pub enum Lift {
 pub struct Profile {
     /// `BaselineExposure`, in stops.
     pub baseline: f32,
-    /// The gain table's grid and its length, where the file has one.
-    pub table: Option<GainTableFacts>,
+    /// The gain table, where the file has one: kept for the histogram,
+    /// which draws it, and the information panel, which describes it.
+    pub table: Option<Arc<GainTable>>,
     /// `ProfileToneCurve`, its points from black to white, where the file
     /// has one.
     pub curve: Option<Arc<Vec<[f32; 2]>>>,
@@ -125,13 +126,101 @@ pub struct Profile {
     pub to_curve: [[f32; 3]; 3],
 }
 
-/// A profile's gain table, as the information panel describes it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct GainTableFacts {
-    /// Its grid's points, across and down.
-    pub points: [u32; 2],
+/// A raw profile's `ProfileGainTableMap`: a grid over the picture, and at
+/// each of its points a table of gains by how bright a pixel is — Apple's
+/// local tone mapping. Read from the file by the raw developer.
+#[derive(Debug, PartialEq)]
+pub struct GainTable {
+    /// Points down and across.
+    pub(crate) points: [usize; 2],
+    /// The distance between points, down and across, as a share of the
+    /// picture's height and width.
+    pub(crate) spacing: [f64; 2],
+    /// Where the first point is, down and across, in the same shares.
+    pub(crate) origin: [f64; 2],
+    /// Each point's table's length.
+    pub(crate) steps: usize,
+    /// What red, green, blue, the least of the three and the most of them
+    /// are each weighted by in the brightness the table is indexed by.
+    pub(crate) weights: [f32; 5],
+    /// The tables, point by point across each row of the grid in turn.
+    pub(crate) gains: Vec<f32>,
+}
+
+impl GainTable {
+    /// The grid's points, across and down.
+    pub fn points(&self) -> [usize; 2] {
+        [self.points[1], self.points[0]]
+    }
+
     /// The steps each point's table has.
-    pub steps: u32,
+    pub fn steps(&self) -> usize {
+        self.steps
+    }
+
+    /// The brightness `color` indexes the table by, 0 to 1: the weighted
+    /// sum of its channels, the least of them and the most. The weights'
+    /// order — red, green, blue, the least, the most — is as the one open
+    /// reading of the tag found has it; the specification was not to hand.
+    pub fn input(&self, color: [f32; 3]) -> f32 {
+        let [r, g, b] = color;
+        let w = &self.weights;
+        (w[0] * r + w[1] * g + w[2] * b + w[3] * r.min(g).min(b) + w[4] * r.max(g).max(b))
+            .clamp(0.0, 1.0)
+    }
+
+    /// Where `input` falls along a point's table: the step before it, and
+    /// how far toward the next. The index runs to `steps` rather than one
+    /// short of it, clamped to the last step, as the same reading has it.
+    fn along(&self, input: f32) -> (usize, f32) {
+        let position = (input.clamp(0.0, 1.0) * self.steps as f32).min((self.steps - 1) as f32);
+        let step = (position as usize).min(self.steps - 2);
+        (step, position - step as f32)
+    }
+
+    /// The gain at brightness `input` at `[down, across]`, each a share of
+    /// the picture's height and width: linear between the table's steps,
+    /// and blended between the four points of the grid around the place,
+    /// the edge's held past it.
+    pub fn gain_for(&self, input: f32, place: [f32; 2]) -> f32 {
+        let (step, along) = self.along(input);
+        let tap = |axis: usize| {
+            let at = ((f64::from(place[axis]) - self.origin[axis]) / self.spacing[axis])
+                .clamp(0.0, (self.points[axis] - 1) as f64);
+            let near = (at as usize).min(self.points[axis] - 1);
+            let far = (near + 1).min(self.points[axis] - 1);
+            (near, far, (at - near as f64) as f32)
+        };
+        let (top, bottom, down) = tap(0);
+        let (left, right, across) = tap(1);
+        let point = |row: usize, column: usize| {
+            let start = (row * self.points[1] + column) * self.steps + step;
+            let pair = &self.gains[start..start + 2];
+            pair[0] + (pair[1] - pair[0]) * along
+        };
+        let upper = point(top, left) + (point(top, right) - point(top, left)) * across;
+        let lower = point(bottom, left) + (point(bottom, right) - point(bottom, left)) * across;
+        upper + (lower - upper) * down
+    }
+
+    /// The gain for `color` at `place`: [`GainTable::gain_for`] at the
+    /// color's own brightness.
+    pub fn gain_at(&self, color: [f32; 3], place: [f32; 2]) -> f32 {
+        self.gain_for(self.input(color), place)
+    }
+
+    /// The least and the most gain at `input` over every point of the grid:
+    /// the spread of the picture's tables at that brightness, read along
+    /// the steps as [`GainTable::gain_for`] reads them.
+    pub fn spread_at(&self, input: f32) -> [f32; 2] {
+        let (step, along) = self.along(input);
+        self.gains
+            .chunks_exact(self.steps)
+            .map(|table| table[step] + (table[step + 1] - table[step]) * along)
+            .fold([f32::INFINITY, f32::NEG_INFINITY], |[low, high], gain| {
+                [low.min(gain), high.max(gain)]
+            })
+    }
 }
 
 impl Profile {

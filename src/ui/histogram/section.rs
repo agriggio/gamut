@@ -28,8 +28,10 @@ pub enum Section {
     /// How far the gain map lifts the picture, where it has one.
     GainMap,
     /// How a raw's profile renders it, where it says: how far each pixel
-    /// is lifted, and the tone curve. Nearest the file, since the profile
-    /// is applied to the values the file stores before anything else.
+    /// is lifted, and under it the profile's parts read upward in the order
+    /// they are applied — the exposure, the gain table, the tone curve.
+    /// Nearest the file, since the profile is applied to the values the
+    /// file stores before anything else.
     Profile,
     /// The picture as the file stores it.
     Image,
@@ -66,7 +68,7 @@ impl Section {
             Section::Output => icon::MONITOR,
             Section::Display => icon::SLIDERS_HORIZONTAL,
             Section::GainMap => icon::SUN,
-            Section::Profile => icon::APERTURE,
+            Section::Profile => icon::SPLINE,
             Section::Image => icon::IMAGE,
         }
     }
@@ -139,17 +141,17 @@ impl Section {
             // A shorter plot and the row of stops under it: how much of the
             // lift is applied is the header's to say.
             Section::GainMap => head + SHORT_PLOT_HEIGHT + PLOT_INSET + EV_ROW,
-            // The lift's plot and its row of stops, as the Gain map's, and
-            // under them the curve's, on the same footing.
+            // The lift's plot and its row of stops, as the Gain map's; under
+            // them the curve's and the gain table's, on the same footing;
+            // and the exposure's row.
             Section::Profile => {
+                let part = CURVE_GAP + PLOT_INSET + CURVE_PLOT_HEIGHT + PLOT_INSET + EV_ROW;
                 head + SHORT_PLOT_HEIGHT
                     + PLOT_INSET
                     + EV_ROW
-                    + CURVE_GAP
-                    + PLOT_INSET
-                    + CURVE_PLOT_HEIGHT
-                    + PLOT_INSET
-                    + EV_ROW
+                    + 2.0 * part
+                    + display::ROW_GAP
+                    + display::ROW_HEIGHT
             }
             // A plot to the stored channel, and the rows of values under
             // them: see `stored::Layout`.
@@ -175,12 +177,32 @@ impl Section {
     }
 }
 
+/// The ground the plot under `above` is drawn on, `above` being one of the
+/// Profile section's plots with its row of stops under it.
+fn under(above: Rect) -> Rect {
+    let y = above.bottom() + PLOT_INSET + EV_ROW + CURVE_GAP + PLOT_INSET;
+    Rect::new(above.x, y, above.width, CURVE_PLOT_HEIGHT)
+}
+
 /// The ground the Profile section's tone curve is drawn on, in the section
 /// laid out at `rect`: under the lift's plot and its row of stops.
 pub fn curve_plot(rect: Rect) -> Rect {
-    let lift = Section::Profile.plot(rect);
-    let y = lift.bottom() + PLOT_INSET + EV_ROW + CURVE_GAP + PLOT_INSET;
-    Rect::new(lift.x, y, lift.width, CURVE_PLOT_HEIGHT)
+    under(Section::Profile.plot(rect))
+}
+
+/// The ground the Profile section's gain table is drawn on, with the
+/// exposure in it: under the curve's, being applied before it.
+pub fn table_plot(rect: Rect) -> Rect {
+    under(curve_plot(rect))
+}
+
+/// The Profile section's last row, the exposure's, which is applied first:
+/// under the gain table's plot and its row of stops, as the Display
+/// section's rows are under its band.
+pub fn exposure_row(rect: Rect) -> Rect {
+    let table = table_plot(rect);
+    let y = table.bottom() + PLOT_INSET + EV_ROW + display::ROW_GAP;
+    Rect::new(rect.x, y, rect.width, display::ROW_HEIGHT)
 }
 
 /// Between the Profile section's lift's row of stops and its curve's

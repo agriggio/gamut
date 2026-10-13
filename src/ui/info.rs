@@ -1388,7 +1388,7 @@ fn contents(current: &Current) -> Contents {
         ..Section::new(
             PROFILE,
             Face::Headed {
-                mark: icon::APERTURE,
+                mark: icon::SPLINE,
                 head: &[],
                 button: None,
                 reading: false,
@@ -1793,12 +1793,13 @@ fn profile_facts(current: &Current) -> Vec<(&'static str, String)> {
         ),
         (
             "Gain table",
-            profile.table.map_or("none".to_string(), |table| {
-                format!(
-                    "{} \u{00d7} {} points, {} steps",
-                    table.points[0], table.points[1], table.steps
-                )
-            }),
+            profile
+                .table
+                .as_deref()
+                .map_or("none".to_string(), |table| {
+                    let [across, down] = table.points();
+                    format!("{across} \u{00d7} {down} points, {} steps", table.steps())
+                }),
         ),
         (
             "Tone curve",

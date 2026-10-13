@@ -1681,6 +1681,16 @@ impl Naming for Namer {
                 }
                 None => (vec![names(keys, at)?], Vec::new()),
             },
+            // The gain map's toggle on a raw's profile, which is the gain
+            // map the profile's rendering amounts to rather than one the
+            // file carries: said as that, with the key.
+            Tip::Control(Control::GainMap) if self.conditions.profile => (
+                vec![with_key(
+                    ui::tooltip::SHOW_EFFECTIVE_GAIN_MAP,
+                    key_of(keys, ToggleGainMap),
+                )],
+                Vec::new(),
+            ),
             // The button that hides the interface: what a plain press does,
             // and under it the key for the press that closes the floating
             // panels with it — the one thing on the button the pointer

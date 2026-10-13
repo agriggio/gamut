@@ -65,6 +65,44 @@ fn the_camera_switch_says_what_a_press_brings_up() {
     );
 }
 
+/// The gain map's toggle on a raw's profile says it shows the gain map the
+/// profile amounts to, with its key; on a photograph's gain map, it is
+/// named by its key's row as before.
+#[test]
+fn the_gain_map_toggle_on_a_profile_says_what_it_shows() {
+    let namer = |conditions| Namer {
+        path: String::new(),
+        index: 0,
+        count: 0,
+        show_histogram: false,
+        state: Vec::new(),
+        keys: Rc::new(Keymap::table()),
+        gestures: Rc::new(Gestures::table()),
+        camera: None,
+        conditions,
+    };
+    let title = |conditions| {
+        namer(conditions)
+            .tooltip(Tip::Control(Control::GainMap))
+            .map(|tooltip| tooltip.title)
+    };
+    assert_eq!(
+        title(Conditions::ALIVE),
+        Some(vec![format!(
+            "{} (Shift+G)",
+            ui::tooltip::SHOW_EFFECTIVE_GAIN_MAP
+        )])
+    );
+    let photograph = Conditions {
+        profile: false,
+        ..Conditions::ALIVE
+    };
+    assert_eq!(
+        title(photograph),
+        Some(vec!["Toggle gain map display (Shift+G)".to_string()])
+    );
+}
+
 /// Every button in the chrome is named by the key that does the same job,
 /// in that key's own words: there is one table, so a tooltip and `--help`
 /// have nowhere to disagree about a binding.

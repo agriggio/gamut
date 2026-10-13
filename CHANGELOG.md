@@ -27,9 +27,11 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
   exposure, Apple's local tone map and the profile's tone curve, which put
   it close to the camera's JPEG. `P` switches the rendering off and on for
   every raw, and the choice is kept between runs. The histogram panel's
-  *Profile* section plots how far the rendering lifts each pixel and draws
-  the file's tone curve in stops, and the information panel describes the
-  profile. `--no-gain-map` leaves the rendering behind too.
+  *Profile* section plots how far the rendering lifts each pixel, and under
+  it its parts in the order they are applied: the file's tone curve, the
+  exposure and the gain table together, and the exposure. `G` and the
+  dimmed sun beside `HDR` show the profile's effective gain map in the
+  picture's place, and the information panel describes the profile. `--no-gain-map` leaves the rendering behind too.
 
 ### Changed
 

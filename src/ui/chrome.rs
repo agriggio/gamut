@@ -807,16 +807,17 @@ impl Pass<'_> {
     /// the depth map's and the headroom switch, the one whose room the map
     /// is about: a square with the mark alone, lit while the map is up, and
     /// left out as the depth map's is. Says whether it was drawn. A raw's
-    /// profile is a gain map too, and has no room to be about: its switch
-    /// is the histogram's Profile section's, and `G` still shows its lift.
+    /// profile is a gain map too, the one its rendering amounts to, which
+    /// is no light above white: it wears the sun dimmed.
     fn gain_map_toggle(&mut self, ui: &mut Ui, current: &Current) -> bool {
         let picture = current.picture().0;
-        let profile = picture.gain_map.as_deref().is_some_and(GainMap::is_profile);
-        if !picture.carries(Auxiliary::GainMap) || profile || self.input.arriving.is_some() {
+        if !picture.carries(Auxiliary::GainMap) || self.input.arriving.is_some() {
             return false;
         }
+        let profile = picture.gain_map.as_deref().is_some_and(GainMap::is_profile);
+        let mark = if profile { icon::SUN_DIM } else { icon::SUN };
         let on = current.showing == Showing::Auxiliary(Auxiliary::GainMap);
-        self.toggle(ui, icon::SUN, Control::GainMap, on, true, Corners::All);
+        self.toggle(ui, mark, Control::GainMap, on, true, Corners::All);
         true
     }
 

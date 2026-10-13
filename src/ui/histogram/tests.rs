@@ -564,9 +564,20 @@ fn the_profile_section_takes_the_gain_maps_place_for_a_raw() {
         "clear of the lift's ground"
     );
     assert_eq!((curve.x, curve.width), (lift.x, lift.width));
+    let table = section::table_plot(rect);
     assert!(
-        curve.bottom() + PLOT_INSET + EV_ROW <= rect.bottom() + 1e-3,
-        "the curve and its row of stops inside the section"
+        table.y - PLOT_INSET > curve.bottom() + PLOT_INSET + EV_ROW,
+        "clear of the curve's row"
+    );
+    assert_eq!((table.x, table.width), (lift.x, lift.width));
+    let exposure = section::exposure_row(rect);
+    assert!(
+        exposure.y > table.bottom() + PLOT_INSET + EV_ROW,
+        "clear of the table's row"
+    );
+    assert!(
+        (exposure.bottom() - rect.bottom()).abs() < 1e-3,
+        "the exposure's row ends the section"
     );
 }
 

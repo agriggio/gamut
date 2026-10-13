@@ -703,10 +703,12 @@ an exposure on the other.
 
 The switch is the Profile section's square, at the end of its header in the
 histogram, and `P`; the Mac's Image menu has it as **Profile**. The bottom
-bar's gain map toggle is left out for a profile (`Pass::gain_map_toggle`),
-since a profile is about no room above white and the sun would say it was;
-`G` still shows the lift in the picture's place, and the Mac's menu calls
-that **Profile Lift** for a raw. `Conditions::profile` is what makes the
+bar's gain map toggle stays, since `G` shows the lift in the picture's
+place for a profile as for a photograph's map; for a profile it wears the
+sun dimmed, Lucide's `sun-dim` (`Pass::gain_map_toggle`), since a profile is
+no light above white, and says it shows the profile's effective gain map
+(`Namer::tooltip`, from `Conditions::profile`). The Mac's menu calls it
+**Effective Gain Map** for a raw. `Conditions::profile` is what makes the
 square and the key dead, with `NO_PROFILE` as the reason, on a file with no
 profile, which only a press of `P` ever reaches, the section not being drawn
 for such a file.

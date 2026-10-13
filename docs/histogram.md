@@ -113,11 +113,19 @@ Gain map section would, because the profile is applied to the values the
 file stores before anything else is. Its square is not an eye but the
 profile's switch, lit while the rendering is applied, since showing the
 lift in the picture's place is `G`'s already and the switch has nowhere
-else to be on the screen; its header says the baseline exposure and whether
-the rendering is applied.
+else to be on the screen; its header says whether the rendering is applied.
+Its mark is Lucide's `spline`, which the information panel's section about
+the profile wears too.
 
-Under the lift's plot is the profile's tone curve, on its own ground
-(`section::curve_plot`), with both axes in stops below white down to ten.
+Under the lift's plot are the rendering's three parts, read upward in the
+order they are applied, as the column is: the tone curve, the gain table
+with the exposure in it, and the exposure's own row (`section::curve_plot`,
+`section::table_plot`, `section::exposure_row`). The lift's histogram stays
+above them as the section's own plot, the net of the three, as the Display
+section's plot stands above its rows.
+
+The tone curve is drawn on its own ground with both axes in stops below
+white down to ten.
 The curve is the one stage of the profile that is a function of one value,
 and so the one that can be drawn rather than counted; and in stops is where
 it can be read, since everything that tells one file's curve from another's
@@ -128,6 +136,22 @@ lifted by the whole of the profile, its largest channel in ProPhoto — the
 one the curve was put through — and the curve run backwards from there for
 what it took. The whole of the profile, whether or not the switch has it on
 screen, since the curve is the profile's and not the screen's.
+
+The gain table is drawn with the exposure in it: across, the brightness the
+table is indexed by, in stops below white; up, the baseline plus the
+table's gain, in stops. Neither part means anything alone — the exposure
+lifts everything alike, and the table gives back in the highlights what
+the exposure took past white — and drawn together the line comes down to no
+lift at white, which is the point of the pair. The table is a curve at each
+point of a grid over the picture; their spread (`GainTable::spread_at`, a
+reading of every point at every device column, kept in egui's data for as
+long as the table is the same one) is a wash behind, and while the pointer
+is on the picture its own curve — the four points around it blended for
+where it is — is the line, with the pixel's dot on it (`GainTable::input`,
+`GainTable::gain_for`). Two faint rules across mark no lift and the
+exposure alone. A profile with no table is the exposure alone, a level
+line. The exposure itself, being one number, is a row of words, as the
+Display section's settings are.
 
 The row of buttons — the marks on the picture, and at the far end the
 reset (`histogram::toolbar`) — acts on every plot in the column, or on the

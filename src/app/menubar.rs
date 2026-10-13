@@ -765,7 +765,7 @@ impl App {
             }
             Does::Control(Control::StepForward) if pages => "Next Page",
             Does::Control(Control::StepBack) if pages => "Previous Page",
-            Does::Control(Control::GainMap) if conditions.profile => "Profile Lift",
+            Does::Control(Control::GainMap) if conditions.profile => "Effective Gain Map",
             _ => return None,
         };
         Some(title.to_string())

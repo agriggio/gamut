@@ -171,6 +171,11 @@ pub const NO_DEPTH_MAP: &str = "This image has no depth map.";
 /// map, which is as seldom heard as [`NO_DEPTH_MAP`] for the same reason.
 pub const NO_GAIN_MAP: &str = "This image has no gain map.";
 
+/// What the gain map's toggle says on a raw whose profile says how it
+/// should look: what it shows is the gain map the rendering amounts to.
+pub const SHOW_EFFECTIVE_GAIN_MAP: &str =
+    "Show the profile's effective gain map in the picture's place, in stops";
+
 /// What the profile's switch says, for the key, on a file whose profile
 /// says nothing of how it should look. The switch is a square of the
 /// histogram's Profile section, which is not drawn for such a file.

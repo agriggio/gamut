@@ -397,7 +397,7 @@ fn the_time_taken_is_said_as_how_long_ago() {
 /// and steps, the curve's points, and whether the rendering is on screen.
 #[test]
 fn a_profile_is_described_after_the_image() {
-    use crate::image::gain_map::{Data, GainMap, GainTableFacts, Lift, Profile};
+    use crate::image::gain_map::{Data, GainMap, GainTable, Lift, Profile};
     let mut current = current();
     assert!(!written(&current).iter().any(|row| row == PROFILE));
     let map = GainMap {
@@ -407,10 +407,14 @@ fn a_profile_is_described_after_the_image() {
         data: Data::Ratios(vec![half::f16::ONE; 3]),
         lift: Lift::Profile(Profile {
             baseline: -1.27,
-            table: Some(GainTableFacts {
-                points: [64, 48],
+            table: Some(std::sync::Arc::new(GainTable {
+                points: [48, 64],
+                spacing: [1.0 / 48.0, 1.0 / 64.0],
+                origin: [0.0, 0.0],
                 steps: 257,
-            }),
+                weights: [0.0; 5],
+                gains: vec![1.0; 48 * 64 * 257],
+            })),
             curve: Some(std::sync::Arc::new(vec![[0.0, 0.0], [1.0, 1.0]])),
             range: [0.0, 0.0],
             to_curve: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
