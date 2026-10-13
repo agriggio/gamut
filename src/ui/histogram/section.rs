@@ -27,16 +27,21 @@ pub enum Section {
     Display,
     /// How far the gain map lifts the picture, where it has one.
     GainMap,
+    /// How a raw's profile renders it, where it says: how far each pixel
+    /// is lifted, and the tone curve. Nearest the file, since the profile
+    /// is applied to the values the file stores before anything else.
+    Profile,
     /// The picture as the file stores it.
     Image,
 }
 
 impl Section {
     /// Every section there can be, in the order the column lays them out.
-    pub const ALL: [Section; 4] = [
+    pub const ALL: [Section; 5] = [
         Section::Output,
         Section::Display,
         Section::GainMap,
+        Section::Profile,
         Section::Image,
     ];
 
@@ -46,6 +51,7 @@ impl Section {
             Section::Output => "Output",
             Section::Display => "Display",
             Section::GainMap => "Gain map",
+            Section::Profile => "Profile",
             Section::Image => "Image",
         }
     }
@@ -60,14 +66,16 @@ impl Section {
             Section::Output => icon::MONITOR,
             Section::Display => icon::SLIDERS_HORIZONTAL,
             Section::GainMap => icon::SUN,
+            Section::Profile => icon::APERTURE,
             Section::Image => icon::IMAGE,
         }
     }
 
     /// Whether the section has a button of its own at the end of its
-    /// header: the Gain map section's, which shows the map.
+    /// header: the Gain map section's, which shows the map, and the
+    /// Profile section's, which is the profile's switch.
     pub fn has_button(self) -> bool {
-        matches!(self, Section::GainMap)
+        matches!(self, Section::GainMap | Section::Profile)
     }
 
     /// Whether `current` passes through this stage. The Gain map section is
@@ -77,15 +85,25 @@ impl Section {
     /// place: what the display starts from is then the map in stops, which
     /// is the Gain map section's plot already, and the file stores neither
     /// it nor the picture under it.
+    ///
+    /// A raw's profile is a gain map of its own kind, and has the Profile
+    /// section instead of the Gain map one; the two never meet.
     pub fn applies(self, current: &Current) -> bool {
+        let lifted = |profile: bool| {
+            current
+                .picture_face()
+                .image
+                .gain_map
+                .as_deref()
+                .is_some_and(|map| map.is_profile() == profile)
+                && matches!(
+                    current.showing,
+                    Showing::Picture | Showing::Auxiliary(Auxiliary::GainMap)
+                )
+        };
         match self {
-            Section::GainMap => {
-                current.picture_face().image.gain_map.is_some()
-                    && matches!(
-                        current.showing,
-                        Showing::Picture | Showing::Auxiliary(Auxiliary::GainMap)
-                    )
-            }
+            Section::GainMap => lifted(false),
+            Section::Profile => lifted(true),
             Section::Image => current.showing != Showing::Auxiliary(Auxiliary::GainMap),
             Section::Output | Section::Display => true,
         }
@@ -121,6 +139,18 @@ impl Section {
             // A shorter plot and the row of stops under it: how much of the
             // lift is applied is the header's to say.
             Section::GainMap => head + SHORT_PLOT_HEIGHT + PLOT_INSET + EV_ROW,
+            // The lift's plot and its row of stops, as the Gain map's, and
+            // under them the curve's, on the same footing.
+            Section::Profile => {
+                head + SHORT_PLOT_HEIGHT
+                    + PLOT_INSET
+                    + EV_ROW
+                    + CURVE_GAP
+                    + PLOT_INSET
+                    + CURVE_PLOT_HEIGHT
+                    + PLOT_INSET
+                    + EV_ROW
+            }
             // A plot to the stored channel, and the rows of values under
             // them: see `stored::Layout`.
             Section::Image => head + image.body_height(),
@@ -139,11 +169,27 @@ impl Section {
         match self {
             Section::Output => Rect::new(x, y, width, PLOT_HEIGHT),
             Section::Display => display::plot_area(rect),
-            Section::GainMap => Rect::new(x, y, width, SHORT_PLOT_HEIGHT),
+            Section::GainMap | Section::Profile => Rect::new(x, y, width, SHORT_PLOT_HEIGHT),
             Section::Image => stored::first_plot(rect, stored::Layout::ONE),
         }
     }
 }
+
+/// The ground the Profile section's tone curve is drawn on, in the section
+/// laid out at `rect`: under the lift's plot and its row of stops.
+pub fn curve_plot(rect: Rect) -> Rect {
+    let lift = Section::Profile.plot(rect);
+    let y = lift.bottom() + PLOT_INSET + EV_ROW + CURVE_GAP + PLOT_INSET;
+    Rect::new(lift.x, y, lift.width, CURVE_PLOT_HEIGHT)
+}
+
+/// Between the Profile section's lift's row of stops and its curve's
+/// ground.
+const CURVE_GAP: f32 = 8.0;
+
+/// How tall the Profile section's curve is drawn: as tall as the lift's
+/// plot, the two being read one above the other.
+const CURVE_PLOT_HEIGHT: f32 = SHORT_PLOT_HEIGHT;
 
 /// How tall the column is for `current`: every section it passes through,
 /// and the gaps between them.

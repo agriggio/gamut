@@ -3,7 +3,7 @@ use super::*;
 use crate::image::auxiliary::{Auxiliary, Showing};
 use crate::image::depth::DepthMap;
 use crate::image::display::{Colormap, Headroom, ToneMap};
-use crate::image::gain_map::{GainMap, Lift};
+use crate::image::gain_map::{Data, GainMap, Lift, Profile};
 use crate::image::stats::Axis;
 use crate::image::{AlphaMode, Channels, ColorSpace, DecodedImage, Referred, Samples};
 use crate::ui::Face;
@@ -72,6 +72,38 @@ fn gain_mapped() -> Current {
         lift: Lift::Apple { headroom: 4.0 },
     }));
     shown(image)
+}
+
+/// The same color picture as a raw's development with its profile beside
+/// it: a map of ratios its own size, lifting the left half three stops and
+/// the right half one, and a curve taking a half to a quarter.
+fn profiled() -> Current {
+    let mut image = picture(false).image.as_ref().clone();
+    let ratios = (0..64)
+        .flat_map(|x| [if x < 32 { 8.0 } else { 2.0 }; 3])
+        .map(half::f16::from_f32)
+        .collect();
+    image.gain_map = Some(std::sync::Arc::new(GainMap {
+        width: 64,
+        height: 1,
+        channels: 3,
+        data: Data::Ratios(ratios),
+        lift: Lift::Profile(Profile {
+            baseline: 4.12,
+            table: None,
+            curve: Some(std::sync::Arc::new(vec![
+                [0.0, 0.0],
+                [0.5, 0.25],
+                [1.0, 1.0],
+            ])),
+            range: [1.0, 3.0],
+            to_curve: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        }),
+    }));
+    let mut current = shown(image);
+    let map = current.image.gain_map.clone().unwrap();
+    current.shown.lift = Some(std::sync::Arc::new(map.table(1.0)));
+    current
 }
 
 /// The column laid out from the top of a scroll area `height` tall.
@@ -185,7 +217,21 @@ fn every_section_is_laid_out_at_its_own_height_whatever_the_room() {
     let column = Rect::new(50.0, 70.0, COLUMN_WIDTH, 240.0);
     let layout = section::layout(column, &current);
     let sections: Vec<Section> = layout.iter().map(|(section, _)| *section).collect();
-    assert_eq!(sections, Section::ALL, "in the order the data flows");
+    let applying: Vec<Section> = Section::ALL
+        .into_iter()
+        .filter(|section| section.applies(&current))
+        .collect();
+    assert_eq!(sections, applying, "in the order the data flows");
+    assert_eq!(
+        sections,
+        [
+            Section::Output,
+            Section::Display,
+            Section::GainMap,
+            Section::Image
+        ],
+        "every section a photograph's lift passes through"
+    );
     assert_eq!(layout[0].1.y, column.y, "the first opens the column");
     let image = stored::Layout::of(&current);
     assert_eq!(
@@ -479,6 +525,51 @@ fn a_sections_button_ends_its_header() {
     );
 }
 
+/// A raw's profile has the Profile section in the Gain map section's place,
+/// nearest the file; its square is the profile's switch, and its curve is
+/// drawn under its lift's plot, inside the section.
+#[test]
+fn the_profile_section_takes_the_gain_maps_place_for_a_raw() {
+    let current = profiled();
+    let layout = laid_out(&current, 600.0);
+    let sections: Vec<Section> = layout.iter().map(|(section, _)| *section).collect();
+    assert_eq!(
+        sections,
+        [
+            Section::Output,
+            Section::Display,
+            Section::Profile,
+            Section::Image
+        ]
+    );
+    assert!(!sections.contains(&Section::Profile) || !sections.contains(&Section::GainMap));
+    assert!(
+        !laid_out(&gain_mapped(), 600.0)
+            .iter()
+            .any(|(section, _)| *section == Section::Profile)
+    );
+    assert!(
+        !laid_out(&picture(false), 600.0)
+            .iter()
+            .any(|(section, _)| *section == Section::Profile)
+    );
+
+    let rect = rect_of(&layout, Section::Profile);
+    assert!(Section::Profile.has_button());
+    assert_eq!(section::button(rect).right(), rect.right());
+    let lift = Section::Profile.plot(rect);
+    let curve = section::curve_plot(rect);
+    assert!(
+        curve.y - PLOT_INSET > lift.bottom() + PLOT_INSET,
+        "clear of the lift's ground"
+    );
+    assert_eq!((curve.x, curve.width), (lift.x, lift.width));
+    assert!(
+        curve.bottom() + PLOT_INSET + EV_ROW <= rect.bottom() + 1e-3,
+        "the curve and its row of stops inside the section"
+    );
+}
+
 /// A section with no button of its own sets its readout flush with the
 /// end of its header.
 #[test]
@@ -667,6 +758,31 @@ fn a_pixel_is_traced_down_every_section() {
         "+2.0 stops",
         "the right half is lifted the whole of the lift"
     );
+
+    // A profile's lift is traced as a gain map's is: the right half is
+    // lifted one stop.
+    let current = profiled();
+    let layout = laid_out(&current, 600.0);
+    let lift = current.image.gain_map.as_ref().unwrap().lift_plot();
+    let plots = Plots {
+        lift: lift.as_ref(),
+        lift_counts: plot::Counts::of(lift.as_ref().unwrap()),
+        ..plots
+    };
+    let profile = marked(
+        &current,
+        &layout,
+        None,
+        Some([60, 0]),
+        Headroom::None,
+        &plots,
+    );
+    let mark = profile
+        .profile
+        .as_ref()
+        .expect("the Profile section marks it");
+    assert_eq!(mark.words, "+1.0 / +1.0 / +1.0 stops");
+    assert!(mark.bin.is_some());
 
     // On one of the Image section's plots, only it marks anything, and
     // what it says is its bin's value on that plane.

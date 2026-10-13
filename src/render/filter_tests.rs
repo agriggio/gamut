@@ -971,6 +971,7 @@ fn profiled() -> DecodedImage {
             table: None,
             curve: None,
             range: [-1.415, 3.585],
+            to_curve: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
         }),
     }));
     image

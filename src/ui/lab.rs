@@ -69,12 +69,13 @@ fn decoded(path: &std::path::Path) -> (DecodedImage, Exif) {
 /// The file on screen as the application holds it on a surface with `room`
 /// above white: the base measured where there is none, and the picture
 /// measured through its gain map's lift where there is, as
-/// `App::refresh_lift` does.
+/// `App::refresh_lift` does; a raw's profile is lifted on either, with the
+/// switch on.
 fn current(image: DecodedImage, exif: &Exif, name: &str, room: f32) -> Current {
     let mut current = Current::of(image, name);
     current.exif = exif.clone();
-    if room > 1.0
-        && let Some(map) = &current.image.gain_map
+    if let Some(map) = &current.image.gain_map
+        && (room > 1.0 || map.is_profile())
     {
         let table = Arc::new(map.table(map.weight(room)));
         current.stats = Stats::scan_with(&current.image, Some(&table));

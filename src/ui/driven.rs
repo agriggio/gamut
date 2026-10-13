@@ -2731,6 +2731,57 @@ fn the_histogram_has_a_section_for_each_stage_the_picture_passes_through() {
     );
 }
 
+/// A raw's profile has the Profile section in the Gain map's place, its
+/// square the profile's switch; and the bottom bar has no gain map toggle
+/// for it, the switch being the section's.
+#[test]
+fn a_raws_profile_has_a_section_and_a_switch_of_its_own() {
+    use crate::image::gain_map::{Data, GainMap, Lift, Profile};
+
+    let mut with_histogram = panels();
+    with_histogram.side = Some(super::side::Side::Histogram);
+    let mut harness = open(WINDOW, 1, with_histogram);
+    assert!(harness.query_by_label(&Control::Profile.label()).is_none());
+
+    let current = harness.state_mut().current.as_mut().expect("a picture");
+    let mut image = (*current.image).clone();
+    image.gain_map = Some(Arc::new(GainMap {
+        width: 2,
+        height: 2,
+        channels: 3,
+        data: Data::Ratios(
+            [0.5, 1.0, 2.0, 8.0]
+                .repeat(3)
+                .into_iter()
+                .map(half::f16::from_f32)
+                .collect(),
+        ),
+        lift: Lift::Profile(Profile {
+            baseline: 4.12,
+            table: None,
+            curve: None,
+            range: [-1.0, 3.0],
+            to_curve: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        }),
+    }));
+    current.image = Arc::new(image);
+    harness.run();
+    let display = painted_in_side(&harness, "Display").expect("Display");
+    let profile = painted_in_side(&harness, "Profile").expect("Profile");
+    let file = painted_in_side(&harness, "Image").expect("Image");
+    assert!(display.min.y < profile.min.y && profile.min.y < file.min.y);
+    assert!(painted_in_side(&harness, "Gain map").is_none());
+    assert!(painted_in_side(&harness, super::histogram::TONE_CURVE).is_some());
+    assert!(
+        harness.query_by_label(&Control::GainMap.label()).is_none(),
+        "no gain map toggle in the bottom bar"
+    );
+    assert_eq!(
+        click(&mut harness, &Control::Profile.label()),
+        [Command::Press(Control::Profile)]
+    );
+}
+
 /// On a window too short for the column, the sections run on below the
 /// side panel and the wheel over it scrolls them up into view.
 #[test]

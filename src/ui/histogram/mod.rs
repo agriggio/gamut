@@ -18,6 +18,9 @@ mod display;
 mod gain_map;
 mod output;
 mod plot;
+mod profile;
+#[cfg(test)]
+pub(in crate::ui) use profile::TONE_CURVE;
 mod section;
 mod slider;
 mod stored;
@@ -439,6 +442,7 @@ struct Traced {
     pub output: Option<Mark>,
     pub display: Option<Mark>,
     pub gain_map: Option<Mark>,
+    pub profile: Option<Mark>,
     pub image: Option<Mark>,
 }
 
@@ -449,6 +453,7 @@ impl Traced {
             Section::Output => self.output.as_ref(),
             Section::Display => self.display.as_ref(),
             Section::GainMap => self.gain_map.as_ref(),
+            Section::Profile => self.profile.as_ref(),
             Section::Image => self.image.as_ref(),
         }
     }
@@ -458,6 +463,7 @@ impl Traced {
             Section::Output => &mut self.output,
             Section::Display => &mut self.display,
             Section::GainMap => &mut self.gain_map,
+            Section::Profile => &mut self.profile,
             Section::Image => &mut self.image,
         }
     }
@@ -516,7 +522,8 @@ fn marked(
             let mark = match section {
                 Section::Output => output::bin_mark(current, headroom, plots.output, bin),
                 Section::Display => display::bin_mark(current, headroom, bin),
-                Section::GainMap => gain_map::bin_mark(plots.lift, bin),
+                // A profile's lift is plotted and read as a gain map's.
+                Section::GainMap | Section::Profile => gain_map::bin_mark(plots.lift, bin),
                 Section::Image => unreachable!("answered above"),
             };
             *traced.slot(section) = Some(mark);
@@ -530,7 +537,7 @@ fn marked(
         *traced.slot(section) = match section {
             Section::Output => output::pixel_mark(current, headroom, plots.output, x, y),
             Section::Display => display::pixel_mark(current, headroom, x, y),
-            Section::GainMap => gain_map::pixel_mark(current, plots.lift, x, y),
+            Section::GainMap | Section::Profile => gain_map::pixel_mark(current, plots.lift, x, y),
             Section::Image => stored::pixel_mark(current, x, y),
         };
     }
@@ -696,6 +703,7 @@ fn column(pass: &mut Pass, ui: &mut egui::Ui, current: &Current) {
             Section::Output => output::show(pass, ui, current, rect, &plots, mark),
             Section::Display => display::show(pass, ui, current, rect, plots.counts, mark),
             Section::GainMap => gain_map::show(pass, ui, current, rect, &plots, mark),
+            Section::Profile => profile::show(pass, ui, current, rect, &plots, mark),
             Section::Image => stored::show(pass, ui, current, rect, plots.image, mark),
         }
     }

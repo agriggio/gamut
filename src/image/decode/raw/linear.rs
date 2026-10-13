@@ -364,6 +364,7 @@ impl Rendering {
             }),
             curve: self.curve.clone(),
             range,
+            to_curve: self.into,
         })
     }
 }

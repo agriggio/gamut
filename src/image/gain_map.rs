@@ -119,6 +119,10 @@ pub struct Profile {
     /// stops: found as the ratios were made, since a walk over a map the
     /// picture's size is too much for every frame that asks.
     pub range: [f32; 2],
+    /// From the picture's own linear primaries into the space the curve is
+    /// applied in, linear ProPhoto: where a pixel stands on the curve is
+    /// its largest channel there.
+    pub to_curve: [[f32; 3]; 3],
 }
 
 /// A profile's gain table, as the information panel describes it.
@@ -138,6 +142,38 @@ impl Profile {
             return input;
         };
         curve_through(points, input)
+    }
+
+    /// What the curve took to `output`: the curve run backwards, which it
+    /// can be since it rises from black to white. Where it is flat, the
+    /// least input that reaches `output`.
+    pub fn curve_input(&self, output: f32) -> f32 {
+        let (mut low, mut high) = (0.0f32, 1.0f32);
+        for _ in 0..32 {
+            let middle = (low + high) / 2.0;
+            if self.curve_at(middle) < output {
+                low = middle;
+            } else {
+                high = middle;
+            }
+        }
+        high
+    }
+
+    /// Where the developed color `linear`, in the picture's primaries,
+    /// lifted by `ratios`, stands on the curve: the largest of its channels
+    /// in the curve's space, which is the one the curve was applied to,
+    /// and what the curve took there from. `None` for a pixel the
+    /// rendering left black.
+    pub fn on_curve(&self, linear: [f32; 3], ratios: [f32; 3]) -> Option<[f32; 2]> {
+        let lifted: [f32; 3] = std::array::from_fn(|c| linear[c] * ratios[c]);
+        let output = self
+            .to_curve
+            .iter()
+            .map(|row| row[0] * lifted[0] + row[1] * lifted[1] + row[2] * lifted[2])
+            .fold(0.0f32, f32::max)
+            .min(1.0);
+        (output > 0.0).then(|| [self.curve_input(output), output])
     }
 }
 
@@ -381,15 +417,17 @@ impl GainMap {
     /// A walk over the map, on a stride past [`MAX_PLOTTED`] values; the
     /// caller keeps the answer.
     pub fn lift_plot(&self) -> Option<Plot> {
+        if let Data::Ratios(ratios) = &self.data {
+            return self.ratio_plot(ratios);
+        }
         self.lift_range()?;
         let [low, high] = self.described_range()?;
         let span = high - low;
         if span.partial_cmp(&f32::MIN_POSITIVE) != Some(std::cmp::Ordering::Greater) {
             return None;
         }
-        let stored = match &self.data {
-            Data::Codes(codes) => codes,
-            Data::Ratios(ratios) => return Some(self.ratio_plot(ratios, low, high)),
+        let Data::Codes(stored) = &self.data else {
+            unreachable!("ratios are plotted above");
         };
         let stops = self.stops_table();
         let channels = self.channels.max(1) as usize;
@@ -498,13 +536,40 @@ impl GainMap {
             })
     }
 
-    /// The histogram of a map of ratios, over `low..high` stops: each
-    /// value is a gain of its own rather than a code standing for a
-    /// stretch, so each pixel's stops fall in the one bin they round to, a
-    /// channel each and their mean for the luminance.
-    fn ratio_plot(&self, ratios: &[f16], low: f32, high: f32) -> Plot {
+    /// The histogram of a map of ratios: each value is a gain of its own
+    /// rather than a code standing for a stretch, so each pixel's stops
+    /// fall in the one bin they round to, a channel each and their mean for
+    /// the luminance.
+    ///
+    /// Over the stops all but a thousandth of the pixels hold at either
+    /// end, the rest counted in the end bins: a profile's tone curve takes
+    /// its deepest shadows to black, and the handful of pixels it does that
+    /// to are lifted by nothing a ratio can say, which would otherwise
+    /// stretch the axis a dozen stops past where the picture is. `None`
+    /// for a map that lifts everything alike.
+    fn ratio_plot(&self, ratios: &[f16]) -> Option<Plot> {
         let channels = self.channels.max(1) as usize;
         let color = channels >= COLOR;
+        let pixels = ratios.len() / channels;
+        let stride = pixels.div_ceil(MAX_PLOTTED).max(1);
+        let stops: Vec<[f32; COLOR]> = ratios
+            .chunks_exact(channels)
+            .step_by(stride)
+            .map(|values| {
+                std::array::from_fn(|channel| values[channel.min(values.len() - 1)].to_f32().log2())
+            })
+            .filter(|stops: &[f32; COLOR]| stops.iter().all(|stops| stops.is_finite()))
+            .collect();
+        let mut sorted: Vec<f32> = stops.iter().flatten().copied().collect();
+        if sorted.is_empty() {
+            return None;
+        }
+        sorted.sort_unstable_by(f32::total_cmp);
+        let at = |share: f64| sorted[((sorted.len() - 1) as f64 * share).round() as usize];
+        let (low, high) = (at(TRIMMED), at(1.0 - TRIMMED));
+        if high - low <= f32::MIN_POSITIVE {
+            return None;
+        }
         let scale = (BINS - 1) as f32 / (high - low);
         let bin = |stops: f32| {
             let at = ((stops - low) * scale + 0.5).clamp(0.0, (BINS - 1) as f32);
@@ -513,25 +578,22 @@ impl GainMap {
         let share = SHARES as u32;
         let mut luma = [0u32; BINS];
         let mut planes = [[0u32; BINS]; COLOR];
-        let pixels = ratios.len() / channels;
-        let stride = pixels.div_ceil(MAX_PLOTTED).max(1);
-        for values in ratios.chunks_exact(channels).step_by(stride) {
-            let mut mean = 0.0;
-            for (channel, value) in values.iter().enumerate().take(COLOR) {
-                let stops = value.to_f32().log2();
-                mean += stops / values.len().min(COLOR) as f32;
-                if color {
-                    planes[channel][bin(stops)] += share;
+        for pixel in &stops {
+            if color {
+                for (plane, stops) in planes.iter_mut().zip(pixel) {
+                    plane[bin(*stops)] += share;
                 }
+                luma[bin(pixel.iter().sum::<f32>() / COLOR as f32)] += share;
+            } else {
+                luma[bin(pixel[0])] += share;
             }
-            luma[bin(mean)] += share;
         }
-        Plot {
+        Some(Plot {
             min: low,
             max: high,
             luma,
             color: color.then_some(planes),
-        }
+        })
     }
 
     /// Each value of each channel as the stops it lifts by at the whole of
@@ -694,6 +756,10 @@ impl Table {
 /// The most of a map's pixels [`GainMap::lift_plot`] counts before it walks
 /// the map on a stride, as the picture's own scan does.
 const MAX_PLOTTED: usize = 1 << 21;
+
+/// The share of a map of ratios' values left off either end of its plot's
+/// axis, and counted in the end bins.
+const TRIMMED: f64 = 0.001;
 
 /// What [`GainMap::lift_plot`] counts a pixel as: sixteen shares, so that
 /// a code spread over several bins keeps a share in each.
@@ -1008,8 +1074,29 @@ mod tests {
                 table: None,
                 curve: None,
                 range,
+                to_curve: IDENTITY,
             }),
         }
+    }
+
+    const IDENTITY: [[f32; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+
+    /// The curve run backwards finds what it took to an output, and a
+    /// pixel stands on it at its largest channel once lifted.
+    #[test]
+    fn a_pixel_is_placed_on_the_curve_by_its_largest_channel() {
+        let mut map = profile(0.0, &[1.0; 3], 1);
+        let Lift::Profile(profile) = &mut map.lift else {
+            unreachable!()
+        };
+        profile.curve = Some(Arc::new(vec![[0.0, 0.0], [0.5, 0.25], [1.0, 1.0]]));
+        assert!((profile.curve_input(0.25) - 0.5).abs() < 1e-5);
+        assert!((profile.curve_input(0.625) - 0.75).abs() < 1e-5);
+        let [input, output] = profile
+            .on_curve([0.1, 0.2, 0.05], [2.0, 2.0, 2.0])
+            .expect("lit");
+        assert!((output - 0.4).abs() < 1e-6 && (input - 0.6).abs() < 1e-4);
+        assert_eq!(profile.on_curve([0.0; 3], [2.0; 3]), None);
     }
 
     /// A profile's ratios are the gains themselves: all of each at the

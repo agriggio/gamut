@@ -416,6 +416,7 @@ mod tests {
                 table: None,
                 curve: None,
                 range: [0.0; 2],
+                to_curve: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
             }),
         };
         for source in [IMAGE_SHADER, REDUCE_SHADER] {
