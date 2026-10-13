@@ -38,7 +38,7 @@ use crate::exiftool;
 use crate::gestures::{Gestures, Surface};
 use crate::image::DecodedImage;
 use crate::image::auxiliary::{Auxiliary, Showing};
-use crate::image::decode::{self, CameraJpeg, Rendering};
+use crate::image::decode::{self, CameraJpeg, Reading, Rendering};
 use crate::image::display::{Display, Headroom, Startup};
 use crate::image::orient::Turn;
 use crate::image::sequence::Sequence;
@@ -54,10 +54,10 @@ use crate::theme::{self, Theme};
 use crate::thumbnailer::{Delivered, Facts, News, Thumb, Thumbnailer};
 use crate::timing;
 use crate::trash::Trash;
-use crate::ui::chrome::{Parts, content_area, image_viewport};
+use crate::ui::chrome::{Parts, image_viewport};
 use crate::ui::toast::{self, Level, Toasts};
 use crate::ui::tooltip::Hdr;
-use crate::ui::{self, Current, FileFacts, FrameInput, Panels, Rect, Toast};
+use crate::ui::{self, Current, FileFacts, FrameInput, Panels, Toast};
 use crate::view::{View, Viewport};
 use crate::watch::{self, Watch};
 use filmstrip::Filmstrip;
@@ -352,7 +352,8 @@ struct Sizing {
 /// panels' geometry is worked out once rather than by each of them.
 #[derive(Clone, Copy)]
 struct Sight {
-    /// Physical pixels to the logical one.
+    /// Physical pixels to the interface's point — the monitor's scale and
+    /// the interface's together — what egui lays out in.
     scale: f32,
     /// The window in logical pixels.
     logical: [f32; 2],
@@ -457,6 +458,11 @@ pub struct App {
     /// follow rather than stay in the theme it opened under.
     theme: Theme,
     theme_watch: theme::Watch,
+    /// How large the interface is drawn, on top of the monitor's own scale:
+    /// one of [`ui::scale::SCALES`], or a value between two of them that the
+    /// state file was given by hand. The picture is placed in device pixels
+    /// whatever it is.
+    ui_scale: f32,
     /// The configuration file, watched on the same cadence, so that a key
     /// or a gesture changed in it is in force once the file is saved — see
     /// [`App::reconfigure`]. Idle until `main` asks for it: the tests build
@@ -494,8 +500,8 @@ pub struct App {
     /// [`Panels::show_filmstrip`].
     filmstrip: Filmstrip,
     /// Where what is kept from one run to the next is written back to when
-    /// the window closes: the file list's width and the loupe's
-    /// magnification.
+    /// the window closes: the file list's and the side panel's widths and
+    /// the loupe's magnification.
     state: StateFile,
     /// The files that have been on screen, for going back and forward
     /// through them.
@@ -724,6 +730,7 @@ impl App {
             offered_folder: None,
             theme: Theme::detect(),
             theme_watch,
+            ui_scale: kept_state.ui_scale,
             config_watch: Watch::idle(),
             next_poll: Instant::now() + watch::INTERVAL,
             loader,
@@ -749,12 +756,16 @@ impl App {
             panels: Panels {
                 show_ui: config.show_ui,
                 show_filmstrip: config.show_filmstrip,
-                show_histogram: config.show_histogram,
-                show_luma: true,
-                show_planes: true,
-                log_counts: config.log_counts,
+                // The histogram where both are asked for: it is the first
+                // of the two buttons.
+                side: if config.show_histogram {
+                    Some(ui::side::Side::Histogram)
+                } else if config.show_info {
+                    Some(ui::side::Side::Info)
+                } else {
+                    None
+                },
                 mark_clipped: false,
-                show_info: config.show_info,
                 show_minimap: config.show_minimap,
                 show_grid: false,
                 show_loupe: false,
@@ -905,6 +916,7 @@ impl App {
             self.output.monitors.as_ref(),
             Some(image),
             None,
+            window::Chrome::new(self.ui_scale),
         );
         let moved = window::centered_on(window, wanted);
         let before = window.inner_size();
@@ -1012,7 +1024,8 @@ impl App {
     /// that tab, with room for it — the reading the frame draws it by, so
     /// that what is drawn and what is run cannot disagree.
     pub(super) fn tags_showing(&self) -> bool {
-        self.panels.show_info && self.panels.info_tab == ui::tags::Tab::Tags && self.room().info
+        self.side_showing() == Some(ui::side::Side::Info)
+            && self.panels.info_tab == ui::tags::Tab::Tags
     }
 
     /// Puts the information panel up on `tab`, or takes it down where it is
@@ -1022,10 +1035,10 @@ impl App {
         if self.refuses(ui::Control::Info) {
             return Effect::Nothing;
         }
-        if self.panels.show_info && self.panels.info_tab == tab {
-            self.panels.show_info = false;
+        if self.panels.side == Some(ui::side::Side::Info) && self.panels.info_tab == tab {
+            self.panels.side = None;
         } else {
-            self.panels.show_info = true;
+            self.panels.side = Some(ui::side::Side::Info);
             self.panels.info_tab = tab;
             if self.tags_showing() {
                 self.request_tags();
@@ -1097,6 +1110,24 @@ impl App {
     /// without its head.
     pub(super) fn filmstrip_showing(&self) -> bool {
         self.panels.show_filmstrip && self.files.len() > 1
+    }
+
+    /// What the side panel holds while it is on screen: what was asked for,
+    /// where the window has room for it, and while there is something open
+    /// for it to be about — the empty window has its buttons in the middle,
+    /// and nothing for a histogram or a column of facts to say. Hiding the
+    /// interface leaves it up, as it leaves the file list.
+    pub(super) fn side_showing(&self) -> Option<ui::side::Side> {
+        let side = self.panels.side?;
+        if self.is_empty() {
+            return None;
+        }
+        let room = ui::room(
+            self.logical_size(),
+            self.panels.show_ui,
+            self.parts_but_side(),
+        );
+        room.holds(side).then_some(side)
     }
 
     /// What is known about `path` that the list is ordered by: what its
@@ -1364,8 +1395,9 @@ impl App {
 
     /// How much room above white the picture is going out to: the
     /// monitor's peak over its white, where it has said and the surface has
-    /// the room, and none otherwise. What a gain map's lift is weighed
-    /// against.
+    /// the room; unbounded where the surface has the room and the monitor
+    /// has not said how much, so that a gain map's lift is shown whole; and
+    /// none otherwise. What a gain map's lift is weighed against.
     fn display_headroom(&self) -> f32 {
         if self.headroom() != Headroom::Above {
             return 1.0;
@@ -1591,43 +1623,89 @@ impl App {
             .unwrap_or([1.0, 1.0])
     }
 
-    fn scale_factor(&self) -> f32 {
+    /// The monitor's own scale: the window's physical pixels to its logical
+    /// one, as the desktop has it. What the window is sized in and the
+    /// checkerboard is drawn by; everything the interface lays out reads
+    /// [`App::pixels_per_point`] instead.
+    fn device_scale(&self) -> f32 {
         self.shown
             .as_ref()
             .map(|shown| shown.window.scale_factor() as f32)
             .unwrap_or(1.0)
     }
 
-    /// The window in the logical pixels the interface is laid out in. Events
-    /// and the surface are both in physical ones.
+    /// Physical pixels to the interface's point: the monitor's scale and the
+    /// interface's together, which is what egui lays out by and so what
+    /// every conversion between the pointer, the panels and the picture's
+    /// viewport has to use.
+    fn pixels_per_point(&self) -> f32 {
+        self.device_scale() * self.ui_scale
+    }
+
+    /// What was left where it was set by hand, gathered for the state file
+    /// as the loop ends.
+    pub(super) fn kept_state(&self) -> State {
+        State {
+            filmstrip_width: self.filmstrip.slot(),
+            loupe_magnification: self.panels.loupe_magnification,
+            ui_scale: self.ui_scale,
+            order: self.filmstrip.order(),
+            camera_jpeg: self.rendering == Rendering::CameraJpeg,
+            pixel_format: self.panels.pixel_format,
+            coordinate_format: self.panels.coordinate_format,
+            geographic_format: self.panels.geographic_format,
+        }
+    }
+
+    /// Puts the interface at `scale` of the monitor's: what egui lays out by,
+    /// and what the application converts the pointer and the viewport by.
+    /// A change says the new scale in a toast; nowhere to go — the
+    /// ladder's end, a reset at 1 — says nothing and owes no frame. The
+    /// window keeps its size.
+    pub(super) fn rescale(&mut self, scale: f32) -> Effect {
+        if scale == self.ui_scale {
+            return Effect::Nothing;
+        }
+        self.ui_scale = scale;
+        if let Some(shown) = &self.shown {
+            shown.gui.rescale(scale);
+        }
+        self.toast(ui::scale::said(scale), Level::Message);
+        Effect::Redraw
+    }
+
+    /// The window in the points the interface is laid out in. Events and the
+    /// surface are both in physical pixels.
     fn logical_size(&self) -> [f32; 2] {
-        let scale = self.scale_factor();
+        let scale = self.pixels_per_point();
         let physical = self.window_size();
         [physical[0] / scale, physical[1] / scale]
     }
 
-    /// Whether the content area has room for each of the two panels that
-    /// float over it. The frame builder works this out for itself; it is
-    /// worked out here as well for the presses and the tooltips, which have
-    /// to answer between frames.
+    /// Whether the window has room for each of what the side panel holds,
+    /// and for the help popup. The frame builder works this out for itself;
+    /// it is worked out here as well for the presses and the tooltips,
+    /// which have to answer between frames.
     pub(super) fn room(&self) -> ui::Room {
-        ui::room(self.content(), &self.panels)
-    }
-
-    /// What the panels leave free for the image and for whatever floats over
-    /// it, in the logical pixels those are laid out in. The frame builder
-    /// works this out for itself; it is worked out here as well for the hit
-    /// tests, which have to answer between frames.
-    fn content(&self) -> Rect {
-        content_area(self.logical_size(), self.panels.show_ui, self.parts())
+        ui::room(self.logical_size(), self.panels.show_ui, self.parts())
     }
 
     /// Which of the panels that come and go are up: what the chrome's
     /// geometry is derived from besides the window size.
     fn parts(&self) -> Parts {
         Parts {
+            side: self.side_showing().is_some(),
+            ..self.parts_but_side()
+        }
+    }
+
+    /// The same with the side panel left out, which is all whether there is
+    /// room for it is decided by — see [`ui::chrome::side_room`].
+    fn parts_but_side(&self) -> Parts {
+        Parts {
             transport: self.has_transport(),
             filmstrip: self.filmstrip_showing().then(|| self.filmstrip.slot()),
+            side: false,
         }
     }
 
@@ -1882,7 +1960,7 @@ impl App {
     fn viewport(&self) -> Viewport {
         image_viewport(
             self.window_size(),
-            self.scale_factor(),
+            self.pixels_per_point(),
             self.panels.show_ui,
             self.parts(),
         )
@@ -1895,7 +1973,7 @@ impl App {
 
     /// The window and the view read at `now`.
     fn sight_at(&self, now: Instant) -> Sight {
-        let scale = self.scale_factor();
+        let scale = self.pixels_per_point();
         let physical = self.window_size();
         let logical = [physical[0] / scale, physical[1] / scale];
         let parts = self.parts();
@@ -1910,16 +1988,20 @@ impl App {
     }
 
     /// What this frame's interface is laid out from, in a window `logical`
-    /// pixels across at `scale` device pixels to each: everything the
+    /// points across at `scale` device pixels to each: everything the
     /// application derives per frame from its window, pointer and loader.
     /// Apart from `redraw` so that the interface can be driven over the
-    /// application with no window behind it.
+    /// application with no window behind it. The picture's viewport is
+    /// worked out at `scale` too, so that a test at another scale reads one
+    /// sight rather than two.
     #[cfg(test)]
     fn frame_input(&mut self, logical: [f32; 2], scale: f32) -> FrameInput {
+        let sight = self.sight();
         let sight = Sight {
             logical,
             scale,
-            ..self.sight()
+            viewport: image_viewport(self.window_size(), scale, self.panels.show_ui, sight.parts),
+            ..sight
         };
         let conditions = self.conditions();
         self.frame_input_under(&sight, &conditions)
@@ -1984,6 +2066,7 @@ impl App {
             deleted: self.watch.missing(),
             headroom: self.headroom(),
             hdr_available: self.hdr_available(),
+            room: self.display_headroom(),
             can_pan: self.view.can_pan(self.image_size(), viewport),
             openers: self
                 .openers
@@ -2001,6 +2084,7 @@ impl App {
             zoom_box: self.marking.zoom_box(),
             transport: self.transport(),
             filmstrip,
+            side: self.side_showing(),
             chooser,
             tags,
             rename,
@@ -2357,6 +2441,7 @@ impl App {
             self.output.monitors.as_ref(),
             self.opening_size(),
             self.sizing.asked,
+            window::Chrome::new(self.ui_scale),
         );
         let attributes = window::with_app_id(
             Window::default_attributes()
@@ -2379,7 +2464,12 @@ impl App {
         timing::window_open();
         window::show_icon();
 
-        let mut renderer = match Renderer::new(window.clone(), self.output.asked) {
+        let main_device = self
+            .output
+            .monitors
+            .as_ref()
+            .and_then(Monitors::main_device);
+        let mut renderer = match Renderer::new(window.clone(), self.output.asked, main_device) {
             Ok(renderer) => renderer,
             Err(error) => {
                 crate::report(&error);
@@ -2425,7 +2515,12 @@ impl App {
             );
         }
 
-        let gui = match Gui::new(&window, &self.theme, renderer.max_texture_side()) {
+        let gui = match Gui::new(
+            &window,
+            &self.theme,
+            renderer.max_texture_side(),
+            self.ui_scale,
+        ) {
             Ok(gui) => gui,
             Err(error) => {
                 crate::report(&error);
@@ -2484,6 +2579,7 @@ impl App {
     /// the frame owed, for a request that goes somewhere else.
     fn send(&mut self, asked: Asked) -> Effect {
         let mut request = asked.request(self.overrides, self.rendering);
+        request.overrides = self.overrides_for(&request.path);
         let elsewhere = request.mode == Reload::Fresh
             && (self.current.is_none() || self.files.shown_path() != Some(request.path.as_path()));
         // A paged file comes back to the page it was left on, which has to
@@ -2508,6 +2604,39 @@ impl App {
         self.filmstrip.reveal();
         self.refresh_title();
         Effect::Redraw
+    }
+
+    /// The decode overrides for the file at `path`: the command line's, and
+    /// over them the reading the file was asked for by hand, if it was —
+    /// see [`App::read_as`].
+    pub(super) fn overrides_for(&self, path: &Path) -> decode::Overrides {
+        let mut overrides = self.overrides;
+        overrides.reading = self.kept.reading(path);
+        overrides
+    }
+
+    /// Reads the file on screen as `reading` from now on — as a photo, or
+    /// as data — and reads it again under it where it is the other. The
+    /// choice is the file's and stays with it, as what it was left in does:
+    /// a step away and back finds it read the same way. Nothing to draw
+    /// yet: the picture stays until it arrives, as on a step.
+    pub(super) fn read_as(&mut self, reading: Reading) -> Effect {
+        let Some(path) = self.files.shown_path() else {
+            return Effect::Nothing;
+        };
+        let shown = self
+            .current
+            .as_ref()
+            .map(|current| Reading::of(current.picture().0));
+        if shown == Some(reading) {
+            return Effect::Nothing;
+        }
+        let path = path.to_path_buf();
+        self.kept.read_as(&path, reading);
+        if let Some(request) = self.files.reread_as() {
+            let _ = self.send(request);
+        }
+        Effect::Nothing
     }
 
     /// Puts [`App::title`] on the window, which names the file last asked
@@ -2552,12 +2681,28 @@ impl App {
         }
     }
 
+    /// Steps to the first file on the list, or with `last` the last.
+    pub(super) fn step_to_end(&mut self, last: bool) -> Effect {
+        if self.files.len() < 2 {
+            if self.files.len() == 0 || self.folder_first(Then::End(last)) {
+                return Effect::Nothing;
+            }
+            self.toast("No other files to step to", Level::Message);
+            return Effect::Redraw;
+        }
+        match self.files.end(last) {
+            Some(request) => self.send(request),
+            None => Effect::Nothing,
+        }
+    }
+
     /// Puts a finished read on screen. Returns `false` if the upload failed,
     /// which leaves the current image where it is.
     fn apply(&mut self, file: Opened, ready: Ready) -> bool {
         let Ready {
             image,
             stats,
+            stored,
             exif,
             gpu,
             sequence,
@@ -2735,6 +2880,7 @@ impl App {
             shown: ui::Face {
                 image,
                 stats,
+                stored: Arc::new(stored),
                 display,
                 reduced,
                 lift: None,
@@ -2832,7 +2978,7 @@ impl App {
         self.players += 1;
         self.animation = Some(Animation::start(
             path,
-            self.overrides,
+            self.overrides_for(path),
             count,
             loops,
             left,
@@ -2875,6 +3021,7 @@ impl App {
         if let Some(current) = &mut self.current {
             current.image = Arc::clone(&frame.image);
             current.stats = frame.stats.clone();
+            current.stored = Arc::clone(&frame.stored);
             current.reduced = reduced.or(current.reduced);
         }
         animation.shown(head);
@@ -3075,6 +3222,9 @@ impl App {
         let loupe = loupe.filter(|_| picture);
         let namer = self.namer_under(conditions);
         let backdrop = ui::backdrop(&self.theme);
+        // The checkerboard is drawn at the monitor's own scale, however
+        // large the interface is.
+        let device_scale = self.device_scale();
 
         let Some(shown) = &mut self.shown else {
             return Effect::Nothing;
@@ -3091,6 +3241,14 @@ impl App {
                 &namer,
             );
         });
+        // The one check that the application's figure for the interface's
+        // point and egui's cannot drift apart: every conversion of the
+        // pointer and the viewport above was made with `scale`.
+        debug_assert!(
+            (shown.gui.ctx.pixels_per_point() - scale).abs() < 1e-4,
+            "egui lays out at {} points, the application at {scale}",
+            shown.gui.ctx.pixels_per_point(),
+        );
 
         let fallback = Display::default();
         let display = self
@@ -3117,7 +3275,7 @@ impl App {
             }),
             display,
             ui: &painted,
-            scale,
+            scale: device_scale,
             backdrop,
             headroom,
         };
@@ -3241,8 +3399,9 @@ enum Arrival {
     /// Another file of another size, or a file into an empty window: put
     /// back as it was left, or fitted afresh.
     Anew,
-    /// The file on screen in its other rendering: the view is rescaled so the
-    /// same detail stays where it was, the display starts over.
+    /// The file on screen in its other rendering, or under its other
+    /// reading: the view is rescaled so the same detail stays where it was,
+    /// the display starts over.
     Rerendered,
 }
 
@@ -3261,7 +3420,7 @@ fn arrival(
     let same_file = mode != Reload::Fresh;
     let stepping = shown.is_some_and(|(shown, _)| shown != path);
     let arrival = match (same_file, same_size) {
-        _ if mode == Reload::Rendering => Arrival::Rerendered,
+        _ if matches!(mode, Reload::Rendering | Reload::Reading) => Arrival::Rerendered,
         (true, true) => Arrival::Reread,
         (true, false) => Arrival::Reshaped,
         (false, true) => Arrival::Beside,
@@ -3589,15 +3748,7 @@ impl ApplicationHandler<UserEvent> for App {
     /// outlasts the window.
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
         self.copying.join_all();
-        self.state.save(State {
-            filmstrip_width: self.filmstrip.slot(),
-            loupe_magnification: self.panels.loupe_magnification,
-            order: self.filmstrip.order(),
-            camera_jpeg: self.rendering == Rendering::CameraJpeg,
-            pixel_format: self.panels.pixel_format,
-            coordinate_format: self.panels.coordinate_format,
-            geographic_format: self.panels.geographic_format,
-        });
+        self.state.save(self.kept_state());
     }
 }
 

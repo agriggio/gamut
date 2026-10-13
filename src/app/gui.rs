@@ -12,6 +12,9 @@ use winit::window::Window;
 use crate::theme::Theme;
 use crate::ui;
 
+/// How far a panel scrolls for one notch of the wheel, in points.
+const LINE_SCROLL: f32 = 100.0;
+
 pub(super) struct Gui {
     pub ctx: egui::Context,
     state: egui_winit::State,
@@ -22,12 +25,29 @@ pub(super) struct Gui {
 }
 
 impl Gui {
-    pub fn new(window: &Arc<Window>, theme: &Theme, max_texture_side: u32) -> Result<Self> {
+    pub fn new(
+        window: &Arc<Window>,
+        theme: &Theme,
+        max_texture_side: u32,
+        ui_scale: f32,
+    ) -> Result<Self> {
         let ctx = egui::Context::default();
         // egui scales its whole interface on Ctrl (Cmd on a Mac) with `+`,
         // `=`, `-` or `0` by default. The interface is sized to the device's
-        // grid, and those chords are the key table's to give out.
-        ctx.options_mut(|options| options.zoom_with_keyboard = false);
+        // grid, and those chords are the key table's to give out — so with
+        // them off, nothing but this and `rescale` moves egui's zoom factor,
+        // which is the interface's scale on top of the monitor's.
+        //
+        // A notch of the wheel scrolls a panel about as far as it scrolls a
+        // browser's page, rather than egui's 40 points, which is a crawl down
+        // a long column. A trackpad's scroll is in points and goes 1:1
+        // whatever this says, and the picture reads the wheel's notches for
+        // itself.
+        ctx.options_mut(|options| {
+            options.zoom_with_keyboard = false;
+            options.zoom_factor = ui_scale;
+            options.input_options.line_scroll_speed = LINE_SCROLL;
+        });
         ctx.set_fonts(ui::fonts::system()?);
         ui::style::apply(&ctx, theme);
         // A repaint asked for from outside a frame wakes the loop the way
@@ -47,6 +67,16 @@ impl Gui {
             state,
             repaint_due: None,
         })
+    }
+
+    /// Draws the interface at `ui_scale` of the monitor's own scale from the
+    /// next pass on. Set in the options rather than through
+    /// `set_zoom_factor`, which lands a pass late: the application converts
+    /// the pointer and the viewport by the new scale at once, and egui has
+    /// to lay out by the same one.
+    pub fn rescale(&self, ui_scale: f32) {
+        self.ctx
+            .options_mut(|options| options.zoom_factor = ui_scale);
     }
 
     /// Hands `event` to egui. Returns whether egui took it for itself: a

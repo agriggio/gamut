@@ -4,8 +4,9 @@
 //! The magnified picture is the image layer's — a third draw of the same
 //! texture, placed by [`glass`] and cut to the circle in the shader — so
 //! everything that applies to the image applies to it for nothing. Only
-//! the two rings are drawn here, and where the circles go is worked out
-//! here, by [`place`], for both halves to agree on.
+//! the two rings and the reticle at the glass's middle are drawn here, and
+//! where the circles go is worked out here, by [`place`], for both halves
+//! to agree on.
 
 use egui::Stroke;
 
@@ -129,13 +130,23 @@ fn within(value: f32, low: f32, high: f32) -> f32 {
     }
 }
 
-/// The glass's draw, in physical pixels: the image placed so that the point
-/// of it under the eye lands at the glass's center, the loupe's
-/// magnification times larger than `placement` shows it, and cut to the
-/// glass's circle.
+/// The point of the image the loupe is about, in image pixels: the middle
+/// of the pixel under the eye — the one the bar's readout reads — rather
+/// than the point under the pointer itself, so that the pixel sits square
+/// in the glass's middle, where the reticle frames it, and the glass moves
+/// a pixel at a time.
+fn under(loupe: Loupe, placement: Placement, scale: f32) -> [f32; 2] {
+    let point = placement.image_point([loupe.eye[0] * scale, loupe.eye[1] * scale]);
+    [point[0].floor() + 0.5, point[1].floor() + 0.5]
+}
+
+/// The glass's draw, in physical pixels: the image placed so that the
+/// middle of the pixel under the eye lands at the glass's center, the
+/// loupe's magnification times larger than `placement` shows it, and cut
+/// to the glass's circle.
 pub fn glass(loupe: Loupe, placement: Placement, scale: f32) -> Glass {
     let zoom = placement.zoom * loupe.magnification;
-    let under = placement.image_point([loupe.eye[0] * scale, loupe.eye[1] * scale]);
+    let under = under(loupe, placement, scale);
     let center = [loupe.glass[0] * scale, loupe.glass[1] * scale];
     Glass {
         placement: Placement {
@@ -151,9 +162,155 @@ pub fn glass(loupe: Loupe, placement: Placement, scale: f32) -> Glass {
     }
 }
 
+/// How large the pixel under the eye has to be in the glass, in logical
+/// pixels, before the reticle frames it: below it the reticle is four ticks
+/// around a gap, since a box around a pixel that small would be most of the
+/// pixel's own size again and cover what is beside it.
+const FRAME_FROM: f32 = 8.0;
+
+/// The clear middle of the reticle's ticks while it frames nothing, from
+/// the glass's center out, in logical pixels.
+const TICK_GAP: f32 = 4.0;
+
+/// How long each tick is, in logical pixels.
+const TICK_LENGTH: f32 = 8.0;
+
+/// How far inside the glass's rim the reticle stops, in logical pixels: a
+/// frame or a tick that would reach closer is left off.
+const RIM_MARGIN: f32 = 4.0;
+
+/// The reticle's two inks: a light line one device pixel wide, edged on
+/// each side by a dark one, so that it reads on a bright picture, a dark
+/// one and noise alike. Fixed rather than the theme's, since it is drawn
+/// on the picture rather than on the interface.
+const RETICLE_LIGHT: egui::Color32 = egui::Color32::WHITE;
+const RETICLE_DARK: egui::Color32 = egui::Color32::BLACK;
+
+/// A rectangle in whole device pixels: left, top, right, bottom.
+type Span = [f32; 4];
+
+/// The reticle at the glass's middle, in device pixels, every edge on a
+/// whole one: what is drawn dark, and the light over it.
+#[derive(Debug, Default, PartialEq)]
+struct Reticle {
+    dark: Vec<Span>,
+    light: Vec<Span>,
+}
+
+/// The reticle for a glass drawn as `glass`, on a display of `scale`.
+///
+/// Four ticks pointing at the glass's center, a gap between them; and once
+/// the pixel there is [`FRAME_FROM`] across, a box around it as well — the
+/// light line on the device pixels just outside the pixel's edges, the dark
+/// one outside that, so none of the pixel itself is covered — with the
+/// ticks starting at the box. A pixel too large for its box to fit inside
+/// the glass gets no reticle: it is all the glass shows.
+fn reticle(glass: &Glass, scale: f32) -> Reticle {
+    let placement = glass.placement;
+    let point = placement.image_point(glass.center);
+    let pixel = [point[0].floor(), point[1].floor()];
+    let [left, top] = placement.screen_point(pixel);
+    let [right, bottom] = placement.screen_point([pixel[0] + 1.0, pixel[1] + 1.0]);
+    let [cx, cy] = glass.center;
+    let reach = glass.radius - RIM_MARGIN * scale;
+
+    let mut reticle = Reticle::default();
+    // Where each tick starts, measured outward from the center: right,
+    // down, left, up.
+    let gap = (TICK_GAP * scale).round();
+    let mut starts = [
+        cx.ceil() + gap,
+        cy.ceil() + gap,
+        cx.floor() - gap,
+        cy.floor() - gap,
+    ];
+    if placement.zoom >= FRAME_FROM * scale {
+        // The light line's outer edge: the pixels just outside the
+        // pixel's, the one a ramped edge half covers counted as the
+        // pixel's own.
+        let light = [
+            left.floor() - 1.0,
+            top.floor() - 1.0,
+            right.ceil() + 1.0,
+            bottom.ceil() + 1.0,
+        ];
+        let dark = grow(light, 1.0);
+        let corner = (dark[0] - cx)
+            .abs()
+            .max((dark[2] - cx).abs())
+            .hypot((dark[1] - cy).abs().max((dark[3] - cy).abs()));
+        if corner > reach {
+            return reticle;
+        }
+        reticle.dark.extend(ring(dark));
+        reticle.light.extend(ring(light));
+        starts = [
+            starts[0].max(dark[2]),
+            starts[1].max(dark[3]),
+            starts[2].min(dark[0]),
+            starts[3].min(dark[1]),
+        ];
+    }
+
+    let length = (TICK_LENGTH * scale).round().max(1.0);
+    let (column, row) = (cx.floor(), cy.floor());
+    let ticks = [
+        (
+            starts[0],
+            (starts[0] + length).min((cx + reach).floor()),
+            true,
+        ),
+        (
+            starts[1],
+            (starts[1] + length).min((cy + reach).floor()),
+            false,
+        ),
+        (
+            (starts[2] - length).max((cx - reach).ceil()),
+            starts[2],
+            true,
+        ),
+        (
+            (starts[3] - length).max((cy - reach).ceil()),
+            starts[3],
+            false,
+        ),
+    ];
+    for (from, to, across) in ticks {
+        if to <= from {
+            continue;
+        }
+        let tick = if across {
+            [from, row, to, row + 1.0]
+        } else {
+            [column, from, column + 1.0, to]
+        };
+        reticle.dark.push(grow(tick, 1.0));
+        reticle.light.push(tick);
+    }
+    reticle
+}
+
+/// `span` with `by` more on every side.
+fn grow(span: Span, by: f32) -> Span {
+    [span[0] - by, span[1] - by, span[2] + by, span[3] + by]
+}
+
+/// The one-pixel ring just inside `outer`'s edges, as four rectangles.
+fn ring(outer: Span) -> [Span; 4] {
+    let [left, top, right, bottom] = outer;
+    [
+        [left, top, right, top + 1.0],
+        [left, bottom - 1.0, right, bottom],
+        [left, top + 1.0, left + 1.0, bottom - 1.0],
+        [right - 1.0, top + 1.0, right, bottom - 1.0],
+    ]
+}
+
 /// Draws the two rings over the picture, and over the glass the image layer
-/// has already put down: the eye's around the pointer, and the glass's rim
-/// around the magnified picture. Painted straight on the picture's painter,
+/// has already put down: the eye's around the pixel under the pointer, and
+/// the glass's rim around the magnified picture; and the reticle at the
+/// glass's middle. Painted straight on the picture's painter,
 /// as the region is, so that the picture under the loupe keeps the pointer.
 ///
 /// Not over the minimap: the image layer draws the thumbnail over the glass,
@@ -162,13 +319,29 @@ pub fn glass(loupe: Loupe, placement: Placement, scale: f32) -> Glass {
 /// the thumbnail is the image layer's and nothing egui stacks over the rings
 /// covers it.
 pub(super) fn show(pass: &Pass, ui: &mut egui::Ui) {
-    let Some(loupe) = pass.input.loupe else {
+    let (Some(loupe), Some(current)) = (pass.input.loupe, pass.current) else {
         return;
     };
+    // Through the placement the image layer draws the glass with, so that
+    // the reticle lands on the pixels it frames, and the eye rings the
+    // middle of the pixel the glass is about rather than the pointer.
+    let scale = pass.input.scale;
+    let placement = pass.view.placement(current.size(), pass.input.viewport);
+    let glass = glass(loupe, placement, scale);
+    let reticle = reticle(&glass, scale);
+    let eye = placement.screen_point(under(loupe, placement, scale));
+    let eye = egui::pos2(eye[0] / scale, eye[1] / scale);
+    let logical = |span: Span| {
+        egui::Rect::from_min_max(
+            egui::pos2(span[0] / scale, span[1] / scale),
+            egui::pos2(span[2] / scale, span[3] / scale),
+        )
+    };
     let thumbnail = pass
-        .current
-        .filter(|_| pass.input.minimap_on_screen)
-        .and_then(|current| minimap::thumbnail(pass.content, current.size()));
+        .input
+        .minimap_on_screen
+        .then(|| minimap::thumbnail(pass.content, current.size()))
+        .flatten();
     let grid = pass.grid;
     let ink: egui::Color32 = pass.theme.inset_edge.into();
     let stroke = Stroke::new(grid.line_width(STROKE), ink);
@@ -178,16 +351,20 @@ pub(super) fn show(pass: &Pass, ui: &mut egui::Ui) {
     let inset = stroke.width / 2.0;
     for piece in grid::pieces(pass.content, &[thumbnail]) {
         let painter = ui.painter().with_clip_rect(piece.into());
-        painter.circle_stroke(
-            egui::pos2(loupe.eye[0], loupe.eye[1]),
-            eye_radius(loupe.magnification) - inset,
-            stroke,
-        );
+        painter.circle_stroke(eye, eye_radius(loupe.magnification) - inset, stroke);
         painter.circle_stroke(
             egui::pos2(loupe.glass[0], loupe.glass[1]),
             GLASS_RADIUS - inset,
             stroke,
         );
+        for (spans, ink) in [
+            (&reticle.dark, RETICLE_DARK),
+            (&reticle.light, RETICLE_LIGHT),
+        ] {
+            for &span in spans {
+                painter.rect_filled(logical(span), 0.0, ink);
+            }
+        }
     }
 }
 
@@ -254,9 +431,9 @@ mod tests {
         assert_eq!(place([50.0, 50.0], tiny).glass, [50.0, 50.0]);
     }
 
-    /// The glass shows what the eye rings: the point under the pointer is
-    /// at the glass's center, at the magnification, and the circle is the
-    /// glass's in physical pixels.
+    /// The glass shows what the eye rings: the middle of the pixel under the
+    /// pointer is at the glass's center, at the magnification, and the
+    /// circle is the glass's in physical pixels.
     #[test]
     fn the_glass_magnifies_the_point_under_the_eye() {
         let placement = Placement {
@@ -280,17 +457,30 @@ mod tests {
         assert_eq!(glass.placement.upscale, Upscale::Bicubic);
         assert_eq!(glass.placement.width, placement.width * 4.0);
 
-        let under_eye = placement.image_point([400.0, 300.0]);
+        // The pointer is on pixel (150, 120), at its corner; the glass is
+        // about the pixel's middle.
+        assert_eq!(placement.image_point([400.0, 300.0]), [150.0, 120.0]);
         let under_glass = glass.placement.image_point(glass.center);
-        assert!((under_eye[0] - under_glass[0]).abs() < 1e-3);
-        assert!((under_eye[1] - under_glass[1]).abs() < 1e-3);
+        assert!((under_glass[0] - 150.5).abs() < 1e-3);
+        assert!((under_glass[1] - 120.5).abs() < 1e-3);
 
-        // A pixel a device pixel from the eye is four from the center.
+        // A device pixel from the eye is four from the center.
         let beside = glass
             .placement
             .image_point([glass.center[0] + 4.0, glass.center[1]]);
-        let expected = placement.image_point([401.0, 300.0]);
-        assert!((beside[0] - expected[0]).abs() < 1e-3);
+        assert!((beside[0] - (150.5 + 1.0 / placement.zoom)).abs() < 1e-3);
+
+        // Anywhere on the pixel, the glass is the same.
+        let elsewhere = super::glass(
+            Loupe {
+                eye: [200.7, 150.9],
+                ..loupe
+            },
+            placement,
+            scale,
+        );
+        assert_eq!(elsewhere.placement.x, glass.placement.x);
+        assert_eq!(elsewhere.placement.y, glass.placement.y);
     }
 
     /// The glass is one size at every magnification, and the eye is the
@@ -318,10 +508,12 @@ mod tests {
             );
             assert_eq!(glass.radius, GLASS_RADIUS);
             assert_eq!(glass.placement.zoom, magnification);
-            // A pixel at the eye's rim lands at the glass's rim.
+            // A point an eye's radius from the pixel's middle lands at the
+            // glass's rim.
+            let middle = loupe.eye[0] + 0.5;
             let rim = glass
                 .placement
-                .screen_point([loupe.eye[0] + eye_radius(magnification), loupe.eye[1]]);
+                .screen_point([middle + eye_radius(magnification), loupe.eye[1]]);
             assert!((rim[0] - (glass.center[0] + GLASS_RADIUS)).abs() < 1e-3);
         }
 
@@ -341,5 +533,118 @@ mod tests {
 
         assert_eq!(label(4.0), "4\u{00d7}");
         assert_eq!(label(16.0), "16\u{00d7}");
+    }
+
+    fn glass_at(zoom: f32, magnification: f32, scale: f32, eye: [f32; 2]) -> Glass {
+        let placement = Placement {
+            x: 13.0,
+            y: 7.0,
+            width: 640.0 * zoom,
+            height: 480.0 * zoom,
+            zoom,
+            upscale: Upscale::Nearest,
+        };
+        let loupe = Loupe {
+            eye,
+            glass: [eye[0] + 120.0, eye[1] - 120.0],
+            magnification,
+        };
+        glass(loupe, placement, scale)
+    }
+
+    fn covers(span: Span, x: f32, y: f32) -> bool {
+        span[0] <= x && x < span[2] && span[1] <= y && y < span[3]
+    }
+
+    /// Every edge of the reticle is on a whole device pixel.
+    fn on_the_grid(reticle: &Reticle) {
+        for span in reticle.dark.iter().chain(&reticle.light) {
+            for edge in span {
+                assert_eq!(edge.fract(), 0.0, "{reticle:?}");
+            }
+        }
+    }
+
+    /// With the pixel small in the glass, the reticle is four ticks around
+    /// a clear middle, each one light line edged in dark, and nothing near
+    /// the center.
+    #[test]
+    fn a_small_pixel_gets_four_ticks_around_a_gap() {
+        for scale in [1.0, 1.25, 2.0] {
+            let glass = glass_at(1.0, 4.0, scale, [301.3, 222.6]);
+            let reticle = reticle(&glass, scale);
+            on_the_grid(&reticle);
+            assert_eq!(reticle.light.len(), 4);
+            assert_eq!(reticle.dark.len(), 4);
+            for (light, dark) in reticle.light.iter().zip(&reticle.dark) {
+                assert_eq!(*dark, grow(*light, 1.0));
+                assert!(light[2] - light[0] == 1.0 || light[3] - light[1] == 1.0);
+            }
+            let [cx, cy] = glass.center;
+            let gap = TICK_GAP * scale - 1.0;
+            for span in &reticle.light {
+                for (x, y) in [(cx, cy), (cx + gap, cy), (cx, cy - gap)] {
+                    assert!(!covers(*span, x, y), "{span:?} at {scale}");
+                }
+            }
+        }
+    }
+
+    /// With the pixel large in the glass, a box rings it on the device
+    /// pixels just outside its edges, covering none of it, and the ticks
+    /// start outside the box.
+    #[test]
+    fn a_large_pixel_is_framed_without_covering_it() {
+        for (zoom, scale) in [(4.0, 1.0), (3.3, 1.25), (2.0, 2.0)] {
+            let glass = glass_at(zoom, 16.0, scale, [301.3, 222.6]);
+            let reticle = reticle(&glass, scale);
+            on_the_grid(&reticle);
+            assert_eq!(reticle.light.len(), 8);
+            let placement = glass.placement;
+            let point = placement.image_point(glass.center);
+            let pixel = [point[0].floor(), point[1].floor()];
+            let [left, top] = placement.screen_point(pixel);
+            let [right, bottom] = placement.screen_point([pixel[0] + 1.0, pixel[1] + 1.0]);
+            // Nothing over the pixel, ramped edges included.
+            for span in reticle.dark.iter().chain(&reticle.light) {
+                let clear = span[2] <= left.floor()
+                    || span[0] >= right.ceil()
+                    || span[3] <= top.floor()
+                    || span[1] >= bottom.ceil();
+                assert!(clear, "{span:?} over the pixel at zoom {zoom}");
+            }
+            // The light line touches the pixel on all four sides.
+            let [cx, cy] = glass.center;
+            for (x, y) in [
+                (left.floor() - 0.5, cy),
+                (right.ceil() + 0.5, cy),
+                (cx, top.floor() - 0.5),
+                (cx, bottom.ceil() + 0.5),
+            ] {
+                assert!(reticle.light.iter().any(|span| covers(*span, x, y)));
+            }
+        }
+    }
+
+    /// A pixel whose box would not fit inside the glass is all the glass
+    /// shows, and gets no reticle; nor does any tick reach the rim.
+    #[test]
+    fn the_reticle_stays_inside_the_glass() {
+        let glass = glass_at(16.0, 16.0, 1.0, [301.3, 222.6]);
+        assert_eq!(reticle(&glass, 1.0), Reticle::default());
+        for zoom in [0.25, 1.0, 1.5, 2.0] {
+            for magnification in MAGNIFICATIONS {
+                let glass = glass_at(zoom, magnification, 1.0, [301.3, 222.6]);
+                let reach = glass.radius - RIM_MARGIN;
+                for span in reticle(&glass, 1.0).dark {
+                    for x in [span[0], span[2]] {
+                        for y in [span[1], span[3]] {
+                            let distance = (x - glass.center[0]).hypot(y - glass.center[1]);
+                            assert!(distance <= reach + 2.0, "{span:?}");
+                        }
+                    }
+                }
+            }
+        }
     }
 }

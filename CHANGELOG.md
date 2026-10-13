@@ -8,9 +8,19 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
 
 ### Added
 
-- A **Gain map** button at the bottom right, and `G`, for a picture carrying
-  a gain map: shows the map in the picture's place, in stops, so the pixel
-  readout says how far each pixel is brightened, and the picture again.
+- A *Photo* / *Data* switch, at the head of the histogram panel and under
+  the Image heading of the information panel, that reads the file on
+  screen the other way: *Data* as linear numbers windowed to what they
+  hold, *Photo* as a picture — through the sRGB curve where the program
+  had taken integer samples for linear data. The choice stays with the
+  file for the session, and the file is read again under it with the view
+  kept. The Mac's Image menu has it as *Read As*.
+- The loupe's glass marks its center: four thin ticks around a clear
+  middle, and, once the pixel under the pointer is magnified to 8 points
+  or more, a box drawn just outside that pixel's edges. Each is a white
+  line edged in black, so it shows on light and dark pictures alike. The
+  glass now centers on the middle of the pixel the readout reads and moves
+  a pixel at a time.
 - An iPhone's ProRAW, whose picture is compressed with JPEG XL, is
   developed like any other raw: the camera's balance and color, in
   Rec. 2020. Apple's own lift of the shadows is not applied, so it opens
@@ -18,6 +28,167 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
 
 ### Changed
 
+- The histogram's Image section plots each channel as the file stores it on
+  a plot of its own, one under the other, and no longer plots a luminance
+  line: the file stores none, and the one it drew weighted a wide-gamut
+  file's channels as though they were BT.709's. A photograph's channels
+  share one axis, as before; a file read as data has each channel on its
+  own range, trimmed of strays, with its own row of values under it.
+- Every statistic is now counted from every pixel rather than from a sample
+  of about two million: the extremes, the percentiles the *Full range* and
+  *Trimmed* windows read, the key the exposure is metered from, and every
+  plot. A stray value far off the rest of a measurement no longer leaves the
+  *Trimmed* window reading off a histogram it had emptied.
+- The histogram's row of window rules — *As stored*, *Full range*,
+  *Trimmed* — is drawn only for a file read as data, and `e` does nothing
+  on a photo. A photo's window is as stored and the handles move it; the
+  reset puts it back.
+- The histogram's *Exposure* and *Curve* rows are drawn only for a photo,
+  and `d`, `f`, `t`, `--exposure` and `--tone-map` do nothing on a file
+  read as data, whatever its channels: the white handle does what the
+  exposure would, and a curve bent the values being read off. Data is
+  clipped at the top of its window on an HDR monitor too, as a
+  single-channel measurement already was.
+- A 16-bit TIFF of three colors with no profile is read as an sRGB
+  photograph rather than as linear data, unless it carries GeoTIFF keys or
+  a no-data value. 16-bit grayscale and floating-point TIFFs are read as
+  data, as before.
+- `--transfer` now changes how the file opens as well as how it is
+  decoded: a 16-bit TIFF read with `--transfer srgb` opens as stored, as a
+  photo, rather than on a trimmed window.
+
+- The histogram always plots both the luminance and the color planes. The
+  two buttons at the head of its panel that turned each off, their keys
+  (`j` and `k`, `keys.interface.luma` and `keys.interface.planes`) and the
+  Mac's *Histogram Plot* menu are gone; a configuration file that still
+  binds either name is refused like any other unknown key.
+- A picture with a gain map on an HDR surface whose monitor has not said
+  how much room it has above white is shown with the whole of its lift.
+  It used to be shown with none of it, as on an SDR monitor.
+
+- With the gain map shown in the picture's place, the histogram leaves its
+  Image section out. It plotted the map a second time, as a bare
+  measurement between its measured ends, under the Gain map section that
+  already plots it in stops; the column now runs from the map to the
+  screen, and the Image section comes back with the picture.
+- With the depth map shown, the histogram leaves its Gain map section out:
+  nothing on screen is lifted, and its header said how much of the lift
+  was shown while none of it was.
+- A gain map shown in the picture's place opens on its full range rather
+  than a trimmed one, as the reset button puts it back: black where it
+  leaves the picture alone, white where it lifts it most. The trim clipped
+  its strongest lift — the sun, a lamp — to white along with the lift under it.
+- The histogram plots light stored as floating-point linear values — a
+  Radiance picture, an EXR — in stops, from the darkest the picture holds to
+  say anything about up to its brightest. The Display and Image sections'
+  axes used to run straight from the file's lowest value to its highest,
+  which on a Radiance picture — nothing to a few hundred, almost all of it
+  in the bottom hundredth — put the whole picture, the window, its handles
+  and the response curve into the first few pixels of the plot, the
+  exposure slider visibly doing nothing to them, and the Output section
+  into a staircase of two flat steps. In stops the shadows have room, a stop
+  of exposure moves everything one stop along, the window is a stretch of
+  the band, and the Output plots the picture. The Image section has a row of
+  stops from the file's own 1 under its plot, in place of the values at its
+  ends. A measurement keeps its linear axis, as do the sensor counts of a
+  linear 16-bit file.
+- A single-channel measurement — a linear 16-bit or floating-point TIFF, an
+  elevation model, a depth map — is spread straight across the grays: the
+  middle of its window comes out middle gray, and each value the gray code
+  at its place in the window, as every viewer of such data draws it and as
+  the false colors here already placed a value along their ramps. It used to
+  be shown as light, the middle of the window at half of white's light,
+  which put the lower quarter of the window across half the grays and
+  moved every value when the false color was switched on or off. The
+  window's ends are hard ends on an HDR monitor too, and the histogram's
+  row of curves is dim on such a file, saying why when rested on, as it is
+  under a false color. Its exposure slider is dim there too, and `d`, `f`
+  and `--exposure` do nothing: a stop is a doubling of light, and what a
+  stop would do on such a file the white handle does, in the file's own
+  units. A color measurement is shown as light, as before.
+  The histogram's Output section plots a gray file read through a ramp —
+  a false color, or a measurement's gray — along the ramp, end to end,
+  with the ramp itself as the band under it, and no row of stops; it used
+  to be spaced as light, a value's bar where the light of its color would
+  fall. The Display section's header says how the file is being read —
+  *graded*, *metered* or *measurement* — while the pointer is reading
+  nothing, since that is what decides which of the section's rows are
+  live and what the file opened on.
+- The histogram and the file information no longer float over the picture.
+  They are shown one at a time in a panel down the right, beside the
+  picture rather than over it, which is fitted into what the panel leaves.
+  The two buttons in the right strip choose which it shows, and the button
+  of the one showing closes it. The panel stays when `` ` `` hides the
+  bars, and `~` closes it. Where `show_histogram` and `show_info` are both
+  on, the histogram is shown; `--info` on its own shows the information
+  whatever the configuration says.
+- The histogram follows the picture from the file to the screen, a section
+  to a stage, with what goes out at the top: **Output**, what the screen
+  shows, with the share clipped at either end in its corners; **Display**,
+  what the window, exposure and curve act on, with the response curve
+  always drawn over it and the band, handles and settings under it; **Gain
+  map**, for a picture with one, how far the map lifts the picture in
+  stops and how much of that the screen is showing, with a button that
+  shows the map; and **Image**, the picture as the file stores it, so a wide
+  gamut color sits inside the file's range there and past it above. With
+  the pointer on the picture, every section marks the pixel's bar and
+  writes its value at that stage; the Image section marks red, green, blue
+  and luminance each with a line of its own color, and writes the four
+  values as the bottom bar's decimal readout does — whole numbers for 8-
+  and 16-bit files, decimals for floating-point ones. On a short window the panel scrolls, and
+  only the Output section needs room for the histogram button to work. The
+  buttons that act on every plot, and the one that marks the clipped
+  pixels, are in a row at the top of the panel, as the information's tabs
+  are; the gain map's section has the button that shows the map in its
+  heading; and the plots run the panel's whole width. Under the Output,
+  Display and Gain map plots is a row of stops: from white for the first
+  two, so a plot reads as stops below clipping — or above white on an HDR
+  screen — and for the gain map in stops of lift. On an HDR screen, the
+  part of the Output band past white, which the panel can only draw at
+  white, is overlaid with right-pointing chevrons to show it is lifted.
+- The histogram's bars are linear. The Display and Image plots share one
+  scale, so a bar of the same height is the same share of the picture in
+  both, and it stays put while the display is changed; Output is scaled to
+  fill its plot whatever the display does. A spike far fuller than the rest runs off the top of the plot, capped in the
+  accent color, rather than flattening the rest, and with the pointer on it
+  the section's heading gives the share it holds.
+- A notch of the mouse wheel scrolls the information panel, the file list
+  and the help popup about two and a half times as far as before, nearer
+  what a browser does. A trackpad scrolls as it did, and the wheel's zoom on
+  the picture is unchanged.
+
+### Removed
+
+- The histogram's logarithmic counts: the button, `y` and the `log_counts`
+  setting. The shared scale cuts off a dominating spike instead. A
+  `log_counts` line, or a `keys.interface.log-counts` line, in the
+  configuration file is passed over.
+
+## 0.11.0 - 2026-10-10
+
+### Added
+
+- `Home` and `End` go to the first and last file in the list.
+- A **Gain map** button at the bottom right, and `G`, for a picture carrying
+  a gain map: shows the map in the picture's place, in stops, so the pixel
+  readout says how far each pixel is brightened, and the picture again.
+- The interface can be drawn larger or smaller than the monitor's own scale
+  makes it, without the picture changing: `Ctrl+=` and `Ctrl+-` step it
+  between 75% and 300%, and `Ctrl+0` puts it back (`⌥⌘=`, `⌥⌘-` and `⌥⌘0`
+  on a Mac, and *Increase Interface Scale*, *Decrease Interface Scale* and
+  *Reset Interface Scale* in the View menu), and a message says the new
+  scale. The size is remembered in the state file as `ui_scale`. Closes #2.
+
+### Changed
+
+- The arrow keys step through the files: Right and Down to the next, Left
+  and Up to the previous, beside `]`, `[`, `Page Down` and `Page Up`. With a
+  region selected they still move the region. Panning moves onto the arrows
+  held with a modifier: `Shift` pans by 64 pixels, `Ctrl+Shift` by one pixel
+  (`⇧⌘` on a Mac), and `Ctrl` still runs to the far side. `Alt+Left` and
+  `Alt+Right` go back and forward in the image history. To pan with the
+  plain arrows again, put `keys.pan.left = left`, and the same for `right`,
+  `up` and `down`, in the configuration file. Closes #6.
 - The information panel describes a picture's gain map in a *Gain map*
   section of its own after *Image*, which wears the *Showing* pill while the
   map is shown: its size and samples, whose description it is, the HDR
@@ -27,6 +198,17 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
 
 ### Fixed
 
+- The histogram's bars are even at a fractional monitor scale such as 1.25,
+  where every other bin came out a device pixel wider than its neighbors;
+  the band under the plot and the false-color swatches likewise.
+- On Linux with two GPUs, the window is drawn on the one the Wayland
+  compositor renders on, where it says which (version 4 of
+  `zwp_linux_dmabuf_v1`), and otherwise on the one a monitor is connected
+  to, the integrated GPU first where both have one. It used to be drawn on
+  the integrated GPU, which on a desktop whose monitor is plugged into a
+  discrete card — or whose compositor renders on the discrete card with a
+  second monitor on the integrated one — showed a black window.
+  `WGPU_ADAPTER_NAME` and `WGPU_POWER_PREF` override the choice. Closes #5.
 - A raw that cannot be developed but carries the camera's JPEG — a damaged
   file, or one holding its picture in a form not read here — opens as that
   JPEG, saying so, rather than failing.

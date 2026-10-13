@@ -98,15 +98,11 @@ fn picture(width: u32, height: u32) -> Current {
     Current::of(image, "photo.png")
 }
 
-fn panels() -> Panels {
+pub(super) fn panels() -> Panels {
     Panels {
         show_ui: true,
         show_filmstrip: false,
-        show_histogram: false,
-        show_info: false,
-        show_luma: true,
-        show_planes: true,
-        log_counts: false,
+        side: None,
         mark_clipped: false,
         show_minimap: true,
         show_grid: false,
@@ -119,7 +115,7 @@ fn panels() -> Panels {
     }
 }
 
-fn input(logical: [f32; 2], count: usize) -> FrameInput {
+pub(super) fn input(logical: [f32; 2], count: usize) -> FrameInput {
     FrameInput {
         logical,
         scale: 1.0,
@@ -140,6 +136,7 @@ fn input(logical: [f32; 2], count: usize) -> FrameInput {
         deleted: false,
         headroom: Headroom::None,
         hdr_available: false,
+        room: 1.0,
         can_pan: false,
         openers: Vec::new(),
         toast: None,
@@ -153,6 +150,7 @@ fn input(logical: [f32; 2], count: usize) -> FrameInput {
         zoom_box: None,
         transport: None,
         filmstrip: None,
+        side: None,
         chooser: None,
         tags: None,
         rename: None,
@@ -199,9 +197,36 @@ fn open(logical: [f32; 2], count: usize, panels: Panels) -> Harness<'static, Sta
 }
 
 fn build(logical: [f32; 2], count: usize, panels: Panels) -> Harness<'static, State> {
+    build_at(logical, 1.0, count, panels)
+}
+
+/// [`build`] on a device of `scale` pixels to the point, which the frame's
+/// input says too, as the application's does.
+fn build_at(
+    logical: [f32; 2],
+    scale: f32,
+    count: usize,
+    panels: Panels,
+) -> Harness<'static, State> {
+    let mut input = input(logical, count);
+    input.scale = scale;
+    // The side panel up where it is asked for and the window has room for
+    // it, as `App::side_showing` decides.
+    input.side = panels
+        .side
+        .filter(|side| super::room(logical, panels.show_ui, chrome::Parts::NONE).holds(*side));
+    input.viewport = chrome::image_viewport(
+        [logical[0] * scale, logical[1] * scale],
+        scale,
+        panels.show_ui,
+        chrome::Parts {
+            side: input.side.is_some(),
+            ..chrome::Parts::NONE
+        },
+    );
     let state = State {
         ready: false,
-        input: input(logical, count),
+        input,
         panels,
         current: Some(photograph()),
         view: View::new(),
@@ -211,6 +236,7 @@ fn build(logical: [f32; 2], count: usize, panels: Panels) -> Harness<'static, St
     };
     Harness::builder()
         .with_size(egui::vec2(logical[0], logical[1]))
+        .with_pixels_per_point(scale)
         .build_ui_state(
             |ui, state: &mut State| {
                 if !state.ready {
@@ -565,24 +591,38 @@ fn a_toggle_with_no_room_for_its_panel_is_dead() {
 /// The band under the histogram is the levels track. A handle dragged
 /// along it asks for a window whose end is where the hand is; the band
 /// between the handles slides both ends by what the hand moved; and the
-/// exposure's slider asks for the exposure under the hand. Every file has
-/// the three rows under the band, an 8-bit sRGB one included, and a press
-/// on a window's button reaches the application.
+/// exposure's slider asks for the exposure under the hand. A photo has the
+/// exposure and the curve under the band and no row of windows — its
+/// window is as stored and the handles' — and a press on a curve's button
+/// reaches the application; the pair at the head of the panel says the
+/// file is read as a photo, and a press on the other reading reaches it.
 #[test]
 fn the_histogram_panel_hands_back_the_hand_on_its_band() {
     use crate::image::Transfer;
+    use crate::image::decode::Reading;
 
     let mut with_histogram = panels();
-    with_histogram.show_histogram = true;
+    with_histogram.side = Some(super::side::Side::Histogram);
     let mut harness = open(WINDOW, 1, with_histogram);
     assert!(
-        harness.query_by_label("Window 0").is_some(),
-        "every file has the window row"
+        harness.query_by_label("Window 0").is_none(),
+        "a photo has no window row"
     );
     assert!(harness.query_by_label("Curve 0").is_some());
     assert_eq!(
-        click(&mut harness, "Window 0"),
-        [Command::Press(Control::Window(0))]
+        click(&mut harness, "Curve 0"),
+        [Command::Press(Control::Curve(0))]
+    );
+    let lit = |harness: &Harness<'static, State>, label: &str| {
+        matches!(
+            harness.get_by_label(label).accesskit_node().toggled(),
+            Some(egui::accesskit::Toggled::True)
+        )
+    };
+    assert!(lit(&harness, "Read as photo") && !lit(&harness, "Read as data"));
+    assert_eq!(
+        click(&mut harness, "Read as data"),
+        [Command::Press(Control::Reading(Reading::Data))]
     );
 
     // The file is 8-bit sRGB, so the axis is 0..1 in sRGB and the two
@@ -687,46 +727,167 @@ fn the_histogram_panel_hands_back_the_hand_on_its_band() {
 /// The curves are dead under a false color, which clips at the top of its
 /// ramp whatever curve is chosen, and refuse the press; the ramps beside
 /// them stay live, and the gray one brings the curves back.
-/// While another file is on its way in, the panels about the picture keep
-/// their place and their size and say nothing of the picture leaving: none
-/// of the histogram's rows, and nothing on the information panel to copy.
-/// The place is the one worked out for the panel, from the first pass: what
-/// takes the pointer is where the panel is drawn.
+/// With the interface drawn at one and a half device pixels to the point —
+/// a monitor at 1 with the interface a step and a half up, or the other way
+/// round — egui's panels land where the application works out they will,
+/// so that the picture fitted beside them and the pointer read against them
+/// agree with what is drawn; and the plot, a device pixel to the column,
+/// draws without falling over.
 #[test]
-fn the_panels_wait_for_the_file_coming_in() {
-    let mut both = panels();
-    both.show_histogram = true;
-    both.show_info = true;
-    let mut harness = open(WINDOW, 2, both);
-    let content = super::chrome::content_area(WINDOW, true, super::chrome::Parts::NONE);
-    let placed = super::histogram::panel(content).expect("the window has room for it");
-    let full = harness.get_by_label("Histogram panel").rect();
+fn a_scaled_interface_lays_out_where_the_application_says() {
+    use super::side::Side;
+
+    let scale = 1.5;
+    let logical = [1200.0, 800.0];
+    let mut with_histogram = panels();
+    with_histogram.side = Some(Side::Histogram);
+    let mut harness = build_at(logical, scale, 1, with_histogram);
+    harness.run();
+    assert_eq!(harness.ctx.pixels_per_point(), scale);
+
+    let parts = chrome::Parts {
+        side: true,
+        ..chrome::Parts::NONE
+    };
+    // Everything is where the application puts it in the room the harness
+    // leaves inside its own margin, which the application's window does not
+    // have.
+    let margin = 8.0;
+    let room = [logical[0] - 2.0 * margin, logical[1] - 2.0 * margin];
+    let side = chrome::Chrome::new(room, parts)
+        .side
+        .expect("the side panel is up");
+    let placed = super::histogram::panel(side);
     assert_eq!(
-        full,
+        harness.get_by_label("Histogram panel").rect(),
         egui::Rect::from_min_size(
-            egui::pos2(placed.x, placed.y),
+            egui::pos2(placed.x + margin, placed.y + margin),
             egui::vec2(placed.width, placed.height)
         )
     );
-    assert!(harness.query_by_label("Window 0").is_some());
-    assert!(harness.query_by_label("Copy All").is_some());
+    // What egui's panels leave between them is the content area the
+    // application fitted the picture to.
+    let inner = chrome::content_area(room, true, parts);
+    let panel = |name: &str| {
+        egui::PanelState::load(&harness.ctx, egui::Id::new(name))
+            .unwrap_or_else(|| panic!("the {name} panel is up"))
+            .outer_rect
+    };
+    let left = egui::pos2(panel("left").max.x, panel("top").max.y);
+    let right = egui::pos2(panel("side").min.x, panel("bottom").min.y);
+    assert_eq!(
+        egui::Rect::from_min_max(left, right),
+        egui::Rect::from_min_size(
+            egui::pos2(inner.x + margin, inner.y + margin),
+            egui::vec2(inner.width, inner.height)
+        )
+    );
+}
+
+/// The pointer on a region's row draws the region on the picture, beside
+/// the panel rather than inside it: what the panel's own drawing is
+/// clipped to is not what the picture's marks are.
+#[test]
+fn a_regions_row_marks_it_on_the_picture() {
+    use super::side::Side;
+    use crate::image::metadata_region::{MetadataRegion, Shape, Units};
+
+    let mut with_info = panels();
+    with_info.side = Some(Side::Info);
+    let mut harness = open(WINDOW, 1, with_info);
+    let mut current = photograph();
+    current.exif.regions = vec![MetadataRegion {
+        label: "Face".into(),
+        name: Some("Jane Doe".into()),
+        details: Vec::new(),
+        shape: Some(Shape::Rectangle {
+            center: [0.5, 0.5],
+            size: [0.5, 0.5],
+        }),
+        units: Units::Shares,
+    }];
+    harness.state_mut().current = Some(current);
+    harness.run();
+
+    let side = egui::PanelState::load(&harness.ctx, egui::Id::new("side"))
+        .expect("the side panel is up")
+        .outer_rect;
+    // The subject written over the region, which is drawn where the
+    // picture is: starting left of the panel.
+    let marked = |harness: &Harness<'static, State>| {
+        harness.output().shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Jane Doe")
+                && shape.clip_rect.min.x < side.min.x
+        })
+    };
+    assert!(!marked(&harness));
+    harness.get_by_label("Jane Doe").hover();
+    harness.run();
+    assert!(marked(&harness));
+}
+
+/// The side panel is laid out where the chrome's geometry says, between
+/// the picture and the right strip, and the histogram at its head; while
+/// another file is on its way in it keeps that place and says nothing of
+/// the picture leaving: none of the histogram's rows, and nothing on the
+/// information to copy.
+#[test]
+fn the_side_panel_waits_for_the_file_coming_in() {
+    use super::side::{Side, WIDTH};
+
+    let mut with_histogram = panels();
+    with_histogram.side = Some(Side::Histogram);
+    let mut harness = open(WINDOW, 2, with_histogram);
+    // Up against the right strip, under the top bar: where the strip's
+    // first button is, less the room the strip keeps around it.
+    let toggle = harness.get_by_label("Histogram").rect();
+    let strip = toggle.center().x - SIDE_WIDTH / 2.0;
+    let top = toggle.top() - super::chrome::BAR_PADDING;
+    let full = harness.get_by_label("Histogram panel").rect();
+    assert_eq!(full.min, egui::pos2(strip - WIDTH, top));
+    assert_eq!(full.width(), WIDTH);
+    let side = egui::PanelState::load(&harness.ctx, egui::Id::new("side"))
+        .expect("the side panel is up")
+        .outer_rect;
+    assert_eq!(full.max.y, side.max.y, "down the whole of the side");
+    assert!(harness.query_by_label("Curve 0").is_some());
+    assert!(
+        harness.query_by_label("Copy All").is_none(),
+        "one at a time"
+    );
 
     harness.state_mut().input.waiting = true;
     // A few passes rather than a run: the spinner asks for a pass on every
     // pass, and would never let a run settle.
     harness.run_steps(3);
-    assert_eq!(harness.get_by_label("Histogram panel").rect(), full);
+    assert!(harness.query_by_label("Histogram panel").is_some());
     assert!(harness.query_by_label("Window 0").is_none());
     assert!(harness.query_by_label("Curve 0").is_none());
+
+    let mut with_info = panels();
+    with_info.side = Some(Side::Info);
+    let mut harness = open(WINDOW, 2, with_info);
+    assert!(harness.query_by_label("Copy All").is_some());
+    assert!(
+        harness.query_by_label("Window 0").is_none(),
+        "one at a time"
+    );
+    harness.state_mut().input.waiting = true;
+    harness.run_steps(3);
     assert!(harness.query_by_label("Copy All").is_none());
 }
 
+/// A measurement is read as data, which the pair at the head of the panel
+/// says, and has the row of windows and neither the curves nor the
+/// exposure, which a photo has; the false colors are live on both.
 #[test]
 fn the_curves_are_dead_under_a_false_color() {
+    use crate::image::Referred;
     use crate::image::display::Colormap;
 
-    // Gray and linear: a file that is offered the false colors.
-    let image = DecodedImage::new(
+    // Gray and linear: a measurement, offered the false colors and read
+    // through the gray ramp without one.
+    let mut image = DecodedImage::new(
         40,
         25,
         Samples::F32 {
@@ -739,18 +900,54 @@ fn the_curves_are_dead_under_a_false_color() {
     let stats = Stats::scan(&image);
     let mut current = photograph();
     current.display = Display::for_image_with(&image, &stats, Startup::default());
-    current.image = Arc::new(image);
-    current.stats = stats;
+    current.image = Arc::new(image.clone());
+    current.stats = stats.clone();
 
     let mut with_histogram = panels();
-    with_histogram.show_histogram = true;
+    with_histogram.side = Some(super::side::Side::Histogram);
     let mut harness = open(WINDOW, 1, with_histogram);
     harness.state_mut().current = Some(current);
     harness.run();
     let dead = |harness: &Harness<'static, State>, label: &str| {
         harness.get_by_label(label).accesskit_node().is_disabled()
     };
+    assert!(
+        harness.query_by_label("Curve 0").is_none(),
+        "data has no curve"
+    );
+    assert!(
+        harness.query_by_label("Exposure").is_none(),
+        "and no exposure"
+    );
+    assert!(!dead(&harness, "False color 0"));
+    let lit = |harness: &Harness<'static, State>, label: &str| {
+        matches!(
+            harness.get_by_label(label).accesskit_node().toggled(),
+            Some(egui::accesskit::Toggled::True)
+        )
+    };
+    assert!(lit(&harness, "Read as data") && !lit(&harness, "Read as photo"));
+    assert!(
+        harness.query_by_label("Window 0").is_some(),
+        "data has the row of windows"
+    );
+    assert_eq!(
+        click(&mut harness, "Window 0"),
+        [Command::Press(Control::Window(0))]
+    );
+    // The same picture graded is light, and its curves are live until a
+    // false color is put on it.
+    image.referred = Referred::Display;
+    let mut current = photograph();
+    current.display = Display::for_image_with(&image, &stats, Startup::default());
+    current.image = Arc::new(image);
+    current.stats = stats;
+    harness.state_mut().current = Some(current);
+    harness.run();
     assert!(!dead(&harness, "Curve 1"));
+    assert!(!dead(&harness, "Exposure"));
+    assert!(lit(&harness, "Read as photo") && !lit(&harness, "Read as data"));
+    assert!(harness.query_by_label("Window 0").is_none());
     assert_eq!(
         click(&mut harness, "Curve 1"),
         [Command::Press(Control::Curve(1))]
@@ -2350,7 +2547,13 @@ fn a_click_on_the_count_leaves_the_chooser_for_the_press_to_close() {
 /// in the table and stacked alike, rather than leaving it blank.
 #[test]
 fn the_help_popup_says_a_line_is_unbound() {
-    for window in [WINDOW, [PANELS_ROOM[0] + 2.0 * SIDE_WIDTH + 20.0, 700.0]] {
+    for window in [
+        WINDOW,
+        [
+            super::PANEL_WIDTH + 2.0 * super::PADDING + 2.0 * SIDE_WIDTH + 20.0,
+            700.0,
+        ],
+    ] {
         let mut harness = open(window, 1, panels());
         harness.state_mut().help = vec![help::Section {
             title: "Files",
@@ -2377,7 +2580,10 @@ fn the_help_popup_says_a_line_is_unbound() {
 #[test]
 fn the_help_popup_stacks_its_rows_in_a_narrow_window() {
     let mut harness = open(
-        [PANELS_ROOM[0] + 2.0 * SIDE_WIDTH + 20.0, 700.0],
+        [
+            super::PANEL_WIDTH + 2.0 * super::PADDING + 2.0 * SIDE_WIDTH + 20.0,
+            700.0,
+        ],
         1,
         panels(),
     );
@@ -2465,6 +2671,98 @@ fn the_gain_map_toggle_is_there_only_for_a_picture_with_a_gain_map() {
     );
 }
 
+/// Where `text` was painted inside the side panel, if it was: the words of
+/// the histogram's headers, which are painted rather than named.
+fn painted_in_side(harness: &Harness<'static, State>, text: &str) -> Option<egui::Rect> {
+    let side = egui::PanelState::load(&harness.ctx, egui::Id::new("side"))?.outer_rect;
+    harness
+        .output()
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(shown) if shown.galley.text() == text => {
+                let rect = egui::Rect::from_min_size(shown.pos, shown.galley.size());
+                (rect.min.x >= side.min.x && rect.max.x <= side.max.x).then_some(rect)
+            }
+            _ => None,
+        })
+}
+
+/// The histogram is a column of sections, one for each stage the picture
+/// passes through: a gain map's only for a picture that carries one, whose
+/// button beside it asks for the map in the picture's place.
+#[test]
+fn the_histogram_has_a_section_for_each_stage_the_picture_passes_through() {
+    use crate::image::gain_map::{GainMap, Lift};
+
+    let mut with_histogram = panels();
+    with_histogram.side = Some(super::side::Side::Histogram);
+    let mut harness = open(WINDOW, 1, with_histogram);
+    for title in ["Output", "Display", "Image"] {
+        assert!(painted_in_side(&harness, title).is_some(), "{title}");
+    }
+    assert!(painted_in_side(&harness, "Gain map").is_none());
+    assert!(harness.query_by_label("Show gain map").is_none());
+
+    let current = harness.state_mut().current.as_mut().expect("a picture");
+    let mut image = (*current.image).clone();
+    image.gain_map = Some(Arc::new(GainMap {
+        width: 2,
+        height: 2,
+        channels: 1,
+        data: vec![0, 85, 170, 255],
+        lift: Lift::Apple { headroom: 4.0 },
+    }));
+    current.image = Arc::new(image);
+    harness.run();
+    let output = painted_in_side(&harness, "Output").expect("Output");
+    let display = painted_in_side(&harness, "Display").expect("Display");
+    let gain_map = painted_in_side(&harness, "Gain map").expect("Gain map");
+    let file = painted_in_side(&harness, "Image").expect("Image");
+    assert!(
+        output.min.y < display.min.y
+            && display.min.y < gain_map.min.y
+            && gain_map.min.y < file.min.y,
+        "in the order the data flows, read from the screen back"
+    );
+    assert_eq!(
+        click(&mut harness, "Show gain map"),
+        [Command::Press(Control::ShowGainMap)]
+    );
+}
+
+/// On a window too short for the column, the sections run on below the
+/// side panel and the wheel over it scrolls them up into view.
+#[test]
+fn a_short_histogram_scrolls_to_the_sections_below() {
+    let mut with_histogram = panels();
+    with_histogram.side = Some(super::side::Side::Histogram);
+    let mut harness = open([WINDOW[0], 380.0], 1, with_histogram);
+    let side = egui::PanelState::load(&harness.ctx, egui::Id::new("side"))
+        .expect("the side panel is up")
+        .outer_rect;
+    assert!(side.height() < 320.0, "{side:?}");
+    let before = painted_in_side(&harness, "Image").expect("laid out below");
+    assert!(before.min.y > side.max.y, "{before:?} below {side:?}");
+
+    harness.event(egui::Event::PointerMoved(side.center()));
+    for _ in 0..4 {
+        harness.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -200.0),
+            modifiers: egui::Modifiers::NONE,
+            phase: egui::TouchPhase::Move,
+        });
+        // Steps rather than a run: the pointer rests on whatever the
+        // column has scrolled under it, which may be a control whose
+        // tooltip asks for pass after pass.
+        harness.run_steps(4);
+    }
+    let after = painted_in_side(&harness, "Image").expect("still laid out");
+    assert!(after.min.y < before.min.y, "{after:?} from {before:?}");
+    assert!(side.contains(after.center()), "{after:?} in {side:?}");
+}
+
 /// The information panel's Tags tab, with tags handed in: the field takes
 /// the keyboard only when clicked and hands it back on `Esc`, what is typed
 /// in it and what is clicked come back as commands, and the Facts tab is a
@@ -2474,7 +2772,7 @@ fn the_tags_tab_filters_copies_and_folds() {
     use super::tags;
 
     let mut shown = panels();
-    shown.show_info = true;
+    shown.side = Some(super::side::Side::Info);
     shown.info_tab = tags::Tab::Tags;
     let mut harness = build(WINDOW, 1, shown);
     let row = |kind, depth, name: &str, value: &str| tags::Row {
@@ -2560,7 +2858,7 @@ fn the_raw_data_tab_without_exiftool_offers_a_way_out() {
     use super::tags;
 
     let mut shown = panels();
-    shown.show_info = true;
+    shown.side = Some(super::side::Side::Info);
     shown.info_tab = tags::Tab::Tags;
     let mut harness = build(WINDOW, 1, shown);
     harness.state_mut().input.tags = Some(tags::Input {
@@ -2592,4 +2890,58 @@ fn the_raw_data_tab_without_exiftool_offers_a_way_out() {
     }
     let _ = click(&mut harness, "Copy tags");
     assert!(harness.query_by_label("JSON").is_none(), "no menu opens");
+}
+
+/// The chevrons over the Output band, as the side panel painted them: each
+/// a right-pointing mark in the accent, its point halfway down.
+fn chevrons_in_side(harness: &Harness<'static, State>) -> Vec<[egui::Pos2; 3]> {
+    let side = egui::PanelState::load(&harness.ctx, egui::Id::new("side"))
+        .expect("the side panel")
+        .outer_rect;
+    let accent = egui::Color32::from(Theme::FALLBACK.accent);
+    harness
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Path(path)
+                if path.points.len() == 3
+                    && !path.closed
+                    && path.stroke.color == egui::epaint::ColorMode::Solid(accent) =>
+            {
+                let [top, point, foot] = [path.points[0], path.points[1], path.points[2]];
+                (top.x == foot.x
+                    && point.x > top.x
+                    && (point.y - (top.y + foot.y) / 2.0).abs() < 1e-3
+                    && side.contains(point))
+                .then_some([top, point, foot])
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The stretch of the Output band past white — what an HDR surface lifts
+/// above it, which the panel can only draw at white — wears chevrons, and an
+/// SDR surface's band, which ends at white, wears none.
+#[test]
+fn the_output_band_wears_chevrons_past_white_only_on_a_surface_with_room() {
+    let mut with_histogram = panels();
+    with_histogram.side = Some(super::side::Side::Histogram);
+    let harness = open(WINDOW, 1, with_histogram);
+    assert!(chevrons_in_side(&harness).is_empty());
+
+    let mut harness = build(WINDOW, 1, with_histogram);
+    let state = harness.state_mut();
+    state.input.headroom = Headroom::Above;
+    state.input.room = 4.0;
+    harness.run();
+    let chevrons = chevrons_in_side(&harness);
+    assert!(!chevrons.is_empty());
+    // All of them past the white line, which on a room of 4 stands short of
+    // the band's end: none reaches back into the stretch below white.
+    let white = painted_in_side(&harness, "0").expect("the 0 of the row of stops");
+    for [top, ..] in chevrons {
+        assert!(top.x >= white.min.x, "{top:?} left of {white:?}");
+    }
 }

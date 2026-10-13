@@ -1,19 +1,91 @@
+use super::display::{Rows, plot_area, row_buttons, swatch_button};
 use super::*;
-use crate::image::{AlphaMode, Channels, ColorSpace, DecodedImage, Samples};
-use crate::ui::PADDING;
-
-/// A content area with room for everything.
-fn content() -> Rect {
-    Rect::new(0.0, 0.0, 800.0, 600.0)
-}
-
-fn full_panel() -> Rect {
-    panel(content()).expect("room")
-}
+use crate::image::auxiliary::{Auxiliary, Showing};
+use crate::image::depth::DepthMap;
+use crate::image::display::{Colormap, Headroom, ToneMap};
+use crate::image::gain_map::{GainMap, Lift};
+use crate::image::stats::Axis;
+use crate::image::{AlphaMode, Channels, ColorSpace, DecodedImage, Referred, Samples};
+use crate::ui::Face;
+use crate::ui::side;
+use crate::ui::slider::{HANDLE_GRIP, HANDLE_WIDTH};
 
 /// `image`, on screen.
 fn shown(image: DecodedImage) -> Current {
     Current::of(image, "file")
+}
+
+/// The same ramp read as data: a measurement, windowed to what it holds.
+fn measured(gray: bool) -> Current {
+    let mut image = picture(gray).image.as_ref().clone();
+    image.referred = Referred::Measured;
+    shown(image)
+}
+
+/// An 8-bit sRGB picture, color or gray, with a ramp across it.
+fn picture(gray: bool) -> Current {
+    let channels = if gray { Channels::Gray } else { Channels::Rgb };
+    let count = channels.count();
+    let data = (0..64u32)
+        .flat_map(|x| std::iter::repeat_n((x * 4) as u8, count))
+        .collect();
+    shown(DecodedImage::new(
+        64,
+        1,
+        Samples::U8 { channels, data },
+        ColorSpace::SRGB,
+        AlphaMode::Opaque,
+    ))
+}
+
+/// Scene light stored as floats, as a Radiance picture is: a ramp of a
+/// stop to every `per_stop` pixels from fourteen stops under 1 to eight
+/// over, metered on arrival.
+fn scene(per_stop: usize) -> Current {
+    let stops = 22 * per_stop;
+    let data: Vec<f32> = (0..stops)
+        .map(|x| (x as f32 / per_stop as f32 - 14.0).exp2())
+        .collect();
+    let mut image = DecodedImage::new(
+        stops as u32,
+        1,
+        Samples::F32 {
+            channels: Channels::Gray,
+            data,
+        },
+        ColorSpace::LINEAR_BT709,
+        AlphaMode::Opaque,
+    );
+    image.referred = Referred::Scene;
+    shown(image)
+}
+
+/// The same color picture with a gray gain map beside it, lifting its right
+/// half by two stops.
+fn gain_mapped() -> Current {
+    let mut image = picture(false).image.as_ref().clone();
+    image.gain_map = Some(std::sync::Arc::new(GainMap {
+        width: 2,
+        height: 1,
+        channels: 1,
+        data: vec![0, 255],
+        lift: Lift::Apple { headroom: 4.0 },
+    }));
+    shown(image)
+}
+
+/// The column laid out from the top of a scroll area `height` tall.
+fn laid_out(current: &Current, height: f32) -> Vec<(Section, Rect)> {
+    section::layout(Rect::new(0.0, 0.0, COLUMN_WIDTH, height), current)
+}
+
+/// Where `section` was laid out.
+fn rect_of(layout: &[(Section, Rect)], section: Section) -> Rect {
+    layout
+        .iter()
+        .find(|(laid, _)| *laid == section)
+        .map(|(_, rect)| *rect)
+        .unwrap_or_else(|| panic!("{section:?} is laid out"))
 }
 
 /// The exposure is stepped in quarter stops, so it is written in
@@ -38,21 +110,18 @@ fn an_exposure_is_written_in_the_quarters_it_is_stepped_in() {
     assert_eq!(stops_label(0.1), "+0.10");
 }
 
-/// A share of the picture is written so that a small one is still
-/// something and a large one is not four digits: nothing at all for
-/// none, a floor under the least that is not none, tenths while they
-/// tell the reader something and whole percents once they do not.
+/// A percentile is whole through the middle, to a tenth at either end
+/// where a tail is what is looked for, and never 0 or 100 unless it is
+/// exactly so.
 #[test]
-fn a_clipped_share_is_written_to_be_read_at_a_glance() {
-    assert_eq!(share_words(0.0), None);
-    assert_eq!(share_words(-1.0), None);
-    assert_eq!(share_words(f32::NAN), None);
-    assert_eq!(share_words(0.0001).as_deref(), Some("<0.1%"));
-    assert_eq!(share_words(0.001).as_deref(), Some("0.1%"));
-    assert_eq!(share_words(0.0234).as_deref(), Some("2.3%"));
-    assert_eq!(share_words(0.1).as_deref(), Some("10%"));
-    assert_eq!(share_words(0.5).as_deref(), Some("50%"));
-    assert_eq!(share_words(1.0).as_deref(), Some("100%"));
+fn a_percentile_is_written_whole_but_at_the_tails() {
+    assert_eq!(percentile_words(0.0), "0%");
+    assert_eq!(percentile_words(0.0004), "<0.1%");
+    assert_eq!(percentile_words(0.0042), "0.4%");
+    assert_eq!(percentile_words(0.42), "42%");
+    assert_eq!(percentile_words(0.995), "99.5%");
+    assert_eq!(percentile_words(0.9999), ">99.9%");
+    assert_eq!(percentile_words(1.0), "100%");
 }
 
 /// The ends of an axis and the value under the pointer are written with
@@ -93,18 +162,236 @@ fn a_decimal_is_written_without_the_zeros_it_does_not_need() {
     assert_eq!(axis_words(&counts, 4095.0 / 65535.0), "4095");
 }
 
-/// The pointer reads a bin of the plot and nothing outside it — not the
-/// panel around it, and not the line the axis labels are set on.
+/// The panel is the whole of the side, and every section in it is laid out
+/// at its own height and the column's width, whatever the side's height: on
+/// a side shorter than the column the column runs on past it, to be
+/// scrolled to, rather than any section being shrunk or left out.
+#[test]
+fn every_section_is_laid_out_at_its_own_height_whatever_the_room() {
+    assert_eq!(side::WIDTH, PANEL_WIDTH);
+    assert_eq!(
+        PANEL_WIDTH,
+        COLUMN_WIDTH + crate::ui::style::SCROLLBAR_GUTTER + 2.0 * PANEL_INSET,
+        "the column, its scrollbar's gutter and the panel's insets"
+    );
+    let side = Rect::new(40.0, 30.0, side::WIDTH, 300.0);
+    let whole = panel(side);
+    assert_eq!(
+        (whole.x, whole.y, whole.width, whole.height),
+        (side.x, side.y, PANEL_WIDTH, side.height)
+    );
+
+    let current = gain_mapped();
+    let column = Rect::new(50.0, 70.0, COLUMN_WIDTH, 240.0);
+    let layout = section::layout(column, &current);
+    let sections: Vec<Section> = layout.iter().map(|(section, _)| *section).collect();
+    assert_eq!(sections, Section::ALL, "in the order the data flows");
+    assert_eq!(layout[0].1.y, column.y, "the first opens the column");
+    let image = stored::Layout::of(&current);
+    assert_eq!(
+        image,
+        stored::Layout {
+            planes: 3,
+            shared: true
+        }
+    );
+    for (section, rect) in &layout {
+        assert_eq!(
+            rect.height,
+            section.height(false, false, image),
+            "{section:?}"
+        );
+        assert_eq!((rect.x, rect.width), (column.x, COLUMN_WIDTH));
+    }
+    for pair in layout.windows(2) {
+        assert_eq!(
+            pair[1].1.y,
+            pair[0].1.bottom() + SECTION_GAP,
+            "{:?} under {:?}",
+            pair[1].0,
+            pair[0].0
+        );
+    }
+    let bottom = layout.last().expect("sections").1.bottom();
+    assert_eq!(bottom - column.y, section::height(&current));
+    assert!(
+        bottom - column.y > 2.0 * column.height,
+        "the column runs on past a short side: {}",
+        bottom - column.y
+    );
+    assert_eq!(
+        MIN_HEIGHT,
+        2.0 * PANEL_INSET
+            + TOOLBAR_HEIGHT
+            + HEADER_GAP
+            + Section::Output.height(false, false, stored::Layout::ONE),
+        "the row of buttons and the head section are the least the panel needs"
+    );
+}
+
+/// The Image section has a plot to the stored channel: one for a gray
+/// file, three for a color one, one under the other inside the section and
+/// clear of each other's grounds, with one row of values under the last
+/// where the channels share an axis and one under each where they do not.
+#[test]
+fn the_image_section_has_a_plot_to_the_channel() {
+    for (current, planes, shared) in [
+        (picture(true), 1, true),
+        (picture(false), 3, true),
+        (measured(false), 3, false),
+    ] {
+        let layout = stored::Layout::of(&current);
+        assert_eq!(layout, stored::Layout { planes, shared });
+        let rect = rect_of(&laid_out(&current, 600.0), Section::Image);
+        let plots = stored::plots(rect, layout);
+        assert_eq!(plots.len(), planes);
+        let first = Section::Image.plot(rect);
+        assert_eq!(
+            (plots[0].x, plots[0].y, plots[0].width),
+            (first.x, first.y, first.width)
+        );
+        assert_eq!(plots[0].height, layout.plot_height());
+        for pair in plots.windows(2) {
+            assert!(
+                pair[1].y - pair[0].bottom() >= 3.0 * PLOT_INSET,
+                "{:?} under {:?}",
+                pair[1],
+                pair[0]
+            );
+            if !shared {
+                assert!(pair[1].y - pair[0].bottom() >= 3.0 * PLOT_INSET + EV_ROW);
+            }
+        }
+        let last = plots.last().unwrap();
+        assert!(
+            last.bottom() + PLOT_INSET + EV_ROW <= rect.bottom(),
+            "{last:?} in {rect:?}"
+        );
+        for (index, bars) in plots.iter().enumerate() {
+            assert_eq!(bars.width, BINS as f32);
+            assert_eq!(
+                stored::hovered(rect, layout, Some([bars.x + 0.5, bars.y + 1.0])),
+                Some((index, 0))
+            );
+        }
+        assert_eq!(
+            stored::hovered(rect, layout, Some([rect.x + 1.0, rect.y + 1.0])),
+            None,
+            "the header is no plot"
+        );
+    }
+}
+
+/// The gain map's section is there only for a picture that carries one.
+#[test]
+fn the_gain_maps_section_is_there_only_with_a_map() {
+    let plain: Vec<Section> = laid_out(&picture(false), 600.0)
+        .into_iter()
+        .map(|(section, _)| section)
+        .collect();
+    assert_eq!(plain, [Section::Output, Section::Display, Section::Image]);
+    let mapped = laid_out(&gain_mapped(), 600.0);
+    assert!(
+        mapped
+            .iter()
+            .any(|(section, _)| *section == Section::GainMap)
+    );
+}
+
+/// While the gain map is shown in the picture's place, the Gain map section
+/// is the stage the display starts from, and the Image section, which would
+/// plot the same map again, is left out; it comes back with the picture.
+#[test]
+fn the_image_section_gives_way_to_a_shown_gain_map() {
+    let mut current = gain_mapped();
+    let sections = |current: &Current| -> Vec<Section> {
+        laid_out(current, 600.0)
+            .into_iter()
+            .map(|(section, _)| section)
+            .collect()
+    };
+    let showing = Showing::Auxiliary(Auxiliary::GainMap);
+    assert!(current.show(showing, |picture| {
+        picture.auxiliary(Auxiliary::GainMap).map(Face::new)
+    }));
+    assert_eq!(
+        sections(&current),
+        [Section::Output, Section::Display, Section::GainMap]
+    );
+    assert!(current.show(Showing::Picture, |_| None));
+    assert_eq!(
+        sections(&current),
+        [
+            Section::Output,
+            Section::Display,
+            Section::GainMap,
+            Section::Image
+        ]
+    );
+}
+
+/// While the depth map is shown in the picture's place, nothing on screen
+/// is lifted, and the Gain map section is left out; the Image section is
+/// the depth map's own.
+#[test]
+fn the_gain_maps_section_gives_way_to_a_shown_depth_map() {
+    let mut image = gain_mapped().image.as_ref().clone();
+    image.depth = Some(std::sync::Arc::new(DepthMap {
+        width: 2,
+        height: 1,
+        samples: Samples::U8 {
+            channels: Channels::Gray,
+            data: vec![0, 255],
+        },
+        scale: None,
+    }));
+    let mut current = shown(image);
+    assert!(
+        current.show(Showing::Auxiliary(Auxiliary::Depth), |picture| {
+            picture.auxiliary(Auxiliary::Depth).map(Face::new)
+        })
+    );
+    let sections: Vec<Section> = laid_out(&current, 600.0)
+        .into_iter()
+        .map(|(section, _)| section)
+        .collect();
+    assert_eq!(
+        sections,
+        [Section::Output, Section::Display, Section::Image]
+    );
+}
+
+/// Every plot keeps a point to the bin, which is what the pointer reads it
+/// by, and sits inside its section, clear of the header above it.
+#[test]
+fn every_plot_keeps_one_pixel_to_the_bin() {
+    for gray in [true, false] {
+        let current = if gray { picture(true) } else { gain_mapped() };
+        for (section, rect) in laid_out(&current, 600.0) {
+            let bars = section.plot(rect);
+            assert_eq!(bars.width, BINS as f32, "{section:?}, gray {gray}");
+            assert!(
+                bars.y - PLOT_INSET >= section::header_line(rect).bottom(),
+                "{section:?}"
+            );
+            assert!(bars.bottom() + PLOT_INSET <= rect.bottom(), "{section:?}");
+        }
+    }
+}
+
+/// The pointer reads a bin of a plot and nothing outside it — not the
+/// section around it, and not the line its header is set on.
 #[test]
 fn only_the_plot_itself_answers_the_pointer() {
-    let bars = bars(full_panel());
+    let layout = laid_out(&picture(false), 600.0);
+    let bars = Section::Output.plot(rect_of(&layout, Section::Output));
 
     assert_eq!(hovered_bin(bars, None), None, "no pointer, no mark");
     assert_eq!(hovered_bin(bars, Some([bars.x - 1.0, bars.y + 1.0])), None);
     assert_eq!(
         hovered_bin(bars, Some([bars.x + 1.0, bars.y - 1.0])),
         None,
-        "the labels' line is above the plot, not part of it"
+        "the header is above the plot, not part of it"
     );
     assert_eq!(
         hovered_bin(bars, Some([bars.right(), bars.y + 1.0])),
@@ -118,7 +405,8 @@ fn only_the_plot_itself_answers_the_pointer() {
 /// and the bar it stands on cannot part company.
 #[test]
 fn the_pointer_marks_the_bar_it_is_over() {
-    let bars = bars(full_panel());
+    let layout = laid_out(&picture(false), 600.0);
+    let bars = Section::Image.plot(rect_of(&layout, Section::Image));
     let at = |x: f32| hovered_bin(bars, Some([bars.x + x, bars.y + 1.0]));
 
     assert_eq!(at(0.0), Some(0), "the first pixel of the plot is bin zero");
@@ -140,248 +428,734 @@ fn the_pointer_marks_the_bar_it_is_over() {
     assert_eq!(bin_across(BINS - 1), 1.0);
 }
 
-/// The panel is one fixed size, so a content area smaller than it in
-/// either direction gets no panel at all rather than one hanging off the
-/// window over the picture it is about.
+/// The row of buttons at the head of the panel: the pair that reads the
+/// file as a photo or as data at the start, and at the far end the reset
+/// with the clipped pixels' toggle just before it, all inside the row and
+/// none over another.
 #[test]
-fn a_content_area_too_small_gets_no_panel() {
-    let room = [SIZE[0] + 2.0 * PADDING, SIZE[1] + 2.0 * PADDING];
-    assert!(panel(Rect::new(0.0, 0.0, room[0], room[1])).is_some());
-    assert!(panel(Rect::new(0.0, 0.0, room[0] - 1.0, room[1])).is_none());
-    assert!(panel(Rect::new(0.0, 0.0, room[0], room[1] - 1.0)).is_none());
-}
-
-/// Where it does fit it sits in the top right of the content area, its
-/// own padding in from both edges.
-#[test]
-fn the_panel_sits_in_the_corner_with_its_padding_around_it() {
-    let content = Rect::new(10.0, 20.0, 800.0, 600.0);
-    let panel = panel(content).expect("room");
-    assert_eq!(panel.right(), content.right() - PADDING);
-    assert_eq!(panel.y, content.y + PADDING);
-}
-
-/// A bin is one logical pixel, which is what keeps the bars from landing
-/// astride a pixel boundary, whatever stands beside the plot. Nor does
-/// the plot move down for the rows under it, which is what the panel
-/// grows by.
-#[test]
-fn the_plot_keeps_one_pixel_to_the_bin_whatever_grows_around_it() {
-    let panel = full_panel();
-    for gray in [true, false] {
-        let bars = plot_area(panel, gray);
-        assert_eq!(bars.width, BINS as f32, "gray {gray}");
-
-        // Everything the panel holds is inside it, and clear of the
-        // plot.
-        let last = toolbar(gray).len() - 1;
-        let button = toolbar_button(panel, gray, last);
-        assert!(button.right() <= bars.x, "the strip clears the plot");
-        assert!(toolbar_button(panel, gray, 0).y >= panel.y);
-        assert!(button.bottom() <= panel.bottom(), "{button:?}");
-        // And it ends above the band of color, which is what the
-        // room under the plot is for: a button beside the ramp would
-        // read as belonging to it rather than to the plot it acts on.
-        assert!(
-            button.bottom() <= ramp(bars).y,
-            "gray {gray}: {button:?} against the band at {:?}",
-            ramp(bars)
-        );
-        assert!(ramp(bars).y >= bars.bottom(), "the band is under the plot");
-        assert!(ramp(bars).bottom() <= panel.bottom());
-    }
-}
-
-/// The button that marks the clipped pixels stands beside the band, in
-/// the strip's own column and centered on the band, in the room between
-/// the stack above and the rows below — clear of both, whatever the
-/// stack holds, and clear of the black handle's grip beside it.
-#[test]
-fn the_marks_button_stands_beside_the_band() {
-    let panel = full_panel();
-    let button = marks_button(panel);
-    let band = ramp(bars(panel));
-
-    assert_eq!(button.x, toolbar_button(panel, false, 0).x, "in the strip");
+fn the_row_of_buttons_heads_the_panel() {
+    let row = Rect::new(10.0, 10.0, COLUMN_WIDTH, TOOLBAR_HEIGHT);
+    let [
+        (photo, first),
+        (data, second),
+        (marks, third),
+        (reset, at_end),
+    ] = toolbar(row);
     assert_eq!(
-        button.y + button.height / 2.0,
-        band.y + band.height / 2.0,
-        "centered on the band"
+        (photo, data, marks, reset),
+        (
+            Control::Reading(Reading::Photo),
+            Control::Reading(Reading::Data),
+            Control::Marks,
+            Control::Reset
+        )
     );
-    for gray in [true, false] {
-        let last = toolbar_button(panel, gray, toolbar(gray).len() - 1);
-        assert!(
-            button.y >= last.bottom() + TOOLBAR_GAP,
-            "gray {gray}: {button:?} against the stack ending at {last:?}"
-        );
+    assert_eq!(first.x, row.x, "the reading at the start");
+    assert_eq!(at_end.right(), row.right(), "the reset at the far end");
+    assert_eq!(third.right() + CELL_GAP, at_end.x, "the marks beside it");
+    assert_eq!(first.width, second.width, "the pair reads as one switch");
+    for pair in [(first, second), (second, third), (third, at_end)] {
+        assert!(pair.0.right() < pair.1.x, "{pair:?}");
     }
-    assert!(button.bottom() <= Rows::new(panel).exposure.y, "{button:?}");
+    for rect in [first, second, third, at_end] {
+        assert_eq!((rect.y, rect.height), (row.y, row.height), "{rect:?}");
+    }
+}
+
+/// A section's own button stands at the end of its header, and the
+/// readout ends short of it.
+#[test]
+fn a_sections_button_ends_its_header() {
+    let layout = laid_out(&gain_mapped(), 600.0);
+    let rect = rect_of(&layout, Section::GainMap);
+    let line = section::header_line(rect);
+    let button = section::button(rect);
+    assert_eq!(button.right(), line.right());
+    assert_eq!((button.y, button.height), (line.y, line.height));
+    assert!(section::readout_end(Section::GainMap, line) < button.x);
     assert!(
-        button.right() <= grip(band, band.x).x,
-        "{button:?} against the handle at {:?}",
-        grip(band, band.x)
+        line.bottom() <= Section::GainMap.plot(rect).y - PLOT_INSET,
+        "the header is clear of the plot's ground"
     );
 }
 
-/// The false colors take their room off the plot rather than off the
-/// panel, so that the information panel below does not shift about from
-/// one file to the next.
+/// A section with no button of its own sets its readout flush with the
+/// end of its header.
 #[test]
-fn the_panel_is_one_height_with_the_false_colors_and_without() {
-    let panel = full_panel();
-    let (with, without) = (plot_area(panel, true), plot_area(panel, false));
-    assert!(with.height < without.height, "{with:?} {without:?}");
-    assert_eq!(with.y, without.y, "both start under the same label");
+fn a_buttonless_sections_readout_ends_its_header() {
+    let layout = laid_out(&gain_mapped(), 600.0);
+    for (section, rect) in layout {
+        if !section.has_button() {
+            let line = section::header_line(rect);
+            assert_eq!(section::readout_end(section, line), line.right());
+        }
+    }
+}
+
+/// The Display plot is as tall as the Output's on every file; the false
+/// colors a gray image has sit under its band and its row of stops, and
+/// make the section taller by their own row rather than taking it off the
+/// plot.
+#[test]
+fn the_false_colors_are_under_the_display_band_and_nowhere_else() {
+    let layout = laid_out(&picture(true), 600.0);
+    let rect = rect_of(&layout, Section::Display);
+    let with = plot_area(rect);
+    let color = rect_of(&laid_out(&picture(false), 600.0), Section::Display);
+    assert_eq!(with.height, PLOT_HEIGHT);
+    assert_eq!(plot_area(color).height, PLOT_HEIGHT);
+    assert_eq!(
+        Section::Output
+            .plot(rect_of(&layout, Section::Output))
+            .height,
+        PLOT_HEIGHT
+    );
+    assert_eq!(rect.height, color.height + display::SWATCH_ROW);
 
     let last = swatch_button(with, Colormap::ALL.len() - 1);
     assert!(
         last.y >= ramp(with).bottom(),
         "the ramps sit under the band"
     );
-    assert!(last.bottom() <= panel.bottom(), "{last:?} in {panel:?}");
     assert!(last.right() <= with.right() + 0.01, "{last:?}");
     assert!(
-        ramp(without).bottom() <= panel.bottom(),
-        "and without them the band still clears the panel's edge"
+        swatch_button(with, 0).y >= ev_row(with, ramp(with).bottom()).bottom(),
+        "the false colors are under the row of stops"
     );
+    assert!(swatch_button(with, 0).bottom() <= Rows::new(rect, false).span().0);
+}
+
+/// The rows sit under the Display section's band, inside the section, and
+/// the last of them ends it. A photo has the exposure and the curve; an
+/// image read as data has the row of windows alone, and its section is
+/// shorter by a row — so the column moves only between the two kinds of
+/// file, never between two photos.
+#[test]
+fn the_rows_sit_under_the_display_band() {
+    let photo = picture(false);
+    let data = measured(false);
+    assert!(!section::is_data(&photo) && section::is_data(&data));
+    let photo_rect = rect_of(&laid_out(&photo, 600.0), Section::Display);
+    let data_rect = rect_of(&laid_out(&data, 600.0), Section::Display);
+    assert_eq!(
+        data_rect.height - photo_rect.height,
+        display::rows_height(true) - display::rows_height(false),
+        "a row shorter"
+    );
+
+    for (current, rect) in [(&photo, photo_rect), (&data, data_rect)] {
+        let is_data = section::is_data(current);
+        let rows = Rows::new(rect, is_data);
+        let inside = rect;
+        let band = ramp(plot_area(rect));
+
+        for (widget, button) in row_buttons(rect, is_data) {
+            assert!(button.y >= band.bottom(), "{widget:?} clears the band");
+            assert!(button.x >= inside.x + 56.0, "{widget:?} clears its word");
+            assert!(
+                button.right() <= inside.right() + 0.01,
+                "{widget:?} {button:?}"
+            );
+        }
+        assert_eq!(
+            rows.span().1,
+            rect.bottom(),
+            "the last row ends the section"
+        );
+        let labels: Vec<&str> = rows.labels().map(|(word, _)| word).collect();
+        let widgets: Vec<Control> = row_buttons(rect, is_data)
+            .map(|(widget, _)| widget)
+            .collect();
+        if is_data {
+            assert_eq!(labels, ["Window"]);
+            assert_eq!(widgets.len(), WINDOWS.len());
+            assert!(
+                rows.slider().is_none() && rows.stops().is_none(),
+                "data has no exposure"
+            );
+            continue;
+        }
+        assert_eq!(labels, ["Exposure", "Curve"]);
+        assert_eq!(widgets.len(), ToneMap::ALL.len());
+        assert!(
+            !widgets.iter().any(|w| matches!(w, Control::Window(_))),
+            "a photo's window is as stored and the handles'"
+        );
+        let (slider, stops) = (rows.slider().unwrap(), rows.stops().unwrap());
+        assert_eq!(slider.x, rows.exposure.unwrap().0.x);
+        assert!(slider.right() < stops.x);
+        assert_eq!(stops.right(), inside.right());
+        assert!(
+            slider.width - HANDLE_GRIP > 3.0 * 2.0 * SLIDER_STOPS / EV_STEP,
+            "a quarter stop is wider than a few pixels"
+        );
+    }
 }
 
 /// The handles stand on the band and reach past it, and the room that
-/// takes the pointer is wider than the mark: a mark five pixels wide is
-/// not something a hand lands on.
+/// takes the pointer is wider than the mark — a mark five pixels wide is
+/// not something a hand lands on — and clear of the plot above and of the
+/// row under it.
 #[test]
 fn a_handle_is_easier_to_take_hold_of_than_it_is_wide() {
-    let band = ramp(bars(full_panel()));
-    let at = band.x + 100.0;
-    let grip = grip(band, at);
-    assert!(grip.width > HANDLE_WIDTH);
-    assert_eq!(
-        grip.x + grip.width / 2.0,
-        at,
-        "centered on the value it marks"
-    );
-    assert!(grip.y < band.y && grip.bottom() > band.bottom());
-    // Above the band it stays clear of the plot's ground, and below it
-    // clear of whatever comes next: the false colors, or the rows.
-    let plot = bars(full_panel());
-    assert!(
-        grip.y >= plot.bottom() + PLOT_INSET,
-        "{grip:?} over {plot:?}"
-    );
-    assert!(grip.bottom() <= swatch_button(plot, 0).y);
-    assert!(grip.bottom() <= Rows::new(full_panel()).exposure.y);
-}
-
-/// A control the display would ignore is not on the panel at all, and the
-/// ones that remain close the gap up rather than leaving a hole where it
-/// would have been.
-#[test]
-fn a_control_that_could_do_nothing_is_not_there() {
-    let panel = full_panel();
-
-    assert_eq!(toolbar(true), [Control::Luma, Control::Log, Control::Reset]);
-    assert_eq!(
-        toolbar(false),
-        [Control::Luma, Control::Planes, Control::Log, Control::Reset],
-        "three channels have planes to toggle"
-    );
-    // The reset moves up into the room the planes toggle is not taking.
-    assert_eq!(
-        toolbar_button(panel, true, 1).y,
-        toolbar_button(panel, false, 1).y,
-        "and the slot it leaves is filled, not left empty"
-    );
-
-    // The row of false colors takes its room off the plot on an image
-    // that has them, under the band, and the plot is taller without.
-    let swatch = swatch_button(plot_area(panel, true), 2);
-    assert!(swatch.y >= ramp(plot_area(panel, true)).bottom());
-    assert!(plot_area(panel, false).height > plot_area(panel, true).height);
-}
-
-/// The rows sit under the band, inside the panel, and land in the same
-/// place whether or not the image has a row of false colors — the band
-/// and the swatches under it end on the same line, so the controls
-/// below them do not shift about from one file to the next. The last
-/// of the three rows ends the panel.
-#[test]
-fn the_rows_sit_under_the_band_whatever_it_ends_in() {
-    let panel = full_panel();
-    let rows = Rows::new(panel);
-    let inside = panel.inset(PANEL_INSET, PANEL_INSET);
-
-    let lowest = swatch_button(plot_area(panel, true), 0).bottom();
-    assert_eq!(
-        lowest,
-        ramp(bars(panel)).bottom(),
-        "the false colors end where the band alone would have"
-    );
-    for (widget, rect) in row_buttons(panel) {
-        assert!(rect.y >= lowest, "{widget:?} clears the band: {rect:?}");
-        assert!(rect.bottom() <= inside.bottom(), "{widget:?} {rect:?}");
-        assert!(rect.x >= inside.x + ROW_LABEL, "{widget:?} clears its word");
-        assert!(rect.right() <= inside.right() + 0.01, "{widget:?} {rect:?}");
+    for gray in [true, false] {
+        let layout = laid_out(&picture(gray), 600.0);
+        let rect = rect_of(&layout, Section::Display);
+        let plot = plot_area(rect);
+        let band = ramp(plot);
+        let at = band.x + 100.0;
+        let grip = grip(band, at);
+        assert!(grip.width > HANDLE_WIDTH);
+        assert_eq!(grip.x + grip.width / 2.0, at, "centered on its value");
+        assert!(grip.y < band.y && grip.bottom() > band.bottom());
+        assert!(
+            grip.y >= plot.bottom() + PLOT_INSET,
+            "{grip:?} over {plot:?}"
+        );
+        assert!(grip.bottom() <= Rows::new(rect, false).span().0);
+        if gray {
+            assert!(grip.bottom() <= swatch_button(plot, 0).y);
+        }
     }
-    // The last row is the last thing on the panel, and what it
-    // leaves under it is the panel's own inset and nothing more.
-    assert_eq!(rows.bottom(), inside.bottom());
-    let labels: Vec<&str> = rows.labels().map(|(word, _)| word).collect();
-    assert_eq!(labels, ["Exposure", "Window", "Curve"]);
 }
 
-/// The windows and the curves cover everything there is to choose, and
-/// the exposure's row is a slider up to its reading, which ends where
-/// the rows' last buttons do.
+/// A pointer on a pixel of the picture is traced down the column: every
+/// section marks a bin and writes the pixel's value at its stage. A pointer
+/// on one section's plot marks that section alone.
 #[test]
-fn the_rows_offer_every_choice_there_is() {
-    let panel = full_panel();
-    let widgets: Vec<Control> = row_buttons(panel).map(|(widget, _)| widget).collect();
-    assert_eq!(widgets.len(), WINDOWS.len() + ToneMap::ALL.len());
+fn a_pixel_is_traced_down_every_section() {
+    let current = gain_mapped();
+    let layout = laid_out(&current, 600.0);
+    let binned = output::binned_for(&current, Headroom::None, 1.0);
+    let lift = current.image.gain_map.as_ref().unwrap().lift_plot();
+    let image = stored::plotted_for(&current);
+    let plots = Plots {
+        output: &binned,
+        lift: lift.as_ref(),
+        image: &image,
+        counts: input_counts(&current),
+        output_counts: plot::Counts::of(&binned.plot),
+        lift_counts: plot::Counts::of(lift.as_ref().unwrap()),
+    };
 
-    let rows = Rows::new(panel);
-    let inside = panel.inset(PANEL_INSET, PANEL_INSET);
-    assert_eq!(rows.slider().x, rows.exposure.x);
-    assert!(rows.slider().right() < rows.stops().x);
-    assert_eq!(rows.stops().right(), inside.right());
-    assert!(
-        rows.slider().width - HANDLE_GRIP > 3.0 * 2.0 * SLIDER_STOPS / EV_STEP,
-        "a quarter stop is wider than a few pixels"
+    let traced = marked(
+        &current,
+        &layout,
+        None,
+        Some([60, 0]),
+        Headroom::None,
+        &plots,
     );
-
-    // The three rules, and no fourth for the image's own, which is
-    // always one of these.
-    let named: Vec<AutoWindow> = WINDOWS.iter().map(|(_, window)| *window).collect();
+    for section in [Section::Output, Section::Display, Section::GainMap] {
+        let mark = traced
+            .of(section)
+            .unwrap_or_else(|| panic!("{section:?} marks the pixel"));
+        assert!(mark.bin.is_some(), "{section:?}: {mark:?}");
+        assert!(!mark.words.is_empty(), "{section:?}");
+    }
+    // The Image section marks it a channel at a time.
+    let image = traced.image.as_ref().expect("the Image section marks it");
+    let planes: Vec<Plane> = image.channels.iter().map(|channel| channel.plane).collect();
     assert_eq!(
-        named,
-        [AutoWindow::Off, AutoWindow::MinMax, AutoWindow::Percentile]
+        planes,
+        [Plane::Red, Plane::Green, Plane::Blue],
+        "red, green and blue, as the file stores them, and nothing it does not"
     );
-    assert_eq!(ToneMap::ALL.len(), 2, "one button to a choice");
+    assert!(image.channels.iter().all(|channel| channel.bin.is_some()));
+    assert_eq!(
+        traced.gain_map.as_ref().unwrap().words,
+        "+2.0 stops",
+        "the right half is lifted the whole of the lift"
+    );
+
+    // On one of the Image section's plots, only it marks anything, and
+    // what it says is its bin's value on that plane.
+    let rect = rect_of(&layout, Section::Image);
+    let bars = stored::plots(rect, stored::Layout::of(&current))[1];
+    let traced = marked(
+        &current,
+        &layout,
+        Some([bars.x + bars.width / 2.0, bars.y + 1.0]),
+        Some([60, 0]),
+        Headroom::None,
+        &plots,
+    );
+    let mark = traced.image.as_ref().expect("the green plot marks its bin");
+    assert_eq!(mark.bin, Some(BINS / 2));
+    assert_eq!(mark.channels.len(), 1);
+    assert_eq!(mark.channels[0].plane, Plane::Green);
+    assert_eq!(mark.channels[0].bin, Some(BINS / 2));
+    assert!(traced.output.is_none());
+    assert!(traced.display.is_none());
+    assert!(traced.gain_map.is_none());
+
+    // Off the picture and off every plot, nothing is marked.
+    let traced = marked(
+        &current,
+        &layout,
+        None,
+        Some([999, 0]),
+        Headroom::None,
+        &plots,
+    );
+    assert!(
+        Section::ALL
+            .iter()
+            .all(|section| traced.of(*section).is_none())
+    );
 }
 
-/// The readout is set in the middle of the line, and the ends of the axis
-/// keep their corners until it actually reaches them — at which point
-/// both go, rather than one.
+/// The Image section writes each channel in the units the file keeps it
+/// in, as the bottom bar's Decimal readout does: counts for 8- and 16-bit
+/// samples, the number for floats. Each channel's rule stands on its own
+/// plane's bar, and a gray file has the one channel.
 #[test]
-fn the_axis_ends_give_the_line_up_to_the_readout_and_not_before() {
-    let bars = bars(full_panel());
-    let centered = |width: f32| bars.x + (bars.width - width) / 2.0;
+fn the_image_section_writes_each_channel_as_the_file_keeps_it() {
+    let words = |mark: &Mark| -> Vec<String> {
+        mark.channels
+            .iter()
+            .map(|channel| channel.words.clone())
+            .collect()
+    };
 
-    let (x, fits) = readout_placement(bars, 80.0, [40.0, 40.0]);
-    assert_eq!(x, centered(80.0), "centered on the plot, not on the panel");
-    assert!(fits, "80 in the middle and 40 either side of 256 is room");
+    // The ramp's 61st pixel is code 240 in every channel.
+    let color = picture(false);
+    let mark = stored::pixel_mark(&color, 60, 0).expect("on the picture");
+    assert_eq!(words(&mark), ["240", "240", "240"]);
+    let plotted = stored::plotted_for(&color);
+    assert_eq!(plotted.planes.len(), 3);
+    for (index, channel) in mark.channels.iter().enumerate() {
+        assert!(
+            plotted.planes[index][channel.bin.expect("on the axis")] > 0,
+            "{channel:?}"
+        );
+    }
 
-    let room = (bars.width - 80.0) / 2.0 - LABEL_GAP;
+    let gray = picture(true);
+    let mark = stored::pixel_mark(&gray, 60, 0).expect("on the picture");
+    assert_eq!(words(&mark), ["240"]);
+    assert_eq!(mark.channels[0].plane, Plane::Luma);
+
+    let float = shown(DecodedImage::new(
+        2,
+        1,
+        Samples::F32 {
+            channels: Channels::Rgb,
+            data: vec![0.25, 0.5, 1.0, 0.0, 0.0, 0.0],
+        },
+        ColorSpace::LINEAR_BT709,
+        AlphaMode::Opaque,
+    ));
+    let mark = stored::pixel_mark(&float, 0, 0).expect("on the picture");
+    assert_eq!(words(&mark), ["0.2500", "0.5000", "1.0000"]);
+}
+
+/// The display's response to a gray never falls, whatever the window, the
+/// exposure, the curve and the surface: what lets the Output section rank
+/// a value by searching the tally rather than walking every bin of it
+/// through the response.
+#[test]
+fn the_response_to_a_gray_never_falls() {
+    let values: Vec<f32> = (-400..=600)
+        .map(|step| step as f32 / 100.0)
+        .map(|stops| {
+            if stops < 0.0 {
+                -(-stops).exp2() + 1.0
+            } else {
+                stops.exp2() - 1.0
+            }
+        })
+        .collect();
+    for gray in [true, false] {
+        for tone_map in ToneMap::ALL {
+            for headroom in [Headroom::None, Headroom::Above] {
+                for (low, high, stops) in [(0.0, 1.0, 0.0), (0.1, 0.4, 2.0), (-3.0, 20.0, -1.5)] {
+                    let mut display = crate::image::display::Display::default();
+                    display.set_window(low, high);
+                    display.set_exposure(stops);
+                    display.set_tone_map(tone_map, gray);
+                    let mut last = f32::NEG_INFINITY;
+                    for &value in &values {
+                        let out = display.response(value, gray, headroom);
+                        assert!(
+                            out >= last,
+                            "{tone_map:?} {headroom:?} [{low}, {high}] {stops:+}: \
+                             {value} comes out {out}, under {last}"
+                        );
+                        last = out;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The Display section ranks the pixel's luminance and each of its
+/// channels among that plane's pixels, the luminance first, each with a
+/// rule on its own plane's plot; a pointer on the plot ranks the one value
+/// it is on among every plane.
+#[test]
+fn the_display_section_ranks_each_plane_of_the_pixel() {
+    let current = picture(false);
+    let mark = display::pixel_mark(&current, Headroom::None, 10, 0).expect("on the picture");
+    let planes: Vec<Plane> = mark.channels.iter().map(|channel| channel.plane).collect();
+    assert_eq!(planes, [Plane::Luma, Plane::Red, Plane::Green, Plane::Blue]);
+    for channel in &mark.channels {
+        // The ramp's eleventh of sixty-four distinct values.
+        let rank = channel.rank.expect("ranked");
+        assert!((rank - 10.5 / 64.0).abs() < 1e-6, "{channel:?}");
+        assert!(channel.bin.is_some(), "{channel:?}");
+    }
+
+    let gray = picture(true);
+    let mark = display::pixel_mark(&gray, Headroom::None, 10, 0).expect("on the picture");
+    assert_eq!(mark.channels.len(), 1);
+    assert_eq!(mark.channels[0].rank, Some(10.5 / 64.0));
+
+    // The plot's ends: black, which the ramp's first pixel is at, and
+    // white, which the ramp stops short of.
+    for (bin, expected) in [(0, 0.5 / 64.0), (BINS - 1, 1.0)] {
+        let mark = display::bin_mark(&current, Headroom::None, bin);
+        assert_eq!(mark.channels.len(), 4);
+        for channel in &mark.channels {
+            assert_eq!(channel.bin, None);
+            let rank = channel.rank.expect("ranked");
+            assert!((rank - expected).abs() < 1e-6, "{bin}: {channel:?}");
+        }
+    }
+}
+
+/// The Output section ranks what each pixel comes out as: the pixels the
+/// screen clips at white are one pile, and every one of them stands at the
+/// pile's middle — lower than its own value stands in the Display
+/// section — as a pointer on the pile's bar does.
+#[test]
+fn the_output_section_ranks_a_clipped_pile_at_its_middle() {
+    let mut current = picture(true);
+    current.display.set_exposure(1.0);
+    let binned = output::binned_for(&current, Headroom::None, 1.0);
+    let rank = |x: u32| {
+        output::pixel_mark(&current, Headroom::None, &binned, x, 0)
+            .expect("on the picture")
+            .channels[0]
+            .rank
+            .expect("ranked")
+    };
+    let (top, clipped) = (rank(63), rank(55));
+    assert_eq!(top, clipped);
+    let shown = display::pixel_mark(&current, Headroom::None, 63, 0).expect("on the picture");
+    assert!(top < shown.channels[0].rank.expect("ranked"));
+    assert!(top < 1.0 && top > 0.5, "{top}");
+    let pile = output::bin_mark(&current, Headroom::None, &binned, BINS - 1);
+    assert_eq!(pile.channels[0].rank, Some(top));
+    // Below the clip, a pixel stands where it does before the response.
+    let dark =
+        output::pixel_mark(&current, Headroom::None, &binned, 10, 0).expect("on the picture");
+    assert_eq!(dark.channels[0].rank, Some(10.5 / 64.0));
+}
+
+/// On an SDR screen the output stops at white: a stop of exposure piles
+/// the top of a ramp into the last bin.
+#[test]
+fn the_output_piles_what_the_screen_clips_at_white() {
+    let mut current = picture(true);
+    let plain = output::binned_for(&current, Headroom::None, 1.0);
+    assert_eq!(plain.room, 1.0);
+    current.display.set_exposure(1.0);
+    let pushed = output::binned_for(&current, Headroom::None, 1.0);
+    let white = crate::image::Transfer::Srgb.to_encoded(1.0);
+    let [_, above] = pushed.plot.clipped(0.0, white);
+    assert!(above > 0.25, "{above}");
+    assert!(pushed.plot.luma[BINS - 1] > plain.plot.luma[BINS - 1]);
+
+    // A room nothing has said goes as far as the response does, in whole
+    // stops above white.
+    current.display.set_exposure(2.0);
+    let unknown = output::binned_for(&current, Headroom::Above, f32::INFINITY);
+    assert_eq!(unknown.room, 4.0);
+}
+
+/// The Image section says only the value of the bar the pointer is on,
+/// even one cut off at the top of its plot, and ranks it among the
+/// channel's pixels for the words beside the rule: those below it and half
+/// of those at it.
+#[test]
+fn a_bar_on_the_image_plot_says_its_value_and_ranks_it() {
+    // Every code once, and as many pixels again at one of them.
+    let data: Vec<u8> = (0..512u32)
+        .map(|x| if x < 256 { x as u8 } else { 200 })
+        .flat_map(|value| [value; 3])
+        .collect();
+    let current = shown(DecodedImage::new(
+        512,
+        1,
+        Samples::U8 {
+            channels: Channels::Rgb,
+            data,
+        },
+        ColorSpace::SRGB,
+        AlphaMode::Opaque,
+    ));
+    let layout = laid_out(&current, 600.0);
+    let binned = output::binned_for(&current, Headroom::None, 1.0);
+    let image = stored::plotted_for(&current);
+    let plots = Plots {
+        output: &binned,
+        lift: None,
+        image: &image,
+        counts: input_counts(&current),
+        output_counts: plot::Counts::of(&binned.plot),
+        lift_counts: input_counts(&current),
+    };
+    let bars = Section::Image.plot(rect_of(&layout, Section::Image));
+    let mark_at = |value: u8| {
+        let bin = current.stored.planes[0]
+            .bin_at(f32::from(value) / 255.0)
+            .expect("on the axis");
+        let x = bars.x + (bin as f32 + 0.5) / BINS as f32 * bars.width;
+        marked(
+            &current,
+            &layout,
+            Some([x, bars.y + 1.0]),
+            None,
+            Headroom::None,
+            &plots,
+        )
+        .image
+        .expect("marked")
+    };
+    let spike = mark_at(200);
+    assert_eq!(spike.words, "200");
+    assert_eq!(spike.channels[0].rank, Some((200.0 + 257.0 / 2.0) / 512.0));
+    let lone = mark_at(100);
+    assert_eq!(lone.words, "100");
+    assert_eq!(lone.channels[0].rank, Some(100.5 / 512.0));
+}
+
+/// The input's scale holds still while the display is set, and the
+/// Output's follows what goes out: a stop of exposure up spreads the
+/// picture over more of the Output's axis, and its scale comes down with it
+/// rather than leaving the bars short of the top.
+#[test]
+fn the_output_scale_follows_the_display_and_the_inputs_holds_still() {
+    // A ramp of many values to a bin, as a photograph's are, rather than a
+    // code to one, which a stretch would only spread into a comb.
+    let data: Vec<u16> = (0..4096u32)
+        .map(|x| (x * 16) as u16)
+        .flat_map(|value| [value; 3])
+        .collect();
+    let mut current = shown(DecodedImage::new(
+        4096,
+        1,
+        Samples::U16 {
+            channels: Channels::Rgb,
+            data,
+        },
+        ColorSpace::SRGB,
+        AlphaMode::Opaque,
+    ));
+    let top = |counts: plot::Counts| 1.0 / counts.up(1, 1);
+    let input = input_counts(&current);
+    let output = top(plot::Counts::of(
+        &output::binned_for(&current, Headroom::None, 1.0).plot,
+    ));
+
+    current.shown.display.set_exposure(1.0);
+    assert_eq!(input_counts(&current), input);
+    let brighter = top(plot::Counts::of(
+        &output::binned_for(&current, Headroom::None, 1.0).plot,
+    ));
+    assert!(brighter < output, "{brighter} against {output}");
+}
+
+/// A gray image read through a ramp — a measurement, or a false color — is
+/// binned along the ramp, so the middle of its window lands at the middle
+/// of the Output's axis, where light at half of white lands three quarters
+/// of the way along; the axis has no room past the ramp's end on any
+/// surface; and the pixel's mark is its place along the ramp.
+#[test]
+fn the_output_runs_along_the_ramp_where_the_picture_is_read_through_one() {
+    let mut measured = shown(DecodedImage::new(
+        1024,
+        1,
+        Samples::F32 {
+            channels: Channels::Gray,
+            data: (0..1024).map(|x| x as f32 / 1023.0).collect(),
+        },
+        ColorSpace::LINEAR_BT709,
+        AlphaMode::Opaque,
+    ));
+    measured.shown.display.set_displayed_bounds(0.0, 1.0);
+    let heaviest = |binned: &output::Binned| {
+        let luma = &binned.plot.luma;
+        (0..luma.len()).max_by_key(|&bin| luma[bin]).unwrap()
+    };
+    let binned = output::binned_for(&measured, Headroom::Above, f32::INFINITY);
+    assert_eq!(binned.room, 1.0, "a ramp has no room past its end");
+    let mark = output::pixel_mark(&measured, Headroom::None, &binned, 511, 0).unwrap();
+    assert_eq!(mark.words, "0.5");
+    let bin = mark.bin.unwrap();
+    assert!((bin as f32 / BINS as f32 - 0.5).abs() < 0.01, "{bin}");
+    // Evenly spread along the ramp: no bin stands out.
+    let luma = &binned.plot.luma;
+    let (low, high) = (luma[BINS / 4] as f32, luma[3 * BINS / 4] as f32);
     assert!(
-        readout_placement(bars, 80.0, [room, room]).1,
-        "exactly room"
+        (low - high).abs() <= 0.1 * low.max(high),
+        "{low} against {high}"
     );
+
+    // Light: the same value lands where the screen codes half of white.
+    let graded = picture(true);
+    let binned = output::binned_for(&graded, Headroom::None, 1.0);
+    let mark = output::pixel_mark(&graded, Headroom::None, &binned, 47, 0).unwrap();
+    let encoded = crate::image::Transfer::Srgb.to_encoded(0.5);
+    let bin = mark.bin.unwrap();
+    assert!((bin as f32 / BINS as f32 - encoded).abs() < 0.02, "{bin}");
     assert!(
-        !readout_placement(bars, 80.0, [room + 0.5, room]).1,
-        "and a hair less is not — the left end alone decides for both"
+        heaviest(&binned) > BINS / 2,
+        "the ramp of codes piles toward white as light"
     );
-    assert!(!readout_placement(bars, 80.0, [room, room + 0.5]).1);
+
+    // And a false color on it is a ramp again.
+    let mut graded = picture(true);
+    graded.shown.display.set_colormap(Colormap::Viridis, true);
+    let binned = output::binned_for(&graded, Headroom::None, 1.0);
+    assert_eq!(binned.ramp, Some(Colormap::Viridis));
+    let mark = output::pixel_mark(&graded, Headroom::None, &binned, 47, 0).unwrap();
+    let bin = mark.bin.unwrap();
+    assert!((bin as f32 / BINS as f32 - 0.5).abs() < 0.02, "{bin}");
+}
+
+/// Scene light stored as floats is plotted in stops, so that what the
+/// display makes of it is plotted from bins fine enough to say: a Radiance
+/// picture's few hundred stops of nothing above its subject would otherwise
+/// put the whole window into two fine bins, and the Output's plot into a
+/// staircase of two steps. Its Image section has a row of stops from 1 in
+/// place of the values at its ends, and the window's black, at no light,
+/// is at the floor.
+#[test]
+fn scene_light_is_plotted_in_stops() {
+    let mut current = scene(40);
+    assert_eq!(current.stats.axis, Axis::Stops);
+    assert_eq!(
+        (current.stats.plot.min, current.stats.plot.max),
+        (-14.0, 8.0)
+    );
+    assert_eq!(current.image.referred, Referred::Scene);
+    assert!(current.display.has_exposure(), "metered");
+    // The window as metered: 0..1 of the file, a few stops of exposure on.
+    let (black, white) = current.display.displayed_bounds();
+    assert_eq!(black, 0.0);
+    assert!(white > 0.0 && white < 1.0, "{white}");
+
+    // What goes out is spread over the Output's axis, not stepped.
+    let binned = output::binned_for(&current, Headroom::None, 1.0);
+    let occupied = binned.plot.luma.iter().filter(|&&count| count > 0).count();
+    assert!(occupied > BINS / 2, "{occupied} bins hold anything");
+
+    // The pixel at 1 marks the Display and Image plots where 1 stands.
+    let unity = 14 * 40;
+    let mark = display::pixel_mark(&current, Headroom::None, unity, 0).expect("on the picture");
+    let bin = mark.bin.expect("on the axis");
     assert!(
-        !readout_placement(bars, bars.width + 1.0, [0.0, 0.0]).1,
-        "a readout wider than the plot leaves no line to share"
+        (bin as f32 / BINS as f32 - 14.0 / 22.0).abs() < 0.01,
+        "{bin}"
+    );
+    assert!(mark.words.starts_with("1  "), "{}", mark.words);
+    let mark = stored::pixel_mark(&current, unity, 0).expect("on the picture");
+    assert_eq!(mark.channels[0].bin, Some(bin));
+    let plane = &current.stored.planes[0];
+    assert_eq!(current.stored.axis, Axis::Stops);
+    assert_eq!(plane.range, [-14.0, 8.0]);
+    assert!(stored::ticks(&current, plane).is_empty());
+    assert_eq!(stored::stop_across(plane.range, 0), Some(14.0 / 22.0));
+    assert_eq!(stored::stop_across(plane.range, 8), Some(1.0));
+
+    // A stop of exposure moves the Output's plot the same distance wherever
+    // it is: the display is a shift along the axis.
+    current.display.set_exposure(0.0);
+    let plain = output::binned_for(&current, Headroom::None, 1.0);
+    current.display.set_exposure(1.0);
+    let pushed = output::binned_for(&current, Headroom::None, 1.0);
+    assert!(pushed.plot.luma[BINS - 1] > plain.plot.luma[BINS - 1]);
+}
+
+/// Integer samples are plotted on the whole range they can hold, a raw's
+/// from black to the sensor's saturation, however little of it a linear
+/// file was measured over, and their axis is written in quarters of it;
+/// floats, which have no top, on what they were measured over, and written
+/// at its ends.
+#[test]
+fn the_image_axis_is_the_whole_range_of_integer_samples() {
+    let linear = |samples| {
+        shown(DecodedImage::new(
+            2,
+            1,
+            samples,
+            ColorSpace::LINEAR_BT709,
+            AlphaMode::Opaque,
+        ))
+    };
+    // Linear integer samples are read as data by default; as a photograph,
+    // they are plotted over the whole range.
+    let mut photo = DecodedImage::new(
+        2,
+        1,
+        Samples::U16 {
+            channels: Channels::Gray,
+            data: vec![16384, 32768],
+        },
+        ColorSpace::LINEAR_BT709,
+        AlphaMode::Opaque,
+    );
+    photo.referred = Referred::Display;
+    let counts = shown(photo);
+    let plane = &counts.stored.planes[0];
+    assert_eq!(plane.range, [0.0, 1.0]);
+    let plot = plane.plot(counts.stored.axis);
+    for value in [16384.0, 32768.0] {
+        let bin = plane.bin_at(value / 65535.0).expect("on the axis");
+        assert!(plot[bin] > 0, "{value}");
+    }
+    let past = plane.bin_at(0.6).expect("on the axis");
+    assert!(plot[past..].iter().all(|&count| count == 0));
+    let mark = stored::pixel_mark(&counts, 1, 0).expect("on the picture");
+    assert_eq!(mark.channels[0].bin, plane.bin_at(32768.0 / 65535.0));
+    let ticks: Vec<String> = stored::ticks(&counts, plane)
+        .into_iter()
+        .map(|(_, words)| words)
+        .collect();
+    assert_eq!(ticks, ["0", "16384", "32768", "49152", "65535"]);
+
+    // The same read as data: what it holds, written at its ends.
+    let data = linear(Samples::U16 {
+        channels: Channels::Gray,
+        data: vec![16384, 32768],
+    });
+    assert_eq!(data.image.referred, Referred::Measured);
+    let plane = &data.stored.planes[0];
+    assert_eq!(plane.range, [16384.0 / 65535.0, 32768.0 / 65535.0]);
+    let ticks: Vec<String> = stored::ticks(&data, plane)
+        .into_iter()
+        .map(|(_, words)| words)
+        .collect();
+    assert_eq!(ticks, ["16384", "32768"]);
+
+    let floats = linear(Samples::F32 {
+        channels: Channels::Gray,
+        data: vec![0.5, 4.0],
+    });
+    let plane = &floats.stored.planes[0];
+    assert_eq!(plane.range, [0.5, 4.0]);
+    let ticks: Vec<String> = stored::ticks(&floats, plane)
+        .into_iter()
+        .map(|(_, words)| words)
+        .collect();
+    assert_eq!(ticks, ["0.5", "4"]);
+
+    assert_eq!(
+        picture(false).stored.shared_range(),
+        Some([0.0, 1.0]),
+        "on a curve already"
     );
 }

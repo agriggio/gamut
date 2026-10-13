@@ -1,6 +1,7 @@
 //! The exposure's slider under the band.
 
 use super::*;
+use crate::ui::Command;
 use crate::ui::slider::{self as line, Line};
 
 /// The exposure's slider: the interface's one slider (see `ui::slider`),
@@ -12,9 +13,11 @@ use crate::ui::slider::{self as line, Line};
 ///
 /// The run is [`SLIDER_STOPS`] each way. An exposure past that, from the
 /// keys or `--exposure`, stands hollow at the end, as a band handle out past
-/// the plot does.
+/// the plot does. Drawn only where the picture has an exposure
+/// (`Display::has_exposure`), which is every photo — see
+/// `display::rows_height`.
 pub(super) fn slider(pass: &mut Pass, ui: &mut egui::Ui, exposure: f32, room: Rect) {
-    let ground = pass.theme.panel_background;
+    let ground = pass.theme.bar_background;
     let asked = line::show(
         pass,
         ui,

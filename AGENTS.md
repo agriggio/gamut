@@ -87,11 +87,19 @@ ui/            lays each frame's interface out with egui; no wgpu or winit impor
   rect.rs        Rect, the logical-pixel rectangle the panels are placed by
   panel.rs       where a thing floating over the picture goes — fit(), the one placement every
                  panel is fitted by, refused rather than shrunk — area(), the one opening
-                 every panel makes, and waiting(), a panel's place held with a spinner while
-                 another file is read
-  histogram/     the histogram panel: mod.rs its geometry, words, header and rows, plot.rs the
-                 plot, track.rs the band and its handles, controls.rs the buttons, slider.rs the
-                 exposure's slider, drawn by ui/slider.rs
+                 every panel makes, and spinner(), a panel's place held while another
+                 file is read
+  side.rs        the side panel down the right of the picture: Side, which of the histogram
+                 and the information it holds; WIDTH, which is the histogram's; and show(),
+                 which hands it to the one it holds
+  histogram/     the histogram down the side panel, a section to a stage of the picture's way
+                 to the screen, laid out as info.rs is: mod.rs the row of buttons at its head,
+                 the scrolling column under it and the pixel traced down it (marked()),
+                 section.rs Section — the stages in flow order, each one height — and its
+                 header with its mark and its own button, plot.rs the plot every section
+                 draws, output.rs / display.rs / gain_map.rs / stored.rs (Image) the four stages,
+                 track.rs the band and its handles, slider.rs the exposure's slider, drawn
+                 by ui/slider.rs
   minimap.rs / grid.rs   one widget each, drawn with egui's painter
   loupe.rs       the loupe: place() puts its two circles beside the pointer inside the content
                  area, glass() is the magnified draw the image layer makes of it, show() the rings
@@ -114,6 +122,8 @@ ui/            lays each frame's interface out with egui; no wgpu or winit impor
                  value in whichever of `PixelFormat`'s three ways is in force
   menu.rs        the popup menus' contents: the zoom menu's choices and cells, the
                  pixel-format cells, and the menus of copies and of the file with each item's key beside it
+  scale.rs       the interface's scale on top of the monitor's: SCALES, the rungs the keys
+                 step along, and RANGE, what the state file keeps
   rename.rs      the rename dialog: a modal with the name in a field, judge() saying what is
                  wrong with what has been typed as it is typed, and OK and Cancel; the
                  field, the line under it and the buttons both dialogs are drawn with
@@ -238,7 +248,11 @@ image/         the data model, nothing GPU
   sequence.rs    what a file holds beyond one image: Sequence (still, animation,
                  pages), Frame, and the FrameSource a decoder's frames come
                  through, each composited whole by the decoder
-  stats.rs       the scan an image gets on load: min/max, histogram, plot; scan_with lifts a gain-mapped picture as the screen shows it
+  stats.rs       the one pass over every pixel an image gets on load: Tally, a bin to the code or
+                 to a thousandth of an octave; Stats (min/max, key, percentiles, plot, fine bins)
+                 as the display starts from the picture, scan_with lifting a gain-mapped one as
+                 the screen shows it; Stored, each channel as the file holds it, for the
+                 histogram's Image section; scan_both for the two from the one pass
   auxiliary.rs   Auxiliary, the kinds of image a picture carries beside it, and Showing, which
                  of a file's images is on screen; DecodedImage::auxiliary makes one a picture
   depth/         a depth map beside the picture, for the readout: mod.rs its codes, the Scale
@@ -279,6 +293,9 @@ image/         the data model, nothing GPU
 render/        the GPU
   mod.rs         Renderer: surface, device, the three passes; Scene is what a frame draws;
                  UiPaint is what egui drew, and the ui-layer pass hands it to egui-wgpu
+  adapter.rs     which GPU draws the window: the one with a monitor connected, read from
+                 /sys/class/drm, the integrated first among several; WGPU_ADAPTER_NAME and
+                 WGPU_POWER_PREF override it
   color.rs       Color, the sRGB color the interface and the theme speak in
   placement.rs   Placement (where the image lands) and Upscale (the magnification filter)
   upload.rs      texture format choice and the transfer-function LUTs; the "sampled texel is linear" invariant
@@ -326,7 +343,8 @@ still agrees with both, so renaming either is editing the constant —
 | What the window says about something that just happened | `ui/toast.rs` for how long it stays and how it is drawn, `App::toast` to raise one, and `App::poll_copies` for the copies that only know how they went once their thread is done |
 | What something is called when the pointer rests on it | a `Tip` variant in `ui/tooltip.rs` and one `pass.tooltip(response, tip, enabled)` on the widget's response; `Namer::tooltip` in `app/input.rs` composes the words, from the keymap in force by way of `action_of` wherever a key does the same job, so a tooltip and `--help` cannot disagree. Words of its own go in `ui/tooltip.rs::words`, a zoom cell's in `ZoomChoice::describe`. When it opens and where it goes are egui's, tuned in `ui/style.rs` |
 | A button's icon | `ui/icon.rs`: one `&[Mark]` on the 24-unit grid, and one `icon::paint` call where the button is drawn, in a square from `icon::square`. The caller sets aside a budget; whether the mark comes out sharp is `icon::Grid`'s business and whether its spacing stays even is `icon::fit`'s |
-| A panel or overlay | a new `ui/<name>.rs` with a `show(pass, ui, ..)` that opens `panel::area` at the rectangle its own `panel()` works out through `panel::fit` from `pass.content`, and one call in `Pass::overlays`; the picture is `pass.current`, the device's grid `pass.grid`. An area that is `interactable` takes the pointer from the picture under it; `Order` is the height in the stack. A new color role goes in `theme/mod.rs` and, if a stock widget wears it, `ui/style.rs`. A panel that is part of the chrome instead — one the picture is fitted beside, as the file list is — is a flag of `chrome::Parts`, a rectangle `Chrome::new` works out, and an `egui::Panel` in `Pass::bars` given exactly that size |
+| A panel or overlay | a new `ui/<name>.rs` with a `show(pass, ui, ..)` that opens `panel::area` at the rectangle its own `panel()` works out through `panel::fit` from `pass.content`, and one call in `Pass::overlays`; the picture is `pass.current`, the device's grid `pass.grid`. An area that is `interactable` takes the pointer from the picture under it; `Order` is the height in the stack. A new color role goes in `theme/mod.rs` and, if a stock widget wears it, `ui/style.rs`. A panel that is part of the chrome instead — one the picture is fitted beside, as the file list and the side panel are — is a field of `chrome::Parts`, a rectangle `Chrome::new` works out, and an `egui::Panel` in `Pass::bars` given exactly that size |
+| The side panel: what it holds, when it is up, how wide it is | `ui/side.rs` for `Side` and `WIDTH`; `Panels::side` for what is asked for, `Panels::choose` for what the histogram's and the information's buttons do to it and `Panels::lit` for which is lit; `App::side_showing` for whether it is on screen — asked for, with room (`ui::room`, from `chrome::side_room`), and something open; `Pass::side_panel` lays it out, inside the right strip, and `chrome::side_width` is what it gets of its width |
 | What the info panel says about a file | `ui/info.rs` for the layout, and `contents` there for the order of the sections; the file's own facts are gathered in `app/mod.rs::file_facts`, its metadata in `image/exif.rs`, its georeference in `image/geo.rs`, and its depth map's section in `ui/info.rs::depth_facts` from the picture's `DepthMap` — never `Current::image`'s, which is the map itself while it is shown. A section of the metadata is an `exif::Group` — a new one is a variant, in reading order, with its heading in `Group::name` and its mark and head in the match in `contents` in `ui/info.rs`, which is exhaustive, so a section cannot arrive without a face. A field written in words is a `Described` entry in `image/exif.rs`, naming its EXIF tag and its XMP property; a region the metadata marks out is a `MetadataRegion` in `image/metadata_region.rs`, made by a constructor per source — `mwg` from what `image/xmp.rs::read_regions` read, `microsoft` from `read_people`, `subject_area` from the EXIF tags — gathered on `Exif::regions` and written out against the turn in force by `Exif::regions`, which `contents` in `ui/info.rs` places last, `regions_section` lays out as a table and `mark_regions` draws on the picture under the pointer; a container's XMP packet is found in `image/xmp.rs::packet`. A raw's color temperature, and the camera and exposure of one whose EXIF says nothing, are what LibRaw read, handed over by `Decoder::facts` as rows `Exif::fill` puts in place; a container whose packet only its own library reaches hands that over by `Decoder::xmp`; a raw container's EXIF block is found by `image/enclosed.rs` |
 | Which of a raw's two pictures is shown — the developed frame or the camera's JPEG | `image/decode/mod.rs`'s `Rendering` and `CameraJpeg`, answered by `Decoder::preview` and `Decoder::camera_jpeg` in `decode/raw.rs`; `loader::decode_rendering` for which is read; `App::rendering` for the preference, kept in `settings::State::camera_jpeg`, `App::toggle_camera_jpeg` and `App::follow_rendering` for the switch, and `Arrival::Rerendered` with `View::rescale` for what carries across; `Pass::camera_switch` for the button, drawn only while `Current::camera_jpeg` is `Present`; `loader::undeveloped` for the JPEG shown as `CameraJpeg::Only` when the developed picture will not develop |
 | A thumbnail's source | `Decoder::preview` for a format that carries a smaller picture of itself, which the thumbnailer asks for before it decodes anything; `thumbnail::SIDE` is the size it has to reach to be used |
@@ -365,7 +383,8 @@ still agrees with both, so renaming either is editing the constant —
 | What the surface can be, SDR or HDR | `render/output.rs` chooses it; `monitor/` says what the monitor is in; `App::surface_hdr` and `App::headroom` put the two together, `App::sync_output` acts on them, and `App::toggle_hdr` is what the bar's `HDR` button and `o` both call |
 | A new render pass | build it from `render/gpu.rs`; add its target to `Renderer::render` |
 | Something about the display window, exposure or false color | `image/display/` (state) and `shaders/image.wgsl` / `composite.wgsl` (effect) |
-| What the histogram panel's rows hold, what a drag on its band does, or what its corners say | `ui/histogram/mod.rs::Rows` for the three rows, which are every file's; `ui/histogram/track.rs` for the band and its handles, which ask through `Command::{BlackPoint, WhitePoint, Slide}` and land in `Display::put_black`, `Display::put_white` — each its own end of the window, the exposure left alone — and `Display::set_displayed_bounds`; the keys that step the handles are `Action::{StepBlack, StepWhite}`, landing in `Display::step_black`, `Display::step_white`, by `input::WINDOW_STEP`; `ui/histogram/slider.rs` for the exposure, which asks through `Command::Exposure` and lands in `Display::set_exposure`, `SLIDER_STOPS` being how far it runs; `Plot::clipped` for the shares in the plot's corners, and `Display::clips_white` for whether white counts. The marks `w` and the button beside the panel's band paint on the picture are `fs_marks` in `shaders/image.wgsl`, which judges each texel, `image_layer::Marks`, the coarse chain of those verdicts that a minified draw reads the share of a pixel from, `shader_codes::marks`, and `Panels::mark_clipped`, toggled in `App::press` by `Control::Marks` |
+| A stage of the histogram's column — what a section plots, its height, where it goes | `ui/histogram/section.rs::Section`: a variant where the stage stands in the flow, its `title`, `applies`, `height` and `plot`, and a file of its own beside `output.rs` with a `show`, a `bin_mark` and a `pixel_mark`, which `histogram::marked` and `histogram::show` call. What it plots is counted off the loop: `Stats` for the picture as the display starts from it, `Face::stored` (`Stats::scan_as_stored`) for the file as stored, `GainMap::lift_plot` for a lift; a plot that is a 1D function of another is `Fine::rebinned` from that one's fine bins, cached in egui's data as `output::binned` is |
+| What the histogram panel's rows hold, or what a drag on its band does | `ui/histogram/display.rs::Rows` for the three rows, which are every file's; `ui/histogram/track.rs` for the band and its handles, which ask through `Command::{BlackPoint, WhitePoint, Slide}` and land in `Display::put_black`, `Display::put_white` — each its own end of the window, the exposure left alone — and `Display::set_displayed_bounds`; the keys that step the handles are `Action::{StepBlack, StepWhite}`, landing in `Display::step_black`, `Display::step_white`, by `input::WINDOW_STEP`; `ui/histogram/slider.rs` for the exposure, which asks through `Command::Exposure` and lands in `Display::set_exposure`, `SLIDER_STOPS` being how far it runs; `Plot::clipped` on the Output section's rebinned plot for the share clipped at either end, which nothing writes yet, and `Display::clips_white` for whether white counts. The marks `w` and the button beside the Output band paint on the picture are `fs_marks` in `shaders/image.wgsl`, which judges each texel, `image_layer::Marks`, the coarse chain of those verdicts that a minified draw reads the share of a pixel from, `shader_codes::marks`, and `Panels::mark_clipped`, toggled in `App::press` by `Control::Marks` |
 
 ## Conventions
 

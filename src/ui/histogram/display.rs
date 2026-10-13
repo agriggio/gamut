@@ -1,0 +1,645 @@
+//! The Display section: what the display starts from — the picture lifted
+//! where it has a gain map, in the working space's primaries — and what it
+//! does to it, drawn over that as the response curve and set under it: the
+//! band and its handles, the row of false colors a gray image has, and the
+//! rows of the exposure and the curve on a photo, the window on data.
+
+use egui::{Align2, FontId, Stroke, pos2};
+
+use super::plot::{Counts, PLOT_BACKGROUND, Past, Scale, band, bars};
+use super::slider::slider;
+use super::track::track;
+use super::*;
+use crate::image::Referred;
+use crate::image::display::{Colormap, Display, Headroom, ToneMap};
+use crate::image::stats::{Axis, Quantity};
+
+/// The row of false colors under the band: how deep a swatch is, and the
+/// corner it is drawn with. Deep enough to press and to read the map off,
+/// shallow enough that the row reads as a legend under the band rather than
+/// as a second band.
+pub(super) const SWATCH_HEIGHT: f32 = 16.0;
+const SWATCH_RADIUS: f32 = 3.0;
+/// What is left around a swatch's color inside its button, so that the
+/// button's own lit background is what shows a chosen map.
+const SWATCH_INSET: f32 = 3.0;
+
+/// The rows of controls under the band: how tall a row is, and the gap
+/// between one and the next.
+const ROW_HEIGHT: f32 = 20.0;
+const ROW_GAP: f32 = 8.0;
+
+/// What the rows of settings under the band take off the section's height:
+/// each row and the gap above it, under the plot's own inset — which the
+/// band hangs below rather than inside, so it is what is left over between
+/// the two and belongs to whatever comes next.
+///
+/// Two rows on a photo, the exposure and the curve; one on an image read as
+/// `data`, the window. The exposure: pushing a picture two stops up is how
+/// you find out whether a shadow is empty or merely dark. The curve,
+/// because the exposure is: a stop up puts the top of the picture above
+/// white, and the curve is what fits it back into a surface that stops
+/// there. Neither on data: its numbers need not be light, a stop up is the
+/// white handle brought in to the window's middle, and a curve would bend
+/// the mapping its values are read off — see [`Display::has_exposure`] and
+/// [`Display::has_curve`]. The window only on data: a photo's window is
+/// 0..1 by rights, and a rule that stretched what it holds to black and
+/// white would make it look wrong rather than show anything the handles do
+/// not — a drag on them is the way into a photo's shadows. A measurement
+/// has no white, so finding its window in its values is the whole
+/// question, and the rules are its answers; the reset puts a hand-moved
+/// window back on either. So the section is one height for every photo and
+/// another for every measurement, and the column moves only between the
+/// two kinds.
+pub(super) const fn rows_height(data: bool) -> f32 {
+    let rows = if data { 1.0 } else { 2.0 };
+    PLOT_INSET + rows * (ROW_GAP + ROW_HEIGHT)
+}
+
+/// The column of words down the left of those rows, and the gap between one
+/// of them and what it names.
+///
+/// Wide enough for the longest of the three at [`ROW_TEXT`] and no wider:
+/// what it does not take is what the buttons beside it have, and the row of
+/// three windows is the narrowest cell on the panel.
+const ROW_LABEL: f32 = 56.0;
+const ROW_LABEL_GAP: f32 = 6.0;
+
+/// How much of the exposure's row is set aside at its end for the reading:
+/// the slider runs up to it, and it is set flush with the right edge of the
+/// rows below, where their last button ends. Wide enough for the stops the
+/// slider reaches and for the two-decimal reading a `--exposure` off the
+/// quarters falls back to.
+const STOPS_WIDTH: f32 = 36.0;
+
+/// The plot's ground in the section laid out at `rect`: as tall as the
+/// Output's on every file, so that the two plots read closely stand alike.
+/// The row of false colors a gray image has under the band makes the
+/// section taller instead — see [`Section::height`].
+pub(super) fn plot_area(rect: Rect) -> Rect {
+    Rect::new(
+        rect.x + PLOT_INSET,
+        rect.y + LABEL_HEIGHT + HEAD_GAP + PLOT_INSET,
+        rect.width - 2.0 * PLOT_INSET,
+        PLOT_HEIGHT,
+    )
+}
+
+/// What the row of false colors adds to the section's height, on an image
+/// they apply to: the row and the gap above it.
+pub(super) const SWATCH_ROW: f32 = RAMP_GAP + SWATCH_HEIGHT;
+
+/// One of the false-color swatches under the band of the plot `bars`, by
+/// its place in [`Colormap::ALL`]. They divide the plot's width between
+/// them, so each sits under the stretch of band it would color.
+///
+/// Only on an image they apply to. The display ignores the false color on a
+/// three-channel image — its channels are colors already — so on one of
+/// those the row is not there at all, and the section is shorter by it.
+pub(super) fn swatch_button(bars: Rect, index: usize) -> Rect {
+    let row = Rect::new(
+        bars.x,
+        ramp(bars).bottom() + EV_ROW + RAMP_GAP,
+        bars.width,
+        SWATCH_HEIGHT,
+    );
+    share(row, Colormap::ALL.len(), index)
+}
+
+/// The block of controls under the band: the lines it is set on, and the
+/// column of words down its left.
+///
+/// One rectangle for each, worked out once and read by everything — what is
+/// drawn, what the pointer finds, and what names itself — so that a button
+/// cannot be pressed anywhere but where it was drawn.
+///
+/// It ends the section, under whichever of the two things the band ends
+/// in: the row of stops on a color image, and the row of false colors under
+/// it on a gray one, which make the section taller by their own height. The
+/// exposure and the curve are a photo's, the windows data's — see
+/// [`rows_height`].
+#[derive(Clone, Copy)]
+pub(super) struct Rows {
+    /// The exposure's line, and where its word goes: the slider along it
+    /// and its reading at the end. On a photo; none on data.
+    pub exposure: Option<(Rect, Rect)>,
+    /// The three windows, on an image read as data; none on a photo.
+    pub window: Option<(Rect, Rect)>,
+    /// And the two choices for the curve, on a photo; none on data.
+    pub curve: Option<(Rect, Rect)>,
+}
+
+impl Rows {
+    /// The rows of the section laid out at `rect`: the window where the
+    /// image is read as `data`, and the exposure and the curve otherwise.
+    pub fn new(rect: Rect, data: bool) -> Self {
+        let inside = rect;
+        let left = inside.x + ROW_LABEL + ROW_LABEL_GAP;
+        let line = |y: f32| {
+            (
+                Rect::new(left, y, inside.right() - left, ROW_HEIGHT),
+                Rect::new(inside.x, y, ROW_LABEL, ROW_HEIGHT),
+            )
+        };
+
+        if data {
+            return Self {
+                exposure: None,
+                window: Some(line(rect.bottom() - ROW_HEIGHT)),
+                curve: None,
+            };
+        }
+        let y = rect.bottom() - 2.0 * ROW_HEIGHT - ROW_GAP;
+        Self {
+            exposure: Some(line(y)),
+            window: None,
+            curve: Some(line(y + ROW_HEIGHT + ROW_GAP)),
+        }
+    }
+
+    /// The exposure's reading, at the end of its row.
+    pub fn stops(&self) -> Option<Rect> {
+        let (row, _) = self.exposure?;
+        Some(Rect::new(
+            row.right() - STOPS_WIDTH,
+            row.y,
+            STOPS_WIDTH,
+            row.height,
+        ))
+    }
+
+    /// The slider, from the row's head to the reading: the room that takes
+    /// the pointer, the whole height of the row. The track itself is drawn
+    /// inside it, in from each end by half a grip, so that the handle at
+    /// either end still stands within the row.
+    pub fn slider(&self) -> Option<Rect> {
+        let (row, _) = self.exposure?;
+        let stops = self.stops()?;
+        Some(Rect::new(
+            row.x,
+            row.y,
+            stops.x - CELL_GAP - row.x,
+            row.height,
+        ))
+    }
+
+    /// Each row's word and where it goes, in the order they are stacked.
+    pub fn labels(&self) -> impl Iterator<Item = (&'static str, Rect)> {
+        [
+            self.exposure.map(|(_, label)| ("Exposure", label)),
+            self.window.map(|(_, label)| ("Window", label)),
+            self.curve.map(|(_, label)| ("Curve", label)),
+        ]
+        .into_iter()
+        .flatten()
+    }
+
+    /// The top of the highest row and the bottom of the lowest: where the
+    /// block begins, and where it, and the section, end.
+    #[cfg(test)]
+    pub fn span(&self) -> (f32, f32) {
+        [self.exposure, self.window, self.curve]
+            .into_iter()
+            .flatten()
+            .map(|(row, _)| (row.y, row.bottom()))
+            .fold((f32::INFINITY, 0.0), |(top, bottom), (y, end)| {
+                (top.min(y), bottom.max(end))
+            })
+    }
+}
+
+/// What one of the rows' buttons wears, and whether it is lit.
+///
+/// Beside the geometry rather than inside the drawing so that the test can
+/// ask for the same words the frame is set with: a label the layout was not
+/// measured against is a label that can outgrow its button.
+fn row_label(widget: Control, display: &Display) -> Option<(String, bool)> {
+    Some(match widget {
+        Control::Window(index) => (WINDOWS.get(index)?.0.to_string(), false),
+        // Named for what becomes of the light above white, since that is
+        // what the choice is: the bar says the same in the middle of a line.
+        Control::Curve(index) => {
+            let curve = *ToneMap::ALL.get(index)?;
+            let label = match curve {
+                ToneMap::None => "Clip",
+                ToneMap::Neutral => "Roll off",
+            };
+            (label.to_string(), display.tone_map() == curve)
+        }
+        _ => return None,
+    })
+}
+
+/// Every button in that block, with where it goes. The one list the drawing,
+/// the pointer and the tooltips all work from.
+pub(super) fn row_buttons(rect: Rect, data: bool) -> impl Iterator<Item = (Control, Rect)> {
+    let rows = Rows::new(rect, data);
+    let windows = rows.window.into_iter().flat_map(|(row, _)| {
+        (0..WINDOWS.len())
+            .map(move |index| (Control::Window(index), share(row, WINDOWS.len(), index)))
+    });
+    let curves = rows.curve.into_iter().flat_map(|(row, _)| {
+        (0..ToneMap::ALL.len())
+            .map(move |index| (Control::Curve(index), share(row, ToneMap::ALL.len(), index)))
+    });
+    windows.chain(curves)
+}
+
+/// What the display makes of the value at `place` on the plot of the
+/// picture as it starts from it: the value, in the file's units, and what
+/// the display turns it into, which is the height of the response curve
+/// where the rule crosses it and the one number a curve on its own cannot
+/// be read off by eye.
+///
+/// Neither will measure against the plot underneath with a ruler, because
+/// both of the plot's axes are spaced on the plot's axis — the bins across,
+/// so that a quantized file does not comb, and the response up, so that a
+/// display doing nothing is the diagonal. The positions are the axis's and
+/// the numbers are the ones every other readout quotes; a curve that is
+/// straight and a value that is comparable cannot both be had, and the
+/// shape is what the plot is for.
+fn words(current: &Current, headroom: Headroom, place: f32) -> String {
+    let value = current.stats.axis.value(place);
+    let mapped = current
+        .display
+        .response(value, current.image.is_gray(), headroom)
+        .max(0.0);
+    format!(
+        "{}  {BECOMES}  {}",
+        axis_words(current, place),
+        trimmed(format!("{mapped:.3}"))
+    )
+}
+
+/// What the section says with the pointer on its plot at `bin`: the value
+/// the bin stands for and what the display makes of it, and where that
+/// value stands among each plane's pixels.
+pub(super) fn bin_mark(current: &Current, headroom: Headroom, bin: usize) -> Mark {
+    let stats = &current.stats;
+    let place = bin_value(&stats.plot, bin);
+    let value = stats.axis.value(place);
+    let channels = Plane::drawn(current)
+        .into_iter()
+        .map(|plane| Channel {
+            plane,
+            bin: None,
+            words: String::new(),
+            rank: stats.rank(plane.quantity(), value),
+        })
+        .collect();
+    Mark {
+        bin: Some(bin),
+        words: words(current, headroom, place),
+        channels,
+    }
+}
+
+/// What the section says with the pointer on the picture's pixel `(x, y)`:
+/// the pixel as the display starts from it, which is lifted and in the
+/// working space, and what the display makes of it; and each plane of it —
+/// its luminance and its channels — with the bin it is in on that plane's
+/// plot and where it stands among that plane's pixels.
+pub(super) fn pixel_mark(current: &Current, headroom: Headroom, x: u32, y: u32) -> Option<Mark> {
+    let sample = current.sample(x, y)?;
+    let stats = &current.stats;
+    let axis = stats.axis;
+    let place = axis.place_of(&current.image, &sample)?;
+    let luma = stats.plot.bin_of(axis, &current.image, &sample);
+    let channels = Plane::drawn(current)
+        .into_iter()
+        .map(|plane| {
+            let (value, bin) = match plane.quantity() {
+                Quantity::Luminance => (stats::luminance_of(&sample), luma),
+                Quantity::Channel(channel) => {
+                    let value = sample.linear()[channel];
+                    (value, stats.plot.bin_at(axis.place(value)))
+                }
+            };
+            Channel {
+                plane,
+                bin,
+                words: String::new(),
+                rank: stats.rank(plane.quantity(), value),
+            }
+        })
+        .collect();
+    Some(Mark {
+        bin: luma,
+        words: words(current, headroom, place),
+        channels,
+    })
+}
+
+/// The Display section, laid out at `rect`: the picture as the display
+/// starts from it, with the response curve over it on a dark outline; the
+/// band of what each value comes out as, with the window's two handles on
+/// it; the row of false colors on a gray image; and the rows under them.
+pub(super) fn show(
+    pass: &mut Pass,
+    ui: &mut egui::Ui,
+    current: &Current,
+    rect: Rect,
+    counts: Counts,
+    mark: Option<&Mark>,
+) {
+    let gray = current.image.is_gray();
+    let plot_rect = plot_area(rect);
+    let plotted = &current.stats.plot;
+    let stands = bars(
+        pass,
+        ui,
+        Section::Display,
+        plotted,
+        counts,
+        plot_rect,
+        &plane_rules(pass, mark),
+    );
+
+    let span = plotted.max - plotted.min;
+    if span > 0.0 {
+        // What the display turns each value into, in a band along the foot
+        // of the plot: the value above a cell, and the color it comes out
+        // as under it.
+        //
+        // The curve says how much and this says what of, which are
+        // different questions on a false-colored image — a curve cannot
+        // draw viridis — and the same question answered twice on a gray
+        // one, where the band is the tone curve as a wedge and the curve is
+        // it as a shape. Everything left of the window comes out black and
+        // everything right of it at the top of the ramp, so the two flat
+        // runs at the ends are the range the display is throwing away,
+        // drawn at the width they occupy. The handles that set those ends
+        // are drawn over it, in [`track()`].
+        let axis = current.stats.axis;
+        let headroom = pass.input.headroom;
+        let channels = current.image.channels();
+        let display = &current.display;
+        band(pass, ui, plot_rect, Past::Rule, |t| {
+            let value = axis.value(plotted.min + t * span);
+            (
+                Color::from_linear(display.shade(value, channels, headroom)),
+                display.response(value, gray, headroom) > ABOVE_WHITE,
+            )
+        });
+        curve(pass, ui, current, plot_rect);
+        stops(pass, ui, current, plot_rect);
+    }
+
+    plane_labels(ui, plot_rect, mark, &stands);
+
+    let held = track(pass, ui, current, plot_rect);
+    if gray {
+        swatches(pass, ui, current, plot_rect);
+    }
+    rows(pass, ui, current, rect);
+    let readout = held.or_else(|| mark.map(|mark| mark.words.clone()));
+    section::header(pass, ui, Section::Display, rect, readout.as_deref());
+}
+
+/// The row of stops under the band: 0 at the value the window puts at
+/// white — the white handle — and each stop below it and above it where it
+/// falls on the axis, so that the plot reads as stops below clipping, and a
+/// stop of exposure moves the row by exactly a stop.
+///
+/// Left off a measurement, whose values are quantities rather than light
+/// and have no stops to count, and off a window whose white is not a
+/// positive number of anything.
+fn stops(pass: &Pass, ui: &egui::Ui, current: &Current, bars: Rect) {
+    if current.image.referred == Referred::Measured {
+        return;
+    }
+    let (_, white) = current.display.displayed_bounds();
+    if !(white.is_finite() && white > 0.0) {
+        return;
+    }
+    let plotted = &current.stats.plot;
+    let span = plotted.max - plotted.min;
+    let axis = current.stats.axis;
+    plot::ev_scale(
+        pass,
+        ui,
+        ev_row(bars, ramp(bars).bottom()),
+        -EV_REACH..=EV_REACH,
+        |stop| {
+            let value = white * (stop as f32).exp2();
+            Some((axis.place(value) - plotted.min) / span)
+        },
+    );
+}
+
+/// How many stops either way of white the Display section's row is looked
+/// for over: past the deepest shadows any axis spaces apart, and past the
+/// most any window leaves above white.
+const EV_REACH: i32 = 24;
+
+/// What the display does to every value on the plot, drawn over it.
+///
+/// Always, where it used to be drawn only where the display was doing
+/// anything: this section is the display, and its curve is what the
+/// section is read for — the diagonal on a display doing nothing says so as
+/// plainly as a bend says what it is doing.
+///
+/// The curve is the whole of what the display does, and the only part of
+/// the panel that can show a tone map at all: a shoulder is a shape, not a
+/// threshold, and there is no line that means "rolled off". The handles on
+/// the band place the two values that come out black and white, exposure
+/// included, which a curve meeting its floor tangentially cannot be read
+/// for by eye.
+fn curve(pass: &Pass, ui: &egui::Ui, current: &Current, bars: Rect) {
+    let theme = pass.theme;
+    let headroom = pass.input.headroom;
+    let plotted = &current.stats.plot;
+    let span = plotted.max - plotted.min;
+    let axis = current.stats.axis;
+    let gray = current.image.is_gray();
+    // Sampled per column rather than per bin: the response is a continuous
+    // function of the value, and stepping it where the transform does not
+    // step would draw a stair that is not there.
+    //
+    // The same one check for every column, the arithmetic being the same
+    // for all of them: a window left non-finite would otherwise put NaN
+    // vertices in the buffer, which no clamp downstream can undo.
+    let (offset, gain) = current.display.transform();
+    if !(offset.is_finite() && gain.is_finite()) {
+        return;
+    }
+    // A vertex to the device pixel, so that a steep toe is drawn as finely
+    // as the screen can show it.
+    let columns = pass.grid.columns(bars.x, bars.width).len().max(1);
+    // Read off the axis to run the transform on, then put back on it to be
+    // drawn: both axes are the plot's, so a display doing nothing would be
+    // the diagonal. Black is the plot's floor: 0 on a curve, and on an axis
+    // in stops, where black is below every floor, the plot's own, which a
+    // response at black is drawn at.
+    let floor = match axis {
+        Axis::Curve(_) => 0.0,
+        Axis::Stops => plotted.min,
+    };
+    let responses: Vec<f32> = (0..=columns)
+        .map(|column| {
+            let across = column as f32 / columns as f32;
+            let value = axis.value(plotted.min + across * span);
+            let response = current.display.response(value, gray, headroom).max(0.0);
+            axis.place(response).max(floor)
+        })
+        .collect();
+    // The plot's height is white, unless the response runs past it — a
+    // surface with room above white, and no curve on — in which case the
+    // top is wherever the response gets to and white is a line across it.
+    let highest = responses.iter().copied().fold(floor, f32::max);
+    let scale = Scale::new(floor, axis.place(1.0), highest);
+    // Where the curve reaches white, where that is not the top of the plot:
+    // the value the window puts at white, the 0 of the row of stops, a rule
+    // up from it to the curve and a dot where the two meet.
+    let reaches = scale.white.and_then(|up| {
+        let (_, white) = current.display.displayed_bounds();
+        let across = (axis.place(white) - plotted.min) / span;
+        (across.is_finite() && (0.0..=1.0).contains(&across)).then_some((across, up))
+    });
+    if let Some((across, up)) = reaches {
+        plot::white_mark(pass, ui, bars, across, up);
+    }
+    let points: Vec<egui::Pos2> = responses
+        .iter()
+        .enumerate()
+        .map(|(column, &response)| {
+            let across = column as f32 / columns as f32;
+            pos2(
+                bars.x + across * bars.width,
+                bars.bottom() - scale.up(response) * bars.height,
+            )
+        })
+        .collect();
+    // Over an outline in the plot's ground, so that the line stands off
+    // whatever line or area it crosses, and the plot under it can be drawn
+    // as every other section's is rather than dimmed to make room for it.
+    let painter = ui.painter();
+    painter.add(egui::Shape::line(
+        points.clone(),
+        Stroke::new(CURVE_WIDTH + 2.0 * CURVE_OUTLINE, PLOT_BACKGROUND),
+    ));
+    painter.add(egui::Shape::line(
+        points,
+        Stroke::new(CURVE_WIDTH, theme.accent),
+    ));
+    if let Some((across, up)) = reaches {
+        let at = pos2(
+            pass.grid.snap(bars.x + across * bars.width),
+            bars.bottom() - up * bars.height,
+        );
+        painter.circle(
+            at,
+            WHITE_DOT,
+            Color32::WHITE,
+            Stroke::new(CURVE_OUTLINE, PLOT_BACKGROUND),
+        );
+    }
+}
+
+/// How big the dot where the curve reaches white is.
+const WHITE_DOT: f32 = 2.5;
+
+/// The false colors, each showing itself, under the band of the plot
+/// `bars`, and only where the display would act on the choice. The whole
+/// ramp rather than one color off it: a map is a sequence, and a single
+/// swatch of viridis is a green rectangle that could be anything.
+fn swatches(pass: &mut Pass, ui: &mut egui::Ui, current: &Current, bars: Rect) {
+    for (index, map) in Colormap::ALL.into_iter().enumerate() {
+        let rect = swatch_button(bars, index);
+        let chosen = current.display.colormap() == map;
+        button(
+            pass,
+            ui,
+            rect,
+            Control::Ramp(index),
+            chosen,
+            true,
+            SWATCH_RADIUS,
+        );
+
+        // The gradient on the device's pixels, as the band above it is: a
+        // swatch is the same row of one-pixel cells, over less room.
+        let face = rect.inset(SWATCH_INSET, SWATCH_INSET);
+        let grid = pass.grid;
+        let snap = |value: f32| grid.snap(value);
+        let (top, bottom) = (snap(face.y), snap(face.bottom()));
+        for column in grid.columns(face.x, face.width) {
+            ui.painter().rect_filled(
+                egui::Rect::from_min_max(pos2(column.left, top), pos2(column.right, bottom)),
+                0.0,
+                Color::from_linear(map.color(column.t_center())),
+            );
+        }
+    }
+}
+
+/// The rows under the band: the exposure and the curve on a photo, the
+/// window on data.
+///
+/// What the plot draws, said in words and set: the handles on the band are
+/// the window, the curve over the bins is the curve, and the gain that moves
+/// them both is the exposure. A reading and the control that changes it,
+/// together, so that a number on this panel is never one you have to go
+/// somewhere else to act on: the exposure is a slider with its number at
+/// the end, in the same quarter stops the keys count in.
+///
+/// The curves light the one that is in force; the windows do not. A window
+/// is set from the pixels and then moved by hand — a handle, a key, the
+/// exposure under it — and a button lit for "full range" on a window that
+/// has since been shifted would be claiming something that stopped being
+/// true. The handles are what say where the window is.
+fn rows(pass: &mut Pass, ui: &mut egui::Ui, current: &Current, rect: Rect) {
+    let theme = pass.theme;
+    let data = section::is_data(current);
+    let rows = Rows::new(rect, data);
+    let display = &current.display;
+    let font = FontId::proportional(ROW_TEXT);
+    let grid = pass.grid;
+
+    // The words down the left, set back the way a fact in a bar is set behind
+    // the name it is about: the rows are read for their values, and these say
+    // which value is which.
+    for (label, at) in rows.labels() {
+        ui.painter().text(
+            pos2(grid.snap(at.x), at.y + at.height / 2.0),
+            Align2::LEFT_CENTER,
+            label,
+            font.clone(),
+            theme.text_dim.into(),
+        );
+    }
+
+    if let (Some(at), Some(stops)) = (rows.slider(), rows.stops()) {
+        slider(pass, ui, display.exposure_stops(), at);
+
+        // Its reading at the end of the row, in the units the rest of the
+        // interface quotes it in: stops counted in quarters, as the bar and
+        // the keys count them.
+        ui.painter().text(
+            pos2(grid.snap(stops.right()), stops.y + stops.height / 2.0),
+            Align2::RIGHT_CENTER,
+            stops_label(display.exposure_stops()),
+            font.clone(),
+            theme.text_primary.into(),
+        );
+    }
+
+    // The curves are dead under a false color, which clips at the top of its
+    // ramp whatever curve is on; the row stays, since the section's height
+    // is the file's, and says why when rested on.
+    let ramped = display.ramp(current.image.is_gray()).is_some();
+    for (widget, rect) in row_buttons(rect, data) {
+        let Some((label, active)) = row_label(widget, display) else {
+            continue;
+        };
+        let enabled = !(ramped && matches!(widget, Control::Curve(_)));
+        let (_, _, ink) = button(pass, ui, rect, widget, active, enabled, TOGGLE_RADIUS);
+        ui.painter().text(
+            egui::Rect::from(rect).center(),
+            Align2::CENTER_CENTER,
+            label,
+            font.clone(),
+            ink,
+        );
+    }
+}

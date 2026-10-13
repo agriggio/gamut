@@ -19,9 +19,11 @@ whichever screen it lands on. Where none of them fits everywhere — a monitor
 smaller than `MIN_WINDOW`, say — the smallest answer is taken as the least bad
 of them.
 
-The whole calculation is in logical pixels. The image's own pixels are
-physical, so a monitor's scale converts them; the panel constants are logical
-already. Asking in physical pixels does not work, because winit's Wayland
+The whole calculation is in the monitor's logical pixels. The image's own
+pixels are physical, so a monitor's scale converts them — that scale alone,
+since the picture is not the interface's to grow. The panel constants are in
+points, so `window::Chrome` multiplies them by the interface's scale; only
+`FLOOR_SLACK`, a rounding to the device's grid, stays as it is. Asking in physical pixels does not work, because winit's Wayland
 backend converts the size a window is created with at a scale of `1.0` — the
 surface has none until the compositor configures it — so physical pixels are
 taken as logical ones and the window opens `scale` times too large, well past
@@ -46,12 +48,13 @@ under a compositor without `xdg_output` or off Wayland, where the error goes
 the safe way: a little under 100% rather than overrunning.
 
 A window also opens no smaller than one the interface itself fits in.
-`ui::PANELS_ROOM` is the content area the histogram and the information column
-need together — the strip's width, the histogram at its tallest, the gap, and
-the least column the panel will show — and `PANELS_WINDOW` is that plus the chrome
-and a logical pixel of slack. A window opening below it would have both those
-toggles dead in it from the first frame, which is not something the viewer
-asked for; where the picture is smaller than the interface, the window is
+`ui::PANELS_ROOM` is the room between the strips and the bars the
+[side panel](#the-side-panel) needs for either of what it holds — its least
+width, and the height of the histogram's head section, which is taller than
+the least column of information — and `Chrome::panels_window` is that plus the chrome, both at
+the interface's scale, and a logical pixel of slack. A window opening below
+it would have both those toggles dead in it from the first frame, which is
+not something the viewer asked for; where the picture is smaller than the interface, the window is
 better a little larger than the picture. The floor is measured against the
 monitor's whole room rather than against `MAX_WINDOW_FRACTION` of it — the
 fraction is about leaving the desktop its share of a large window, and this is
@@ -71,7 +74,40 @@ the rounding can do.
 They are the whole window, chrome included, in the same logical pixels.
 Neither the image nor the monitors gets a say afterwards: a window larger than
 the screen is something a compositor is asked for on purpose, and only a floor
-of `MIN_WINDOW` applies, below which the chrome would have all of the window.
+of `MIN_WINDOW`, at the interface's scale, applies, below which the chrome
+would have all of the window.
+
+## Two scales
+
+There are two scales between the device and what is drawn on it, and the
+application keeps them apart by name. `App::device_scale` is the monitor's
+own — `window.scale_factor()` — and `App::pixels_per_point` is that times
+`App::ui_scale`, the interface's scale the keys step along
+`ui::scale::SCALES`. egui lays out at the second: `Gui` sets its
+`zoom_factor` to the interface's scale (in the options, not through
+`set_zoom_factor`, which lands a pass late) and egui-winit multiplies that by
+the native scale itself, converting the pointer, the wheel and the window's
+size by the product. So every conversion the application makes between the
+pointer, the panels and the picture's viewport — `Sight::scale`,
+`logical_size`, `viewport`, the wheel's pan — reads `pixels_per_point`; were
+one of them on the device scale, a drag would run ahead of the hand, the
+loupe's rings would sit off its glass, and the picture would be fitted to a
+content area the panels do not leave. `redraw` checks in debug builds that
+egui's figure and the application's agree.
+
+`device_scale` is read in three places only. `app/window.rs` sizes the window
+in the monitor's logical pixels, where the interface's scale is a
+multiplier on the chrome (`window::Chrome`) and not a unit. The checkerboard
+behind a transparent picture is drawn at the device scale (`Scene::scale`),
+since it is the picture's backdrop rather than part of the interface. And
+egui is told the native scale by egui-winit itself.
+
+The interface's scale is kept in the state file and not set in the
+configuration: it is set by hand, with the picture on screen, as the file
+list's width and the loupe's magnification are — see
+[settings](../user-docs/SETTINGS.md#the-state-file). The keys change it in
+place and leave the window's size alone; the next window is sized for it.
+
 Whether the request is honored is the compositor's business — a tiling one
 uses it as the floating size, if it uses it at all.
 
@@ -280,12 +316,14 @@ the bottom bar either way. The [file list](filmstrip.md) is a sixth,
 down the left edge of the window under the top bar and running to the
 window's foot, with the left strip and the bottom bar starting at its
 right edge: the list is a column of its own, and the controls that are
-about the picture sit beside the picture. Both
+about the picture sit beside the picture. The [side panel](#the-side-panel)
+is a seventh, between the picture and the right strip and between the bars,
+and the transport bar stops at its left edge. All three
 are part of the same derivation, from the window size and `chrome::Parts`
-— which of the two is up — so the picture is fitted beside and above them
-on the first frame either is up rather than a frame later, and `ui::show`
+— which of them are up — so the picture is fitted beside and above them
+on the first frame any is up rather than a frame later, and `ui::show`
 derives the same `Parts` from what it was handed, so a frame given the
-list's rows is a frame laid out with the list. It holds the one-frame-back and
+list's rows is a frame laid out with the list. The transport bar holds the one-frame-back and
 one-frame-on buttons as a pair, with the play button between them for an
 animation, then a readout — which frame of how many, and where that is in
 time — and, for an animation, a timeline in whatever width is left. The
@@ -326,8 +364,8 @@ The strips are a bar's thickness wide — they hold a column of square toggles
 and nothing else, so a frame of even weight is the right one — and the left one
 holds the copy button, the open button under it, the region button under
 that and the paste button under that, the right one the histogram above the
-file information, the order the two panels they open are stacked in over the
-picture. The first two are together because they are one gesture — this file,
+file information, the two choosing what the side panel beside them holds.
+The first two are together because they are one gesture — this file,
 handed to something else — and the button that comes and goes with the
 clipboard is the last of the left-hand column, so that nothing above it moves
 under the pointer as it appears. The minimap toggle is in the left strip too, but it comes up from the
@@ -376,23 +414,61 @@ there moves on the press that was just made, and the mark the press was aimed
 at is the one thing that stays where it was.
 
 
-## Panels a window has no room for
+## The side panel
 
-The two panels down the right of the window — the histogram and the
-information column — are both `PANEL_WIDTH` wide, and the histogram is one
-fixed height besides: its plot gives a bin to the logical pixel, and the
-three rows under it are every file's — see [the histogram
-panel](histogram.md) — so there is nothing in either to give. A content area
-smaller than one of them
-gets no panel rather than one drawn over the picture it is about and off the
-edge of the window. `ui::room` asks the question for both at once, because
-they are stacked: the histogram takes the top of the strip, and what it takes
-is height the column below it does not have, so a window can have room for the
-column alone and none for it under an open plot. What it takes is settled by
-`ui::histogram_shown`, which asks whether the plot is on screen rather than
-whether its toggle is on — a window too short for the plot is not one the
-column has to start below — and hands `info::panel` the rectangle it took, so
-that the two panels cannot disagree about where the column begins.
+The histogram and the information are shown in one panel down the right of
+the picture (`ui/side.rs`), one at a time. It is chrome, like the
+[file list](filmstrip.md) on the other side, rather than something floating
+over the picture: the picture is fitted into what it leaves, so nothing is
+drawn over the image to say something about the image. `Panels::side` is
+what it holds, `None` while it is down, and one field rather than a flag for
+each is what makes the two buttons in the right strip tabs: `Panels::choose`
+puts the one pressed up in place of the other, and the press on the one
+already up takes the panel down. `Panels::lit` reads the same field for the
+buttons, the Mac's menu checks and the bottom bar's tooltip, so none of them
+can light a tab that is not on screen. The tab inside the information — the
+curated facts or the raw data — is `Panels::info_tab`, a different thing
+held separately: `i` and `I` choose both at once through
+`App::show_info_on`.
+
+It sits inside the right strip rather than outside it, so the buttons that
+choose what it holds stay where they are as it opens and closes, and the
+press that closes it lands where the press that opened it did. The file
+list is the other way round, against the window's edge with the left strip
+inside it, because its toggle is not in that strip and nothing in the strip
+is about the list. The panel runs between the bars as the strips do, and the
+transport bar under the picture stops at its left edge. With the interface
+hidden it stays, down the whole right edge of the window, as the file list
+stays down the left: it was asked for, and `` ` `` asks for the bars to go,
+not for what was opened. `~` takes it down with the rest.
+
+### Its width
+
+The panel is one width, `side::WIDTH`, which is `PANEL_WIDTH`: the
+histogram's column (`histogram::COLUMN_WIDTH`), whose plots fill it at a bin
+to the point, the gutter kept for the scrollbar, and the panel's inset.
+That is the one thing on either tab that cannot give — a plot
+narrower than its bins would draw some of them a pixel and some none — and
+the information's column reads at it comfortably. It is not dragged wider:
+nothing on either tab would use the room but a longer line of facts, and
+the room would be the picture's.
+
+### A window with no room for it
+
+The panel is one width, and the histogram's head section one height, so in
+a window too small for that there is nothing to give: the button is dead
+rather than the panel shrunk below what it can be read at. The rest of the
+histogram's column scrolls — see [the histogram](histogram.md#a-column-of-stages).
+`chrome::side_room` is the room the panel would have — between the left
+strip and the right one, or between the file list and the window's edge
+with the bars hidden, and the height between the bars — worked out with the
+panel itself left out, so that opening it cannot make the button that
+opened it dead. `ui::room` reads it: the histogram needs `histogram::MIN_HEIGHT`
+and the information `info::INFO_MIN_HEIGHT`, both the panel's
+width. `chrome::side_width` is the width it is given, the file list having
+had its share first. `App::side_showing` is the one reading of
+whether it is on screen — asked for, with room for what it holds, and with
+something open — which `App::parts` and `FrameInput::side` both come from.
 
 One answer serves both readers — the interface and the application — since a
 toggle that quietly set something no one could see would be worse than one
@@ -531,15 +607,14 @@ since what it would read or mark is not what is shown. The file on screen
 read again gets no stand-in: the picture already up is a better picture of
 it than any thumbnail.
 
-### The panels
+### The side panel
 
-The histogram and information panels wait on the same announcement,
-thumbnail or none (`App::replacing`, handed over as `FrameInput::waiting`):
-each keeps its place and size and shows `panel::waiting`, its background and
-a spinner, until the file arrives. What they said was about the picture
-leaving, and their controls act on it; a panel that emptied or shrank
-instead would move the one under it, only for both to move back a moment
-later. The spinner asks egui for a pass on every pass, which `Gui` folds
+The side panel waits on the same announcement, thumbnail or none
+(`App::replacing`, handed over as `FrameInput::waiting`): it keeps its place
+and width and shows `panel::spinner` until the file arrives. What it said
+was about the picture leaving, and its controls act on it; a panel that
+emptied or closed instead would move the picture, only for it to move back
+a moment later. The spinner asks egui for a pass on every pass, which `Gui` folds
 into the loop's deadline, so the window redraws continuously for as long as
 the wait lasts and not after.
 
@@ -716,7 +791,7 @@ the button coming up and Escape aborting the drag alike; a release the
 application never heard about would leave it holding a drag that was over.
 
 The region is painted in `src/ui/region.rs` on the picture's own painter,
-under the floating panels, rather than in an area of its own: an area takes
+under the minimap, rather than in an area of its own: an area takes
 the pointer from what is under it, and the picture's response is what the
 drag on a handle is read off. The nine handles are placed on the device's
 grid through `icon::Grid`, like every other thin thing over the picture, and
@@ -802,8 +877,7 @@ about what was just done, the region is what was being done to, and the one
 that stops being news first goes first. Stepping to another file takes it
 off, and so does the file coming back a different size — the pixels it
 marked out are no longer the pixels — while a reload at the same size keeps
-it, being the same picture read again. The key is `x` rather than `k`, which
-the histogram's planes toggle already holds in the j/k/l run.
+it, being the same picture read again. The key is `x`.
 
 ## The zoom box
 
@@ -947,7 +1021,7 @@ every zoom rather than stepping from pixel to pixel at a high one.
 
 The window is a stack, and egui keeps it: the picture at the bottom, laid out
 as the one response the central panel holds; the areas floating over it — the
-minimap, the histogram, the information column — at `Order::Middle`; the
+minimap — at `Order::Middle`; the
 message about what was just done in the foreground; and whatever menu or
 tooltip is open above the lot. egui routes the pointer by that stack, so the
 highlight, the press, the wheel and the picture's own drag cannot disagree
@@ -984,23 +1058,17 @@ control here senses a click and nothing more.
 
 ## The information panel
 
-The information panel (`src/ui/info.rs`) is as wide as the histogram — one
-constant, fixed by the histogram's need for a bin to the logical pixel — so
-the two line up down the right of the window, and its column is measured
-inside a gutter kept clear for the scrollbar whether or not there is anything
-to scroll: text that reflowed the moment the bar appeared would be text that
-reflowed as it was being read. It starts under the histogram when that is
-showing and at the top of the content when it is not, and the two share one
-ground — the bars' own surface, mildly transparent, carrying the bars' own
-ink. The
-pointer belongs to it while it is over it: the wheel scrolls the column
-instead of zooming, and a press starts a drag of the scrollbar's thumb
-rather than of the picture, moving the column by what putting the thumb there
-would rather than by what the pointer traveled — one thing or the other for
-as long as the button is held, so a drag that runs off the panel goes on
-scrolling rather than beginning to pan half-way through. A column with nothing
-left to scroll to still takes the gesture rather than handing it back, and
-makes no closed hand for a drag that would move nothing.
+The information panel (`src/ui/info.rs`) is the whole of the
+[side panel](#the-side-panel) while it is up there, at whatever width that
+has been dragged to, and its column is measured inside a gutter kept clear
+for the scrollbar whether or not there is anything to scroll: text that
+reflowed the moment the bar appeared would be text that reflowed as it was
+being read. Its ground is the bars' own surface, carrying the bars' own ink.
+The wheel over it scrolls the column, and a press starts a drag of the
+scrollbar's thumb, moving the column by what putting the thumb there would
+rather than by what the pointer traveled — one thing for as long as the
+button is held, so a drag that runs off the panel goes on scrolling rather
+than beginning to pan half-way through.
 
 What it says comes from three places, and is written under headings that keep
 them apart — a column this long is read by looking for a thing rather than by
@@ -1458,12 +1526,13 @@ edge to edge of the popup inside its stroke, with the information panel's
 hairline under them saying the same thing it says there. The headings share
 the rows' width, which is why the scrollbar is always shown in its gutter,
 as the information panel's is: a bar that came and went would move the rows'
-right edge and not the headings'. The popup's own floor is the panels':
-`PANEL_WIDTH` wide and
-`INFO_MIN_HEIGHT` tall, inside the same padding, so `help::panel` is `None`
-in exactly the content area `info::panel` is, `Room` carries a `help` beside
-its `histogram` and `info`, and the button goes dead with theirs — the same
-`NO_ROOM` on it, and the key refused in `App::press` as the toggles are.
+right edge and not the headings'. The popup's own floor is the side panel's
+least width and the least height of the column of information, inside the
+padding everything over the picture keeps. `Room` carries a `help` beside
+its `histogram` and `info`, and the button goes dead where the content area
+is smaller than that — the same `NO_ROOM` on it, and the key refused in
+`App::press` as the toggles are. The popup opens over the picture, so an
+open side panel takes from its room where it takes nothing from theirs.
 
 The panels are opaque, and the image is drawn in the `Viewport` they leave
 rather than behind them: zoom, fit, pan limits and the wheel's anchor are all

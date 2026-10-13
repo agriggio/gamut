@@ -32,9 +32,8 @@ settings are:
 | `show_ui` | `true` | The panels around the picture, which `` ` `` hides and shows |
 | `show_minimap` | `true` | The minimap, while the picture is larger than the window |
 | `show_filmstrip` | `true` | The file list, while there is more than one file |
-| `show_histogram` | `false` | The histogram panel |
-| `show_info` | `false` | The file information panel |
-| `log_counts` | `false` | The histogram's bars as tall as the logarithm of their counts |
+| `show_histogram` | `false` | The histogram, in the panel down the right; it wins over `show_info` when both are on |
+| `show_info` | `false` | The file information, in the panel down the right |
 | `browse_folder` | `true` | A single file opened by itself steps on through the other images in its folder |
 | `exiftool` | `exiftool` | The program the info panel's *Raw Data* tab reads every tag with: a name looked for on your `PATH` and where packages put it, or a path to it |
 | `open_map_link` | `https://geojson.io/#data=data:application/json,%7B%22type%22%3A%22Feature%22%2C%22properties%22%3A%7B%7D%2C%22geometry%22%3A%7B%22type%22%3A%22Point%22%2C%22coordinates%22%3A%5B{lng}%2C{lat}%5D%7D%7D` | The web page the map button in the info panel's *Location* section opens. `{lat}` and `{lng}` become where the picture was taken, in degrees, negative south and west; the link must have both |
@@ -93,9 +92,10 @@ other name, `gamut` says so on the terminal.
 The region's names — `region.move.*`, `region.grow.*` and `region.shrink.*`
 — are the one exception. While a region is selected they are tried first,
 and any other key does what it does without one. By default they are on the
-arrows, which is why the arrows move a selected region rather than panning.
-Bind `region.move.left` to `h` and Left pans under a region again, while `h`
-moves it; unbind `region.move.left` and Left pans under a region with
+arrows, which is why the arrows move a selected region rather than stepping
+through the files. Bind `region.move.left` to `h` and Left steps to the
+previous file under a region again, while `h` moves it; unbind
+`region.move.left` and Left steps to the previous file under a region with
 nothing moving it left.
 
 Some keys are not in the table and cannot be rebound: `Esc` inside a popup
@@ -192,7 +192,7 @@ them, and `browse_folder` waits for the next start.
 `~/Library/Application Support/gamut/state` on a Mac, is where
 `gamut` remembers settings you change by hand: how wide you dragged the file
 list, what the list is sorted by and which way, how far the loupe
-magnifies, whether a raw opens as the camera's JPEG, and how the pixel
+magnifies, how large you made the interface, whether a raw opens as the camera's JPEG, and how the pixel
 under the pointer is read out: its value, and for a map its place and how a
 latitude is written. It is written when the window closes and read when the next window
 opens. You never need to edit it, and deleting it resets them all to their

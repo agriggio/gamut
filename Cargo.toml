@@ -1,6 +1,6 @@
 [package]
 name = "gamut"
-version = "0.10.0"
+version = "0.11.0"
 edition = "2024"
 # The floor egui sets: every crate of its family declares 1.95, and nothing
 # here is older than what they ask for. Nothing is pinned by this — Arch
@@ -208,7 +208,9 @@ pkg-config = "0.3"
 [dev-dependencies]
 # Drives the interface without a window, through the accessibility tree egui
 # builds of it: a test clicks a button by its name and asks what came of it.
-egui_kittest = "0.36.2"
+# Its renderer draws a pass to pixels, for the histogram lab in
+# `ui/lab.rs`, which writes the side panel out as a picture.
+egui_kittest = { version = "0.36.2", features = ["wgpu"] }
 # The tests set the interface in egui's own fonts rather than the desktop's,
 # so that they run the same on a machine with no fontconfig to ask. A
 # feature of a dev-dependency reaches only the test builds, and `about.toml`

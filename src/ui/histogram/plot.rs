@@ -1,108 +1,71 @@
-//! The plot itself: the bins as columns, the pointer's rule, the shares
-//! clipped at either end, the band along the foot and the response curve
-//! over the lot — and the arithmetic under it: where a bin stands, how tall
-//! its bar is, and what a stretch of a column comes out as with the planes
-//! standing over it.
+//! The plot every section draws: each plane as a line over its area, the
+//! pointer's rule, the band along its foot and the mark at white — and the
+//! arithmetic under it: where a bin stands and how tall it is.
 
-use egui::{Align2, Color32, FontId, Stroke, pos2, vec2};
+use std::ops::Range;
+
+use egui::{Align2, Color32, FontId, pos2};
 
 use super::*;
 use crate::image::stats::COLOR;
+use crate::ui::outline;
 
 /// The ground the plot is drawn on. Not quite black, so that the panel's own
 /// edge is still an edge rather than a hole in it. The one surface with a
-/// job that outranks matching the desktop: a screened plot has to have a
-/// dark ground under it or its planes stop being three colors, so it is
-/// the same near-black in every theme.
+/// job that outranks matching the desktop: the planes' lines and their
+/// faint areas need a dark ground under them to read as three colors, so it
+/// is the same near-black in every theme.
 pub(super) const PLOT_BACKGROUND: Color = Color::rgb(8, 8, 10);
-/// The luminance plane, under the color ones. Neutral, and no theme's
+/// The luminance plane. Neutral, and no theme's
 /// business: it is the one plane that stands for a pixel's value rather
 /// than for a channel, and a value with a hue on it would read as a fourth
 /// color.
 pub(super) const HISTOGRAM_LUMA: Color = Color::rgba(170, 170, 170, 200);
 /// The color planes: a red, a green and a blue, each taken some way back
 /// from its primary, in that order. Not the theme's own red, green and
-/// blue, which no theme chose for this: screened over one another on
-/// [`PLOT_BACKGROUND`] these still give a yellow, a cyan and a magenta
-/// where two overlap and a near white where all three do, which is the
-/// reading a channel histogram is looked at for — and is the same reading
-/// in every theme, the ground being the same in every theme. Held short of
-/// the primaries because the full ones, at a pixel to the bin, come out as
-/// a hedge of pure red, green and blue spikes that the eye cannot leave
-/// alone; these read as a plot.
+/// blue, which no theme chose for this: each leads in its own channel, so
+/// three lines crossing on [`PLOT_BACKGROUND`] stay three, and read the
+/// same in every theme, the ground being the same in every theme. Held
+/// short of the primaries because the full ones, at a pixel to the bin,
+/// come out as a hedge of pure red, green and blue spikes that the eye
+/// cannot leave alone; these read as a plot.
 pub(super) const HISTOGRAM_PLANES: [Color; COLOR] = [
     Color::rgb(232, 76, 70),
     Color::rgb(92, 200, 108),
     Color::rgb(84, 132, 236),
 ];
 
-/// The planes a column of the plot is drawn from: which of them stand this
-/// high, as a set. What the color of a stretch of the column is a function of.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) struct Cover {
-    pub luma: bool,
-    pub planes: [bool; 3],
-}
-
-/// What a stretch of a column comes out as, with `cover` standing over it:
-/// the plot's ground, the luminance plane laid over that, and the color
-/// planes screened over the lot.
+/// How the response curve is scaled up the plot: on the plot's own axis, as
+/// the bins across are, from `floor` at the axis to `ceiling` at the top.
 ///
-/// egui has one blend, so the screening is done here, per stretch of
-/// column: the planes are the primaries on a near-black ground, so two of
-/// them give the secondary between and all three give white, which is the
-/// reading a channel histogram is looked at for.
-pub(super) fn screened(luma_ink: Color, cover: Cover) -> Color32 {
-    let over = |ground: [f32; 3], ink: Color| -> [f32; 3] {
-        let alpha = ink.a as f32 / 255.0;
-        let ink = [ink.r, ink.g, ink.b].map(|channel| channel as f32 / 255.0);
-        [0, 1, 2].map(|c| ground[c] * (1.0 - alpha) + ink[c] * alpha)
-    };
-    let screen = |ground: [f32; 3], ink: Color| -> [f32; 3] {
-        let ink = [ink.r, ink.g, ink.b].map(|channel| channel as f32 / 255.0);
-        [0, 1, 2].map(|c| 1.0 - (1.0 - ground[c]) * (1.0 - ink[c]))
-    };
-    let ground = PLOT_BACKGROUND;
-    let mut color = [ground.r, ground.g, ground.b].map(|channel| channel as f32 / 255.0);
-    if cover.luma {
-        color = over(color, luma_ink);
-    }
-    for (plane, ink) in cover.planes.into_iter().zip(HISTOGRAM_PLANES) {
-        if plane {
-            color = screen(color, ink);
-        }
-    }
-    let [r, g, b] = color.map(|channel| (channel.clamp(0.0, 1.0) * 255.0).round() as u8);
-    Color32::from_rgb(r, g, b)
-}
-
-/// How the response curve is scaled up the plot: in the file's own encoding,
-/// as the bins across are, from 0 at the axis to `ceiling` at the top.
-///
-/// The ceiling is white — encoded, so that a display doing nothing draws the
-/// diagonal — except where the curve runs past it, which it does on a surface
-/// with room above white and no curve on: the top of the plot is then
-/// wherever the response gets to, and white is a line drawn across it.
-/// `white` is where that line goes, as a fraction of the plot's height, and
-/// `None` where white is the top and the line would be the plot's own edge.
+/// The floor is black — 0 on a curve, and on an axis in stops, where black
+/// is below every floor, the plot's own. The ceiling is white — on the
+/// axis, so that a display doing nothing draws the diagonal — except where
+/// the curve runs past it, which it does on a surface with room above white
+/// and no curve on: the top of the plot is then wherever the response gets
+/// to, and white is a line drawn across it. `white` is where that line
+/// goes, as a fraction of the plot's height, and `None` where white is the
+/// top and the line would be the plot's own edge.
 pub(super) struct Scale {
+    floor: f32,
     ceiling: f32,
-    white: Option<f32>,
+    pub(super) white: Option<f32>,
 }
 
 impl Scale {
-    fn new(encoded_white: f32, highest: f32) -> Self {
-        let ceiling = highest.max(encoded_white).max(f32::MIN_POSITIVE);
-        let white = encoded_white / ceiling;
+    pub(super) fn new(floor: f32, placed_white: f32, highest: f32) -> Self {
+        let ceiling = highest.max(placed_white).max(floor + f32::MIN_POSITIVE);
+        let white = (placed_white - floor) / (ceiling - floor);
         Self {
+            floor,
             ceiling,
             white: (white < 1.0 - 1e-3).then_some(white),
         }
     }
 
-    /// An encoded response as a fraction of the plot's height.
-    fn up(&self, encoded: f32) -> f32 {
-        (encoded / self.ceiling).clamp(0.0, 1.0)
+    /// A response on the plot's axis as a fraction of the plot's height.
+    pub(super) fn up(&self, placed: f32) -> f32 {
+        ((placed - self.floor) / (self.ceiling - self.floor)).clamp(0.0, 1.0)
     }
 }
 
@@ -117,137 +80,320 @@ pub(super) fn bin_across(index: usize) -> f32 {
     }
 }
 
-/// How tall a bin's bar stands, from 0 on the axis to 1 at the top of the
-/// plot, against the fullest bin drawn beside it.
+/// The bins under the `column`th of `columns` device columns across the
+/// plot: every bin any part of it covers, so that a column wider than a bin
+/// takes all of them and one narrower than a bin still takes the one it is
+/// in. Never empty, never past the last bin, and between them the columns
+/// take every bin.
+pub(super) fn bins_under(column: usize, columns: usize) -> Range<usize> {
+    let columns = columns.max(1);
+    let column = column.min(columns - 1);
+    let first = column * BINS / columns;
+    let end = ((column + 1) * BINS).div_ceil(columns).min(BINS);
+    first..end.max(first + 1)
+}
+
+/// The fullest of `bins` in `counts`: what a column over more than one bin
+/// stands as tall as, so that a spike in one of them is not averaged away
+/// by the columns beside it.
+pub(super) fn tallest(counts: &[u32; BINS], bins: Range<usize>) -> u32 {
+    counts[bins].iter().copied().max().unwrap_or(0)
+}
+
+/// The share of the bins a column's scale lets past its top: of the bins
+/// holding anything inside the ends of the reference plot, the fullest
+/// fiftieth stand cut off, so that a spike or two — a flat sky, a masked
+/// sea, the surround of a scan — cannot flatten the rest into the axis.
+const CUT: f32 = 0.02;
+
+/// How thick the cap along the top of a bar cut off there is.
+const CUT_CAP: f32 = 2.0;
+
+/// The count axis a plot stands on: a bar's height is the share of its
+/// plane's pixels in its bin, and `top` is the share a bar reaching the top
+/// of a plot holds. The input's two plots — the Display's and the Image's —
+/// share one, so that a bar of the same height is the same share of the
+/// picture in each, and what the gain map's lift and the working space do
+/// to the file read as bars growing or shrinking between them. The Output's
+/// stands on its own, set afresh from what goes out: the display spreads
+/// and piles the picture up as it is set, and a scale held to the input's
+/// would leave a stretched Output a sliver along the axis. The gain map's,
+/// of another image in other units, stands on its own too.
 ///
-/// Linear is what a photograph wants and what a photo editor draws: the
-/// height of a bin is its share of the fullest one, and the shape read off
-/// the plot is the distribution itself. It is the wrong plot for measurement
-/// data, where one bin often holds most of the image — a masked sea, the
-/// surround of a scan — and flattens everything the rest of the range is
-/// doing into the axis. A value the file declares as nodata is already
-/// thrown out by [`crate::image::Stats::scan`], so the bin that does this is
-/// a background the file says nothing about. Logarithmic is that same plot
-/// with the tall bin cut down to where the short ones can be seen beside it.
-///
-/// `ln(1 + n)` rather than `ln(n)`: an empty bin stays flat on the axis,
-/// where a floored logarithm would lift it off and draw a count that is not
-/// there, and the fullest bin still reaches the top either way. What is lost
-/// is that two bars can no longer be compared by their heights — which is the
-/// switch's whole point, and why it is a switch and not the plot.
-pub(super) fn bar_fraction(count: u32, peak: u32, log: bool) -> f32 {
-    let (count, peak) = (count as f32, peak.max(1) as f32);
-    if log {
-        count.ln_1p() / peak.ln_1p()
-    } else {
-        count / peak
+/// Linear, as a photo editor's is: heights compare as the counts do. A bar
+/// fuller than the top runs to it and is capped there, and its share is
+/// what the header says with the pointer on it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Counts {
+    top: f32,
+}
+
+impl Counts {
+    /// The scale `reference` sets: the fullest [`CUT`] of its bins holding
+    /// anything, across every plane and leaving out the two end bins — what
+    /// the window throws away piles up there — stand past the top. A plot with nothing inside its
+    /// ends — a picture of black and white alone — is scaled to its fullest
+    /// bin, and an empty one to the whole of the picture.
+    pub(super) fn of(reference: &Plot) -> Self {
+        Self::over(planes_of(reference))
+    }
+
+    /// The scale a set of planes sets, as [`Counts::of`] has a plot's set
+    /// it: the Image section's, which are one plot each.
+    pub(super) fn over<'a>(planes: impl Iterator<Item = &'a [u32; BINS]> + Clone) -> Self {
+        let shares = |inside: bool| -> Vec<f32> {
+            planes
+                .clone()
+                .flat_map(|counts| {
+                    let total = total(counts);
+                    let bins = if inside { 1..BINS - 1 } else { 0..BINS };
+                    counts[bins]
+                        .iter()
+                        .filter(move |&&count| count > 0)
+                        .map(move |&count| share_of(count, total))
+                })
+                .collect()
+        };
+        let mut held = shares(true);
+        if held.is_empty() {
+            held = shares(false);
+        }
+        held.sort_by(|a, b| b.total_cmp(a));
+        let top = held
+            .get((held.len() as f32 * CUT) as usize)
+            .copied()
+            .unwrap_or(1.0);
+        Self { top }
+    }
+
+    /// How tall a bin holding `count` of a plane's `total` stands, from 0
+    /// on the axis to 1 at the top of the plot, and past 1 where it is cut
+    /// off there.
+    pub(super) fn up(self, count: u32, total: u64) -> f32 {
+        share_of(count, total) / self.top
     }
 }
 
-/// The plot itself: the bins, the pointer's rule, the shares clipped at
-/// either end, the band along the foot and — where the display is doing
-/// anything — the response curve over the lot.
-pub(super) fn plot(pass: &Pass, ui: &egui::Ui, current: &Current, panel: Rect, content: Rect) {
-    let theme = pass.theme;
-    let panels = pass.panels;
-    let input = pass.input;
-    let painter = ui.painter();
-    let scale = input.scale;
+/// Every plane of `plot`: the luminance, then the color planes where it has
+/// them.
+pub(super) fn planes_of(plot: &Plot) -> impl Iterator<Item = &[u32; BINS]> + Clone {
+    std::iter::once(&plot.luma).chain(plot.color.iter().flatten())
+}
 
-    // What applies to this image: the false colors are for a single channel
-    // and the color planes are for three, and the panel leaves out whichever
-    // the display would ignore rather than drawing it dead.
-    let gray = current.image.is_gray();
-    let bars = plot_area(panel, gray);
+/// Every count in a plane: the pixels it was counted from.
+pub(super) fn total(counts: &[u32; BINS]) -> u64 {
+    counts.iter().map(|&count| u64::from(count)).sum()
+}
+
+/// `count` as a share of `total`, and none of nothing.
+fn share_of(count: u32, total: u64) -> f32 {
+    if total == 0 {
+        0.0
+    } else {
+        (f64::from(count) / total as f64) as f32
+    }
+}
+
+/// How thick a plane's line is, in device pixels; the
+/// gray its area is laid down in, each plane's over the others'; how far
+/// that gray is taken toward the plane's own ink, so that each area wears a
+/// cast of its line's color; and how opaque it is.
+const LINE_PIXELS: f32 = 1.5;
+const LINE_AREA: [u8; 3] = [150, 150, 150];
+const LINE_CAST: f32 = 0.3;
+const LINE_ALPHA: u8 = 40;
+
+/// The area under a plane's line: [`LINE_AREA`] taken
+/// [`LINE_CAST`] of the way toward `ink`.
+fn line_area(ink: Color32) -> Color32 {
+    let [r, g, b] = [(0, ink.r()), (1, ink.g()), (2, ink.b())].map(|(at, to)| {
+        (LINE_AREA[at] as f32 + (to as f32 - LINE_AREA[at] as f32) * LINE_CAST).round() as u8
+    });
+    Color32::from_rgba_unmultiplied(r, g, b, LINE_ALPHA)
+}
+
+/// The bins of `plotted` across `bars` on the column's scale `counts`, on
+/// the plot's ground, as [`lines`] draws them, with `rules` over them, each
+/// a bin and its ink, gliding to it as [`glided`] has them in `section`.
+/// Drawn alike in every section, so that a bar reads the same down the
+/// column.
+pub(super) fn bars(
+    pass: &Pass,
+    ui: &egui::Ui,
+    section: Section,
+    plotted: &Plot,
+    counts: Counts,
+    bars: Rect,
+    rules: &[(usize, Color32)],
+) -> Vec<f32> {
+    // Luminance first, so that its line runs under the color planes'.
+    let planes: Vec<(&[u32; BINS], Color32)> =
+        std::iter::once((&plotted.luma, Color32::from(HISTOGRAM_LUMA.with_alpha(255))))
+            .chain(
+                plotted
+                    .color
+                    .iter()
+                    .flatten()
+                    .zip(HISTOGRAM_PLANES)
+                    .map(|(plane, ink)| (plane, Color32::from(ink))),
+            )
+            .collect();
+    draw(pass, ui, section, &planes, counts, bars, rules, Tail::Drawn)
+}
+
+/// One plane on its own ground, in its own ink, as [`bars`] draws a plot's
+/// planes together: the Image section's plot of one stored channel, its
+/// line ended where the last of the channel's pixels is behind it.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn plane_bars(
+    pass: &Pass,
+    ui: &egui::Ui,
+    section: Section,
+    plane: &[u32; BINS],
+    ink: Color32,
+    counts: Counts,
+    bars: Rect,
+    rules: &[(usize, Color32)],
+) -> Vec<f32> {
+    draw(
+        pass,
+        ui,
+        section,
+        &[(plane, ink)],
+        counts,
+        bars,
+        rules,
+        Tail::Dropped,
+    )
+}
+
+/// What becomes of a plane's line past its last lit bin, where every pixel
+/// is behind it and the rule there reads 100%.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Tail {
+    /// Drawn on along the axis to the plot's end.
+    Drawn,
+    /// Brought down to the axis and ended there: a channel's plot on a
+    /// range shared with the others, or wider than its pixels, would
+    /// otherwise draw a line along the floor through values it does not
+    /// hold, which reads as a count of nothing there rather than as the
+    /// end of the channel.
+    Dropped,
+}
+
+/// The ground, `planes` over it, and `rules` over them; where each rule
+/// stands this frame, as [`rule_over`] has it.
+#[allow(clippy::too_many_arguments)]
+fn draw(
+    pass: &Pass,
+    ui: &egui::Ui,
+    section: Section,
+    planes: &[(&[u32; BINS], Color32)],
+    counts: Counts,
+    bars: Rect,
+    rules: &[(usize, Color32)],
+    tail: Tail,
+) -> Vec<f32> {
+    let painter = ui.painter();
     painter.rect_filled(
         egui::Rect::from(bars.inset(-PLOT_INSET, -PLOT_INSET)),
         PLOT_RADIUS,
         PLOT_BACKGROUND,
     );
+    lines(pass, ui, planes, counts, bars, tail);
+    rule_over(pass, ui, section, bars, rules)
+}
 
-    // Luminance always goes down first, underneath the color planes: it
-    // runs as tall as the tallest of them about as often as not, and painting
-    // it on top swamps the color the panel exists to show.
-    let plotted = &current.stats.plot;
-    let luma: Option<&[u32; BINS]> = panels.show_luma.then_some(&plotted.luma);
-    let color: &[[u32; BINS]] = match plotted.color.as_ref() {
-        Some(planes) if panels.show_planes => planes,
-        _ => &[],
-    };
-    let (axis_min, axis_max) = (plotted.min, plotted.max);
-    let span = axis_max - axis_min;
-    let transfer = current.image.color.transfer;
-    let headroom = input.headroom;
+/// How long a rule takes to follow the pointer to its next bin, in seconds:
+/// long enough to be seen moving rather than jumping, short enough never to
+/// trail the hand.
+const RULE_GLIDE: f64 = 0.1;
 
-    // One peak across every plane on screen, so their heights stay
-    // comparable — and only across those, so that a plane left on its own
-    // fills the plot rather than keeping the room a hidden one wanted.
-    let peak = color
-        .iter()
-        .chain(luma)
-        .flatten()
-        .copied()
-        .max()
-        .unwrap_or(1);
-    let height_of = |count: u32| bar_fraction(count, peak, panels.log_counts) * bars.height;
+/// A rule on its way from one place on the axis to another, as fractions of
+/// the way along it: where it set off from, where it is going, when it set
+/// off, and the last frame it was drawn on.
+#[derive(Clone, Copy)]
+struct Glide {
+    from: f32,
+    to: f32,
+    start: f64,
+    frame: u64,
+}
 
-    // Dimmed only when it is a backdrop; with the color planes off — or on
-    // a gray image, which has none — it is the plot.
-    let luma_ink = if color.is_empty() {
-        HISTOGRAM_LUMA
-    } else {
-        HISTOGRAM_LUMA.with_alpha(HISTOGRAM_LUMA_UNDER)
-    };
-
-    // One column to a bin — the bins are a logical pixel each, which is what
-    // the panel's width was fixed for — cut into stretches by the heights of
-    // the planes standing in it, each stretch filled with what the planes
-    // over it come to. On the device's grid, like every other mark here.
-    let grid = pass.grid;
-    let snap = |value: f32| grid.snap(value);
-    let edge = |index: usize| snap(bars.x + bars.width * index as f32 / BINS as f32);
-    for bin in 0..BINS {
-        let (left, right) = (edge(bin), edge(bin + 1));
-        let mut heights: Vec<(f32, usize)> = Vec::with_capacity(4);
-        if let Some(counts) = luma {
-            heights.push((height_of(counts[bin]), 3));
-        }
-        for (plane, counts) in color.iter().enumerate() {
-            heights.push((height_of(counts[bin]), plane));
-        }
-        heights.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let mut cover = Cover {
-            luma: luma.is_some(),
-            planes: [!color.is_empty(); 3],
-        };
-        let mut from = 0.0;
-        for (height, plane) in heights {
-            let (bottom, top) = (snap(bars.bottom() - from), snap(bars.bottom() - height));
-            if top < bottom {
-                painter.rect_filled(
-                    egui::Rect::from_min_max(pos2(left, top), pos2(right, bottom)),
-                    0.0,
-                    screened(luma_ink, cover),
-                );
-            }
-            from = height;
-            match plane {
-                3 => cover.luma = false,
-                plane => cover.planes[plane] = false,
-            }
-        }
+impl Glide {
+    /// Where the rule is at `now`: easing out, quick to leave and slow to
+    /// arrive, so that it settles rather than stops.
+    fn at(self, now: f64) -> f32 {
+        let t = ((now - self.start) / RULE_GLIDE).clamp(0.0, 1.0) as f32;
+        let eased = 1.0 - (1.0 - t).powi(3);
+        self.from + (self.to - self.from) * eased
     }
+}
 
-    // The pointer's rule: over the bins it is picking one of, and under the
-    // response curve, since where that curve runs at this value is half of
-    // what the readout above says and the line must not cover it.
+/// Where the rule `id` is drawn on its way to `target`, a fraction of the
+/// way along the axis, with another frame asked for while it is still
+/// moving. A rule that was not drawn on the frame before — the pointer
+/// arriving on the picture or the plot, or coming back to it — stands at
+/// once where it is going rather than gliding in from where it was last.
+fn glided(ui: &egui::Ui, id: egui::Id, target: f32) -> f32 {
+    let ctx = ui.ctx();
+    let now = ui.input(|input| input.time);
+    let frame = ctx.cumulative_frame_nr();
+    let glide = match ctx.data(|data| data.get_temp::<Glide>(id)) {
+        Some(held) if held.frame + 1 >= frame && held.to == target => Glide { frame, ..held },
+        Some(held) if held.frame + 1 >= frame => Glide {
+            from: held.at(now),
+            to: target,
+            start: now,
+            frame,
+        },
+        _ => Glide {
+            from: target,
+            to: target,
+            start: now,
+            frame,
+        },
+    };
+    ctx.data_mut(|data| data.insert_temp(id, glide));
+    let shown = glide.at(now);
+    if shown != glide.to {
+        ctx.request_repaint();
+    }
+    shown
+}
+
+/// The pointer's rule across `bars` in `section`, each a bin and its ink;
+/// where each stands this frame on its way there, a fraction of the way
+/// along the axis, in the order given.
+fn rule_over(
+    pass: &Pass,
+    ui: &egui::Ui,
+    section: Section,
+    bars: Rect,
+    rules: &[(usize, Color32)],
+) -> Vec<f32> {
+    let grid = pass.grid;
+    let painter = ui.painter();
+    // The pointer's rule: over the bins it is picking one of, and under
+    // anything drawn over them, which is half of what the readout says
+    // where there is a curve and the line must not cover it.
     //
     // Full height, where the window's own marks are handles on the band. A
     // rule standing through the plot is what a pointer wants and what a
     // permanent annotation does not: this one is only there while it is
     // being aimed, and it has to be followed up from the axis to the curve.
-    let marked = marked(current, content, input.cursor, input.pointer);
-    if let Some(across) = marked.map(bin_across) {
+    //
+    // Each glides to its bin rather than jumping, so that a pointer swept
+    // across the picture is followed by rules moving down the column rather
+    // than by rules flickering from place to place. A rule is known by its
+    // section and its ink, which is its plane, or the accent.
+    let mut stands = Vec::with_capacity(rules.len());
+    for &(bin, ink) in rules {
+        let across = glided(
+            ui,
+            egui::Id::new(("histogram rule", section, ink)),
+            bin_across(bin),
+        );
         painter.rect_filled(
             egui::Rect::from(grid.rect(Rect::new(
                 bars.x + across * bars.width - CURSOR_WIDTH / 2.0,
@@ -256,107 +402,221 @@ pub(super) fn plot(pass: &Pass, ui: &egui::Ui, current: &Current, panel: Rect, c
                 bars.height,
             ))),
             0.0,
-            theme.accent.with_alpha(CURSOR_ALPHA),
+            ink,
         );
+        stands.push(across);
     }
+    stands
+}
 
-    if span <= 0.0 {
-        return;
-    }
-
-    // How much of the picture the window is throwing away, in the corner
-    // it is being thrown out of: the share of the pixels at or below what
-    // comes out black in the left corner, and at or above what comes out
-    // white in the right — where the surface is actually clipping them,
-    // rather than showing them or rolling them off. Only where there is a
-    // share to write, so that a corner with a number in it is news.
-    //
-    // This is the question the panel is most often opened to answer, and a
-    // spike against the edge of the plot cannot answer it: the spike says
-    // there is clipping and the number says how much.
-    let (black, white) = current.display.displayed_bounds();
-    let [below, above] = current
-        .stats
-        .plot
-        .clipped(transfer.to_encoded(black), transfer.to_encoded(white));
-    let above = if current.display.clips_white(gray, headroom) {
-        above
+/// `words` beside a rule standing `across` the plot `bars`, in `ink`, on
+/// the `row`th line down from the top of the plot: after the rule where
+/// they fit and before it where they would run past the plot's end, as the
+/// white mark's label is. Over a fade of the plot's ground, so that a line
+/// the words cross does not run through them.
+pub(super) fn rule_label(
+    ui: &egui::Ui,
+    bars: Rect,
+    across: f32,
+    row: usize,
+    words: &str,
+    ink: Color32,
+) {
+    let painter = ui
+        .painter()
+        .with_clip_rect(egui::Rect::from(bars.inset(-PLOT_INSET, -PLOT_INSET)));
+    let galley = painter.layout_no_wrap(
+        words.to_owned(),
+        FontId::proportional(CLIP_TEXT),
+        Color32::PLACEHOLDER,
+    );
+    let size = galley.size();
+    let x = bars.x + across * bars.width;
+    let left = if x + RULE_LABEL_GAP + size.x <= bars.right() - CLIP_INSET {
+        x + RULE_LABEL_GAP
     } else {
-        0.0
+        x - RULE_LABEL_GAP - size.x
     };
-    let clip_font = FontId::proportional(CLIP_TEXT);
-    for (share, right) in [(below, false), (above, true)] {
-        let Some(words) = share_words(share) else {
-            continue;
-        };
-        let width = width_of(ui, &words, CLIP_TEXT);
-        let x = if right {
-            bars.right() - CLIP_INSET - width
-        } else {
-            bars.x + CLIP_INSET
-        };
-        let text = Rect::new(x, bars.y + CLIP_INSET, width, CLIP_TEXT);
-        painter.rect_filled(
-            egui::Rect::from(text.inset(-CLIP_PAD, -CLIP_PAD)),
-            CLIP_PAD,
-            PLOT_BACKGROUND.with_alpha(CLIP_BACKING_ALPHA),
-        );
-        painter.text(
-            pos2(text.x, text.y),
-            Align2::LEFT_TOP,
-            words,
-            clip_font.clone(),
-            theme.accent.into(),
-        );
-    }
+    let at = pos2(left, bars.y + CLIP_INSET + row as f32 * size.y);
+    let fade = egui::Shadow {
+        offset: [0, 0],
+        blur: RULE_LABEL_FADE,
+        spread: 0,
+        color: Color32::from(PLOT_BACKGROUND.with_alpha(RULE_LABEL_FADE_ALPHA)),
+    };
+    painter.add(fade.as_shape(egui::Rect::from_min_size(at, size), 0.0));
+    painter.galley(at, galley, ink);
+}
 
-    // What the display turns each value into, in a band along the foot of
-    // the plot: the bin above a cell, and the color it comes out as under it.
-    //
-    // The curve says how much and this says what of, which are different
-    // questions on a false-colored image — a curve cannot draw viridis —
-    // and the same question answered twice on a gray one, where the band is
-    // the tone curve as a wedge and the curve is it as a shape. It is where
-    // clipping stops being an inference: everything left of the window
-    // comes out black and everything right of it comes out at the top of
-    // the ramp, so the two flat runs at the ends are the range the display
-    // is throwing away, drawn at the width they occupy. The handles that
-    // set those ends are drawn over it, in [`track()`].
-    let band = ramp(bars);
-    let (top, bottom) = (snap(band.y), snap(band.bottom()));
-    // A cell above white — which only a surface with room above white has,
-    // and only with no curve on — is drawn white, since the panel cannot
-    // glow, with the accent along its top edge to say that the screen does:
-    // the same ink as the handle that marks white on the band, and the run
-    // of it is how much of the axis is out past that.
-    let channels = current.image.channels();
-    let hair = 1.0 / scale;
-    for index in 0..BINS {
-        let (left, right) = (edge(index), edge(index + 1));
-        let across = (index as f32 + 0.5) / BINS as f32;
-        let value = transfer.to_linear(axis_min + across * span);
-        painter.rect_filled(
-            egui::Rect::from_min_max(pos2(left, top), pos2(right, bottom)),
-            0.0,
-            Color::from_linear(current.display.shade(value, channels, headroom)),
-        );
-        if current
-            .display
-            .response(value, channels.is_gray(), headroom)
-            > ABOVE_WHITE
-        {
+/// The room between a rule and the words beside it.
+const RULE_LABEL_GAP: f32 = 3.0;
+
+/// The fade of the plot's ground under the words beside a rule: how far it
+/// feathers out past them, and how much of what is under them it hides.
+const RULE_LABEL_FADE: u8 = 6;
+const RULE_LABEL_FADE_ALPHA: u8 = 230;
+
+/// The plot's planes, in the order given, at one column to a device pixel
+/// and as tall as the fullest bin under it, so that a spike is not averaged
+/// away by its neighbors: each plane's area laid down in [`line_area`], each
+/// over the others', then each plane's top as a line in its own ink, the
+/// first plane's under the rest, run on past its last lit column as `tail`
+/// says; and a cap in the accent along the top of a column cut off there.
+fn lines(
+    pass: &Pass,
+    ui: &egui::Ui,
+    planes: &[(&[u32; BINS], Color32)],
+    counts: Counts,
+    bars: Rect,
+    tail: Tail,
+) {
+    let grid = pass.grid;
+    let painter = ui
+        .painter()
+        .with_clip_rect(egui::Rect::from(bars.inset(-PLOT_INSET, -PLOT_INSET)));
+    let columns: Vec<_> = grid.columns(bars.x, bars.width).collect();
+    let heights: Vec<Vec<f32>> = planes
+        .iter()
+        .map(|(plane, _)| {
+            let total = total(plane);
+            columns
+                .iter()
+                .map(|column| {
+                    counts.up(
+                        tallest(plane, bins_under(column.index, column.count)),
+                        total,
+                    )
+                })
+                .collect()
+        })
+        .collect();
+    for (plane, (_, ink)) in heights.iter().zip(planes) {
+        let area = line_area(*ink);
+        for (column, &height) in columns.iter().zip(plane) {
+            let top = grid.snap(bars.bottom() - height.min(1.0) * bars.height);
+            if top < bars.bottom() {
+                painter.rect_filled(
+                    egui::Rect::from_min_max(
+                        pos2(column.left, top),
+                        pos2(column.right, bars.bottom()),
+                    ),
+                    0.0,
+                    area,
+                );
+            }
+        }
+    }
+    let width = grid.device_pixels(LINE_PIXELS);
+    for (plane, (bins, ink)) in heights.iter().zip(planes) {
+        let ends = traced(bins, columns.len(), tail);
+        let points: Vec<_> = columns[..ends]
+            .iter()
+            .zip(plane)
+            .map(|(column, &height)| {
+                pos2(
+                    (column.left + column.right) / 2.0,
+                    bars.bottom() - height.min(1.0) * bars.height,
+                )
+            })
+            .collect();
+        if points.len() > 1 {
+            painter.line(points, egui::Stroke::new(width, *ink));
+        }
+    }
+    for (index, column) in columns.iter().enumerate() {
+        if heights.iter().any(|plane| plane[index] > 1.0) {
             painter.rect_filled(
-                egui::Rect::from_min_max(pos2(left, top), pos2(right, top + hair)),
+                egui::Rect::from_min_max(
+                    pos2(column.left, grid.snap(bars.y)),
+                    pos2(column.right, grid.snap(bars.y) + grid.line_width(CUT_CAP)),
+                ),
                 0.0,
-                theme.accent,
+                pass.theme.accent,
             );
         }
     }
-    // Outside the color rather than over it, so that the band keeps its
-    // full depth. A window left of everything makes the whole ramp black,
-    // and a black band on a dark panel is a gap in it without this. One
-    // physical pixel, snapped like the band it rings.
-    let (left, right) = (edge(0), edge(BINS));
+}
+
+/// How many of `columns` columns over `plane` its line is traced through:
+/// all of them where the `tail` is drawn, and otherwise up to the last
+/// column holding anything and the one after it, where the line comes down
+/// to the axis — none at all for a plane that holds nothing.
+fn traced(plane: &[u32; BINS], columns: usize, tail: Tail) -> usize {
+    if tail == Tail::Drawn {
+        return columns;
+    }
+    (0..columns)
+        .rev()
+        .find(|&column| tallest(plane, bins_under(column, columns)) > 0)
+        .map_or(0, |last| (last + 2).min(columns))
+}
+
+/// How a band marks the stretch of it where the screen goes past white,
+/// which the panel cannot show, since it cannot glow.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Past {
+    /// The accent along its top.
+    Rule,
+    /// A run of chevrons pointing right, in the accent, over it: what goes
+    /// out lifted above white, on the band that is nothing but what goes
+    /// out.
+    Chevrons,
+}
+
+/// The band under the plot `bars`: a device pixel to the cell, each the
+/// color `shade` gives for its place along the axis, from 0 at the left to
+/// 1 at the right, marked as `past` says where `shade` says the screen goes
+/// past white there. Outlined outside the color rather than over it, so
+/// that a band that comes out black is still a band on a dark panel.
+pub(super) fn band(
+    pass: &Pass,
+    ui: &egui::Ui,
+    bars: Rect,
+    past: Past,
+    shade: impl Fn(f32) -> Shade,
+) {
+    let theme = pass.theme;
+    let painter = ui.painter();
+    let grid = pass.grid;
+    let band = ramp(bars);
+    let (top, bottom) = (grid.snap(band.y), grid.snap(band.bottom()));
+    let hair = grid.device_pixels(1.0);
+    let cells: Vec<_> = grid.columns(bars.x, bars.width).collect();
+    let mut lifted: Option<(f32, f32)> = None;
+    for column in &cells {
+        let (left, right) = (column.left, column.right);
+        let (color, above) = shade(column.t_center());
+        painter.rect_filled(
+            egui::Rect::from_min_max(pos2(left, top), pos2(right, bottom)),
+            0.0,
+            color,
+        );
+        if above {
+            match past {
+                Past::Rule => {
+                    painter.rect_filled(
+                        egui::Rect::from_min_max(pos2(left, top), pos2(right, top + hair)),
+                        0.0,
+                        theme.accent,
+                    );
+                }
+                Past::Chevrons => {
+                    lifted = Some(lifted.map_or((left, right), |(from, _)| (from, right)));
+                }
+            }
+        }
+    }
+    if let Some((from, to)) = lifted {
+        chevrons(
+            pass,
+            ui,
+            egui::Rect::from_min_max(pos2(from, top), pos2(to, bottom)),
+        );
+    }
+    let (Some(first), Some(last)) = (cells.first(), cells.last()) else {
+        return;
+    };
+    let (left, right) = (first.left, last.right);
     outline(
         painter,
         grid,
@@ -369,157 +629,279 @@ pub(super) fn plot(pass: &Pass, ui: &egui::Ui, current: &Current, panel: Rect, c
         hair,
         theme.border.into(),
     );
+}
 
-    // What the display is doing to the values underneath, drawn over them —
-    // and only where it is doing something. On a display with nothing asked
-    // of it the curve is the diagonal from corner to corner, which says
-    // nothing the axis under it does not, and a line across every plot is a
-    // line no one looks at; drawn only when it bends, or leans, it is news.
-    //
-    // The curve is the whole of what the display does, and the only part of
-    // the panel that can show a tone map at all: a shoulder is a shape, not
-    // a threshold, and there is no line that means "rolled off". The handles
-    // on the band place the two values that come out black and white,
-    // exposure included, which a curve meeting its floor tangentially
-    // cannot be read for by eye.
-    if current.display.is_identity() {
+/// How far apart the chevrons over a band's lifted stretch stand, and how
+/// far each one is kept off the band's top and bottom.
+const CHEVRON_PITCH: f32 = 6.0;
+const CHEVRON_INSET: f32 = 2.0;
+
+/// Chevrons pointing right, one every [`CHEVRON_PITCH`] from the left of
+/// `stretch` and cut off at its right, in the accent: the stretch of a band
+/// that is lifted past white.
+fn chevrons(pass: &Pass, ui: &egui::Ui, stretch: egui::Rect) {
+    let grid = pass.grid;
+    let painter = ui.painter().with_clip_rect(stretch);
+    let stroke = egui::Stroke::new(grid.line_width(1.0), Color32::from(pass.theme.accent));
+    let (high, low) = (
+        stretch.top() + CHEVRON_INSET,
+        stretch.bottom() - CHEVRON_INSET,
+    );
+    let middle = (high + low) / 2.0;
+    let depth = (low - high) / 2.0;
+    let mut x = stretch.left() + CHEVRON_INSET;
+    while x < stretch.right() {
+        painter.line(
+            vec![pos2(x, high), pos2(x + depth, middle), pos2(x, low)],
+            stroke,
+        );
+        x += CHEVRON_PITCH;
+    }
+}
+
+/// The row of whole stops along a plot's axis, drawn in `row`, which spans
+/// the plot's width: a tick at every stop from `stops` that `place` puts on
+/// the axis — as a fraction of the way along it, or `None` off it — and the
+/// stop's number under the ticks there is room to write it beside.
+///
+/// Worked out from 0 outward each way, so that 0 is always written and the
+/// others give way to it and to their neighbors nearer 0; a direction stops
+/// where its ticks come closer than [`EV_TICK_GAP`], which on an axis spaced
+/// on a curve or in linear light is where the stops crowd into the shadows
+/// past reading. Exact wherever it is drawn: a tick stands where the stop's
+/// value falls on the axis, worked out from the value rather than from the
+/// bins.
+pub(super) fn ev_scale(
+    pass: &Pass,
+    ui: &egui::Ui,
+    row: Rect,
+    stops: std::ops::RangeInclusive<i32>,
+    place: impl Fn(i32) -> Option<f32>,
+) {
+    let at = |t: f32| row.x + t * row.width;
+    // The extents the labels written so far take, so that the next one out
+    // is left off where it would touch.
+    let mut taken: Vec<(f32, f32)> = Vec::new();
+    let draw = |stop: i32, x: f32, taken: &mut Vec<(f32, f32)>| {
+        let words = if stop == 0 {
+            "0".to_string()
+        } else {
+            format!("{stop:+}")
+        };
+        let ink = if stop == 0 {
+            pass.theme.text_primary
+        } else {
+            pass.theme.text_dim
+        };
+        tick(pass, ui, row, x, &words, ink.into(), taken);
+    };
+    let (low, high) = (*stops.start(), *stops.end());
+    let walk = |from: i32, to: i32, step: i32, taken: &mut Vec<(f32, f32)>| {
+        let mut last: Option<f32> = None;
+        let mut stop = from;
+        while (step > 0 && stop <= to) || (step < 0 && stop >= to) {
+            if let Some(t) = place(stop).filter(|t| (0.0..=1.0).contains(t)) {
+                let x = at(t);
+                if last.is_some_and(|last| (x - last).abs() < EV_TICK_GAP) {
+                    break;
+                }
+                last = Some(x);
+                draw(stop, x, taken);
+            }
+            stop += step;
+        }
+    };
+    let start = 0.clamp(low, high);
+    walk(start, high, 1, &mut taken);
+    walk(start - 1, low, -1, &mut taken);
+}
+
+/// A row of values along a plot's axis, drawn in `row`, which spans the
+/// plot's width: a tick at each of `ticks`, a fraction of the way along the
+/// axis and the words for the value there, and the words under the ticks
+/// there is room to write them beside, the earlier in `ticks` first.
+pub(super) fn value_scale(pass: &Pass, ui: &egui::Ui, row: Rect, ticks: &[(f32, String)]) {
+    let mut taken: Vec<(f32, f32)> = Vec::new();
+    for (t, words) in ticks {
+        if (0.0..=1.0).contains(t) {
+            let x = row.x + t * row.width;
+            tick(
+                pass,
+                ui,
+                row,
+                x,
+                words,
+                pass.theme.text_dim.into(),
+                &mut taken,
+            );
+        }
+    }
+}
+
+/// One tick of a row along an axis, at `x` in `row`, and `words` under it
+/// in `ink`, held inside the row and left off where they would touch any of
+/// `taken`, the extents of the words written before them, which they join.
+fn tick(
+    pass: &Pass,
+    ui: &egui::Ui,
+    row: Rect,
+    x: f32,
+    words: &str,
+    ink: Color32,
+    taken: &mut Vec<(f32, f32)>,
+) {
+    let grid = pass.grid;
+    let painter = ui.painter();
+    let hair = grid.line_width(1.0);
+    painter.rect_filled(
+        egui::Rect::from(grid.rect(Rect::new(x - hair / 2.0, row.y, hair, EV_TICK))),
+        0.0,
+        pass.theme.text_dim,
+    );
+    let width = width_of(ui, words, CLIP_TEXT);
+    let left = (x - width / 2.0).clamp(row.x, row.right() - width);
+    let span = (left - EV_LABEL_GAP / 2.0, left + width + EV_LABEL_GAP / 2.0);
+    if taken.iter().any(|(a, b)| span.0 < *b && *a < span.1) {
         return;
     }
-    // Sampled per column rather than per bin: the response is a continuous
-    // function of the value, and stepping it where the transform does not
-    // step would draw a stair that is not there.
-    //
-    // The same one check for every column, the arithmetic being the same
-    // for all of them: a window left non-finite would otherwise put NaN
-    // vertices in the buffer, which no clamp downstream can undo.
-    let (offset, gain) = current.display.transform();
-    if !(offset.is_finite() && gain.is_finite()) {
-        return;
-    }
-    let columns = bars.width.max(1.0) as usize;
-    // Decoded to run the transform on, then encoded again to be drawn: both
-    // axes are in the file's own units, so a display doing nothing would be
-    // the diagonal.
-    let responses: Vec<f32> = (0..=columns)
-        .map(|column| {
-            let across = column as f32 / columns as f32;
-            let value = transfer.to_linear(axis_min + across * span);
-            let response = current
-                .display
-                .response(value, channels.is_gray(), headroom)
-                .max(0.0);
-            transfer.to_encoded(response).max(0.0)
-        })
-        .collect();
-    // The plot's height is white, unless the response runs past it — a
-    // surface with room above white, and no curve on — in which case the
-    // top is wherever the response gets to and white is a line across the
-    // plot, so that the room above it can be seen as the room it is rather
-    // than as a clip that is not happening.
-    let highest = responses.iter().copied().fold(0.0, f32::max);
-    let plot_scale = Scale::new(transfer.to_encoded(1.0), highest);
-    if let Some(white) = plot_scale.white {
-        let y = grid.snap(bars.bottom() - white * bars.height);
-        painter.rect_filled(
-            egui::Rect::from_min_size(pos2(bars.x, y), vec2(bars.width, 1.0 / scale)),
-            0.0,
-            theme.text_dim,
-        );
-        let size = TEXT_SIZE * 0.75;
-        painter.text(
-            pos2(bars.right() - 2.0, y - size * 0.3),
-            Align2::RIGHT_BOTTOM,
-            WHITE_LABEL,
-            FontId::proportional(size),
-            theme.text_dim.into(),
-        );
-    }
-    let curve: Vec<egui::Pos2> = responses
-        .iter()
-        .enumerate()
-        .map(|(column, &response)| {
-            let across = column as f32 / columns as f32;
-            pos2(
-                bars.x + across * bars.width,
-                bars.bottom() - plot_scale.up(response) * bars.height,
-            )
-        })
-        .collect();
-    painter.add(egui::Shape::line(
-        curve,
-        Stroke::new(CURVE_WIDTH, theme.accent),
-    ));
+    taken.push(span);
+    painter.text(
+        pos2(grid.snap(left), row.y + EV_TICK),
+        Align2::LEFT_TOP,
+        words,
+        FontId::proportional(CLIP_TEXT),
+        ink,
+    );
+}
+
+/// The rule that marks white on the plot `bars`, where white is not the top
+/// of the plot: `across` of the way along the axis, standing from the axis
+/// `up` of the way to the top, and named at its head. On a surface with
+/// room above white, the room past it can then be seen as the room it is
+/// rather than as a clip that is not happening. Upright, as the axis's own
+/// marks are: a rule across the plot would cross the bins as though it
+/// measured them.
+pub(super) fn white_mark(pass: &Pass, ui: &egui::Ui, bars: Rect, across: f32, up: f32) {
+    let theme = pass.theme;
+    let grid = pass.grid;
+    let painter = ui.painter();
+    let hair = grid.device_pixels(1.0);
+    let x = grid.snap(bars.x + across * bars.width);
+    let top = grid.snap(bars.bottom() - up * bars.height);
+    painter.rect_filled(
+        egui::Rect::from(grid.rect(Rect::new(x - hair / 2.0, top, hair, bars.bottom() - top))),
+        0.0,
+        theme.text_dim,
+    );
+    // Named at its head. A rule that runs the plot's height is named beside
+    // its top, after it where the word fits and before it where it does
+    // not; one that stops at a curve is named above its head and before it,
+    // which is the side a curve rising to the right leaves clear.
+    let size = TEXT_SIZE * 0.75;
+    let width = width_of(ui, WHITE_LABEL, size);
+    let (at, align) = if up < 1.0 {
+        (pos2(x - 3.0, top - 3.0), Align2::RIGHT_BOTTOM)
+    } else if x + 3.0 + width <= bars.right() - CLIP_INSET {
+        (pos2(x + 3.0, bars.y + CLIP_INSET), Align2::LEFT_TOP)
+    } else {
+        (pos2(x - 3.0, bars.y + CLIP_INSET), Align2::RIGHT_TOP)
+    };
+    painter.text(
+        at,
+        align,
+        WHITE_LABEL,
+        FontId::proportional(size),
+        theme.text_dim.into(),
+    );
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::icon::Grid;
 
-    /// Either way of scaling the plot draws an empty bin flat on the axis and
-    /// the fullest one at the top of it: what changes is only what the bins
-    /// between them do with the room.
-    #[test]
-    fn both_count_axes_run_from_the_axis_to_the_top_of_the_plot() {
-        for log in [false, true] {
-            assert_eq!(bar_fraction(0, 1000, log), 0.0, "an empty bin is flat");
-            assert_eq!(bar_fraction(1000, 1000, log), 1.0, "the peak fills it");
-            // A plot of nothing at all, which a blank image gives: no bar is
-            // drawn off the top of it.
-            assert_eq!(bar_fraction(0, 0, log), 0.0);
+    /// A plot of luminance alone, `counts` across its bins.
+    fn plot_of(counts: [u32; BINS]) -> Plot {
+        Plot {
+            min: 0.0,
+            max: 1.0,
+            luma: counts,
+            color: None,
         }
     }
 
-    /// And the logarithm lifts the short bars towards the tall one, which is
-    /// the whole reason to reach for it: a bin holding a thousandth of what
-    /// the fullest one holds is a hair off the axis linearly, and half the
-    /// height of the plot once the axis is logarithmic.
+    /// The Image section's line comes down to the axis after the last lit
+    /// column and ends there; every other section's runs on to the plot's
+    /// end, and a plane holding nothing is not traced at all.
     #[test]
-    fn the_logarithm_lifts_the_bins_a_dominating_one_flattens() {
-        let (linear, log) = (
-            bar_fraction(1_000, 1_000_000, false),
-            bar_fraction(1_000, 1_000_000, true),
+    fn a_dropped_tail_ends_the_line_where_the_pixels_end() {
+        let columns = 100;
+        let mut plane = [0u32; BINS];
+        plane[bins_under(39, columns).start] = 5;
+        assert_eq!(traced(&plane, columns, Tail::Dropped), 41);
+        assert_eq!(traced(&plane, columns, Tail::Drawn), columns);
+        plane[BINS - 1] = 1;
+        assert_eq!(
+            traced(&plane, columns, Tail::Dropped),
+            columns,
+            "lit to the end"
         );
-        assert!(linear < 0.01, "{linear}");
-        assert!((0.4..0.6).contains(&log), "{log}");
-
-        // Monotone either way: a fuller bin is never drawn shorter than an
-        // emptier one, which is what keeps the shape on the plot readable as
-        // the distribution however it is scaled.
-        for log in [false, true] {
-            let heights: Vec<f32> = [0, 1, 2, 10, 500, 999, 1000]
-                .into_iter()
-                .map(|count| bar_fraction(count, 1000, log))
-                .collect();
-            assert!(
-                heights.windows(2).all(|pair| pair[0] < pair[1]),
-                "log {log}: {heights:?}"
-            );
-        }
+        assert_eq!(traced(&[0; BINS], columns, Tail::Dropped), 0);
     }
 
-    /// What the three color planes come to where they overlap, screened in
-    /// the encoded values as [`screened`] screens them, the panel's painter
-    /// having one blend and that one on encoded colors.
-    fn overlapped(planes: [Color; COLOR]) -> [f32; 3] {
-        let mut out = [0.0f32; 3];
-        for (channel, value) in out.iter_mut().enumerate() {
-            *value = 1.0
-                - planes
-                    .iter()
-                    .map(|plane| 1.0 - [plane.r, plane.g, plane.b][channel] as f32 / 255.0)
-                    .product::<f32>();
-        }
-        out
+    /// A spike cannot set the scale: a picture spread evenly but for one
+    /// bin holding most of it stands on a scale the even bins nearly fill,
+    /// and the spike runs past the top. The pile at either end is left out of
+    /// the scale too.
+    #[test]
+    fn a_spike_is_cut_off_rather_than_flattening_the_rest() {
+        let mut counts = [100; BINS];
+        counts[BINS / 2] = 1_000_000;
+        counts[BINS - 1] = 5_000_000;
+        let plot = plot_of(counts);
+        let scale = Counts::of(&plot);
+        let total = total(&plot.luma);
+        let even = scale.up(100, total);
+        assert!((0.9..=1.0).contains(&even), "{even}");
+        assert!(scale.up(1_000_000, total) > 1.0);
+        assert!(scale.up(5_000_000, total) > 1.0);
+        assert_eq!(scale.up(0, total), 0.0, "an empty bin is flat");
     }
 
-    /// Each plane leads in its own channel by a wide margin, so two
-    /// overlapping give a secondary and all three give a near white — and
-    /// none of them is the primary itself, which at a pixel to the bin is
-    /// a spike the eye cannot leave alone.
+    /// The scale is a share of the picture, not a count: the same share
+    /// stands as tall on a plot of a picture of any size, which is what lets
+    /// the gain map's plot, of a smaller picture, share the column's.
+    #[test]
+    fn the_same_share_stands_as_tall_whatever_the_count() {
+        let scale = Counts::of(&plot_of([100; BINS]));
+        let small = scale.up(1, BINS as u64);
+        let large = scale.up(1_000, 1_000 * BINS as u64);
+        assert!((small - large).abs() < 1e-6, "{small} {large}");
+        assert!((small - 1.0).abs() < 1e-6, "an even plot fills it: {small}");
+    }
+
+    /// A plot with nothing inside its ends is scaled to its fullest bin,
+    /// and one with nothing at all draws nothing rather than a bar off the
+    /// top.
+    #[test]
+    fn a_plot_with_nothing_inside_its_ends_still_has_a_scale() {
+        let mut counts = [0; BINS];
+        counts[0] = 300;
+        counts[BINS - 1] = 100;
+        let plot = plot_of(counts);
+        let scale = Counts::of(&plot);
+        assert!((scale.up(300, 400) - 1.0).abs() < 1e-6);
+        assert!(scale.up(100, 400) < 1.0);
+
+        let empty = Counts::of(&plot_of([0; BINS]));
+        assert_eq!(empty.up(0, 0), 0.0);
+    }
+
+    /// Each plane leads in its own channel by a wide margin, so three lines
+    /// crossing stay three — and none of them is the primary itself, which
+    /// at a pixel to the bin is a spike the eye cannot leave alone.
     #[test]
     fn the_color_planes_are_one_channel_each() {
-        let white = overlapped(HISTOGRAM_PLANES);
-        assert!(white.iter().all(|channel| *channel > 0.9), "{white:?}");
         for (channel, plane) in HISTOGRAM_PLANES.iter().enumerate() {
             let levels = [plane.r, plane.g, plane.b];
             for (other, level) in levels.iter().enumerate() {
@@ -533,14 +915,132 @@ mod tests {
         }
     }
 
-    /// The plane under them stands for a pixel's value, not for one of its
-    /// channels, so it carries no hue; and the ground they are screened on
-    /// is near black, or screening would not read.
+    /// The luminance plane stands for a pixel's value, not for one of its
+    /// channels, so it carries no hue; and the ground the planes are drawn
+    /// on is near black, or their faint areas would not read.
     #[test]
     fn the_luminance_plane_is_neutral_and_the_ground_is_dark() {
         let luma = HISTOGRAM_LUMA;
         assert!(luma.r == luma.g && luma.g == luma.b, "{luma:?}");
         let ground = PLOT_BACKGROUND;
         assert!(ground.r.max(ground.g).max(ground.b) < 16, "{ground:?}");
+    }
+
+    /// The device column counts a 256-point plot comes to across the
+    /// interface's scales and the monitor's.
+    const COLUMN_COUNTS: [usize; 6] = [192, 256, 320, 384, 512, 640];
+
+    /// However many columns the plot is cut into, each takes at least one
+    /// bin, they march along the bins without going back, and between them
+    /// they take every one.
+    #[test]
+    fn every_bin_is_under_a_column_however_many_there_are() {
+        for columns in COLUMN_COUNTS {
+            let mut covered = [false; BINS];
+            let mut last = 0..1;
+            for column in 0..columns {
+                let bins = bins_under(column, columns);
+                assert!(!bins.is_empty(), "{columns}: {column}");
+                assert!(bins.end <= BINS, "{columns}: {column}");
+                assert!(bins.start >= last.start, "{columns}: {column}");
+                assert!(bins.end >= last.end, "{columns}: {column}");
+                for bin in bins.clone() {
+                    covered[bin] = true;
+                }
+                last = bins;
+            }
+            assert!(covered.iter().all(|&bin| bin), "{columns}");
+        }
+        // At 1.25 a column is four fifths of a bin: some straddle two.
+        assert_eq!(bins_under(1, 320), 0..2);
+        assert_eq!(bins_under(4, 320), 3..4);
+    }
+
+    /// At a device pixel to the point, a column is its own bin.
+    #[test]
+    fn at_one_to_one_a_column_is_its_bin() {
+        for column in 0..BINS {
+            assert_eq!(bins_under(column, BINS), column..column + 1);
+        }
+    }
+
+    /// One full bin among empty ones still stands at its height whether the
+    /// columns are wider than a bin, as wide, or narrower.
+    #[test]
+    fn a_spike_survives_a_column_wider_than_a_bin() {
+        let mut counts = [0; BINS];
+        counts[101] = 1000;
+        for columns in [192, 256, 320] {
+            let peak = (0..columns)
+                .map(|column| tallest(&counts, bins_under(column, columns)))
+                .max();
+            assert_eq!(peak, Some(1000), "{columns}");
+        }
+    }
+
+    /// At 1.25 every device pixel of the plot is one column, and every bin
+    /// stands in at least one of them.
+    #[test]
+    fn at_one_and_a_quarter_every_column_is_one_device_pixel_and_every_bin_is_drawn() {
+        let grid = Grid::new(1.25);
+        let columns: Vec<_> = grid.columns(20.0, BINS as f32).collect();
+        assert_eq!(columns.len(), 320);
+        for column in &columns {
+            assert!(((column.right - column.left) * 1.25 - 1.0).abs() < 1e-3);
+        }
+        let mut drawn = [false; BINS];
+        for column in &columns {
+            for bin in bins_under(column.index, column.count) {
+                drawn[bin] = true;
+            }
+        }
+        assert!(drawn.iter().all(|&bin| bin));
+    }
+
+    /// At three quarters there are fewer columns than bins, and none of the
+    /// bins is left out of them.
+    #[test]
+    fn at_three_quarters_no_bin_is_dropped() {
+        let columns: Vec<_> = Grid::new(0.75).columns(20.0, BINS as f32).collect();
+        assert_eq!(columns.len(), 192);
+        let mut counts = [0; BINS];
+        for bin in 0..BINS {
+            counts.fill(0);
+            counts[bin] = 7;
+            assert!(
+                columns
+                    .iter()
+                    .any(|column| tallest(&counts, bins_under(column.index, column.count)) == 7),
+                "{bin}"
+            );
+        }
+    }
+
+    /// A rule stands at once where it first appears and where it comes back
+    /// after a frame without it, and glides between bins otherwise, easing
+    /// out and arriving on time.
+    #[test]
+    fn rules_glide_between_bins_and_stand_where_they_appear() {
+        let ctx = egui::Context::default();
+        let id = egui::Id::new("rule");
+        let shown = |time: f64, target: Option<f32>| {
+            let input = egui::RawInput {
+                time: Some(time),
+                ..Default::default()
+            };
+            let mut at = None;
+            let mut output = ctx.run_ui(input, |ui| {
+                at = target.map(|target| glided(ui, id, target));
+            });
+            output.textures_delta.clear();
+            at
+        };
+        assert_eq!(shown(0.0, Some(0.2)), Some(0.2), "appears in place");
+        assert_eq!(shown(0.01, Some(0.6)), Some(0.2), "sets off from there");
+        let early = shown(0.01 + RULE_GLIDE / 4.0, Some(0.6)).unwrap();
+        assert!(early > 0.2 + 0.4 / 4.0 && early < 0.6, "{early}");
+        assert_eq!(shown(0.01 + RULE_GLIDE, Some(0.6)), Some(0.6), "arrives");
+        assert_eq!(shown(0.1, None), None);
+        assert_eq!(shown(0.11, Some(0.9)), Some(0.9), "comes back in place");
     }
 }

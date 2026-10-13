@@ -22,7 +22,10 @@ Command, `⌥` Option, `⇧` Shift and `⌃` Control, run together onto the key.
 | `+`, `=`, `⌘+`, `⌘=` | Zoom in one step | `zoom.in` |
 | `-`, `_`, `⌘-` | Zoom out one step | `zoom.out` |
 | `⌘`-Arrows | Pan to the far side of the image; with a region selected, grow it that way one pixel | `pan.edge.left` … `pan.edge.down`; `region.grow.left` … `region.grow.down` |
-| `⇧⌘`-Arrows | With a region selected, shrink it that way one pixel | `region.shrink.left` … `region.shrink.down` |
+| `⇧⌘`-Arrows | Pan by one pixel; with a region selected, shrink it that way one pixel | `pan.pixel.left` … `pan.pixel.down`; `region.shrink.left` … `region.shrink.down` |
+| `⌥⌘=`, `⌥⌘+` | Increase interface scale | `interface.scale.up` |
+| `⌥⌘-`, `⌥⌘_` | Decrease interface scale | `interface.scale.down` |
+| `⌥⌘0` | Reset interface scale to the monitor's own | `interface.scale.reset` |
 | `?`, `/`, `⌘?` | Show the keys | `interface.help` |
 | `⌘,` | Open the configuration file in your text editor | `interface.settings` |
 | `q`, `⌘Q`, `⌘W` | Quit | `interface.quit` |
@@ -75,10 +78,9 @@ configuration file in the application that opens plain text — see
 | `Space` | Cycle through the whole image, the window filled, and actual size. With a region selected, fit the region, fill the window with it, then the image's three, in turn | `zoom.fit` |
 | `Space`+Drag | Zoom to the box you drag out | `zoom.fit`, held |
 | `p` | Cycle the filter used above 100%: nearest → bicubic | `zoom.filter` |
-| Arrows | Pan by 64 pixels; with a region selected, move it — or its current handle — one pixel | `pan.left` … `pan.down`; `region.move.left` … `region.move.down` |
-| `Shift`+Arrows | Pan by one pixel | `pan.pixel.left` … `pan.pixel.down` |
+| `Shift`+Arrows | Pan by 64 pixels | `pan.left` … `pan.down` |
+| `Ctrl`+`Shift`+Arrows | Pan by one pixel; with a region selected, shrink it that way one pixel, pulling its far side in | `pan.pixel.left` … `pan.pixel.down`; `region.shrink.left` … `region.shrink.down` |
 | `Ctrl`+Arrows | Pan to the far side of the image; with a region selected, grow it that way one pixel | `pan.edge.left` … `pan.edge.down`; `region.grow.left` … `region.grow.down` |
-| `Ctrl`+`Shift`+Arrows | With a region selected, shrink it that way one pixel, pulling its far side in | `region.shrink.left` … `region.shrink.down` |
 
 Zoom runs from 2% to 6400%. The zooms below 100% are the ones above it with
 `Shift` held, so each zoom is under the number it hangs off. The number row is
@@ -102,7 +104,7 @@ double-click at actual size shows the whole image again, so a double-click
 in and a double-click out is a quick look at the pixels. `zoom.100.toggle`
 has no key by default; bind one to it to do the same from the keyboard.
 
-Zooming leaves fit mode; panning does not, so `Space` and then Down scrolls
+Zooming leaves fit mode; panning does not, so `Space` and then `Shift`+Down scrolls
 through a tall image filling the window.
 
 To zoom to a part of the picture, hold `Space` and drag a box around it: the
@@ -111,21 +113,24 @@ rather than when it goes down, so a tap still cycles the fit, and holding
 it while you drag does not move the picture first. `Esc` during the drag
 drops the box.
 
-`Shift` with an arrow places the view to the pixel, which is what lining two
-images up on the same detail takes; `Ctrl` with one runs to that side of the
-image in a single press. Neither does anything when the whole image is already
+The arrows on their own step through the files; held with a modifier they
+pan. `Ctrl`+`Shift` with an arrow places the view to the pixel, which is what
+lining two images up on the same detail takes; `Ctrl` with one runs to that
+side of the image in a single press. None of them does anything when the whole image is already
 on screen, since there is then nowhere to pan to.
 
 ## Moving through the files
 
 | Key | What it does | Name |
 | --- | --- | --- |
-| `]`, `Page Down` | Next file | `files.next` |
-| `[`, `Page Up` | Previous file | `files.previous` |
+| Right, Down, `]`, `Page Down` | Next file | `files.next` |
+| Left, Up, `[`, `Page Up` | Previous file | `files.previous` |
+| `Home` | First file | `files.first` |
+| `End` | Last file | `files.last` |
 | `Ctrl+P` | Choose a file from the list: type to filter it, arrows to move, `Enter` to open, `Esc` to close | `files.chooser` |
 | `Tab` | Show or hide the file list down the left of the picture | `files.list` |
-| `Alt+[`, `Alt+Page Up` | Back in image history | `files.back` |
-| `Alt+]`, `Alt+Page Down` | Forward in image history | `files.forward` |
+| `Alt+Left`, `Alt+[`, `Alt+Page Up` | Back in image history | `files.back` |
+| `Alt+Right`, `Alt+]`, `Alt+Page Down` | Forward in image history | `files.forward` |
 | `Ctrl+O` | Open image files chosen in the desktop's file dialog | `files.open` |
 | `Ctrl+Shift+O` | Open a folder chosen in the desktop's file dialog | `files.open-folder` |
 | `F2` | Rename the file on screen | `files.rename` |
@@ -202,8 +207,8 @@ as files arrive in a directory or leave it. Whatever the order does, the file on
 screen stays the file on screen.
 
 Beside the menus are two buttons that go back to the file shown before
-this one and forward again, which `Alt+[` and `Alt+]`, or `Alt+Page Up`
-and `Alt+Page Down`, do from the keyboard: the files you have looked at,
+this one and forward again, which `Alt+Left` and `Alt+Right`, `Alt+[` and
+`Alt+]`, or `Alt+Page Up` and `Alt+Page Down` do from the keyboard: the files you have looked at,
 in the order you looked at them, as a browser keeps the pages. Going back
 and then somewhere new — a step, a pick from the chooser, a paste — cuts
 off what lay ahead, so forward always leads to something reached from
@@ -537,7 +542,7 @@ that is not a paste; open it as an argument instead.
 | `Shift+S` | White point up | `display.white.up` |
 | `e` | Cycle the window rule: as stored (0–1) → full range → trimmed (the central 99.8%) | `display.window` |
 | `t` | Toggle the curve on the highlights: clip, or roll off | `display.tone-map` |
-| `w` | Mark the clipped pixels, or stop: red where a channel has reached white, blue where one has reached black | `display.marks` |
+| `w` | Mark clipped pixels, or stop: red where a channel has reached white, blue where one has reached black | `display.marks` |
 | `o` | Turn the room above white off and on, where the monitor is in HDR mode | `display.hdr` |
 | `v` | Show a raw as the camera's JPEG of it, or as the picture developed from the sensor | `display.camera-jpeg` |
 | `Shift+D` | Show a picture's depth map in its place, or the picture again | `display.depth` |
@@ -611,10 +616,11 @@ Each press moves its end by a twentieth of the window's width as the
 histogram draws it, and no further than the histogram's axis goes.
 
 Moving either end by hand takes the window out of whichever rule it was
-on; `e` cycles back into them, and the *As stored* button on the histogram
-panel puts a graded file's window back at 0 to 1. The exposure is a push on
-top of whatever the window is, and neither handle touches it. Exposure
-stops at ±16 stops.
+on. On a file read as data, `e` cycles back into the rules and the *As
+stored* button on the histogram panel puts the window back at 0 to 1; on a
+photo the rules are not offered, and the reset button puts the window back
+with everything else. The exposure is a push on top of whatever the window
+is, and neither handle touches it. Exposure stops at ±16 stops.
 
 The histogram panel (`h`) is where all of this is seen and set. The band of
 gray under the plot is what the display makes of each value along the axis,
@@ -628,41 +634,65 @@ linear data — the band is which part of the range you are looking at. The
 handles are the window on every file, and the exposure is a separate thing
 on top of it: bringing the white handle in and raising the exposure make
 the same picture, but the window is found again when a file changes on disk
-or a *Window* rule is pressed, and the exposure survives that. The share
-of the picture the window is throwing away is
-written in the top corners of the plot — how much is at or below black on
-the left, how much is at or above white on the right — and only when there
-is any, so a number there is news. Pointing at the plot names the value
-under the pointer, and what the display turns it into.
+or a *Window* rule is pressed, and the exposure survives that. A row of stops under
+the Output and Display plots counts from white — 0 is what comes out white,
+`-2` is two stops under it, and on an HDR screen `+1` is a stop over — and
+the one under the gain map's plot counts how far the map lifts the picture.
+Pointing at a plot names the value under
+the pointer at that stage; pointing at the picture marks the pixel on every
+plot and writes its value at each stage, from the file at the foot of the
+panel to what the screen shows at the top.
 
-`w`, or the button beside the band under the plot, paints the clipped
+The pair of buttons at the head of the panel, *Photo* and *Data*, says how
+the file is being read, and switches it. A photo is shown as it was made to
+look, with 1.0 as white; data is numbers windowed to what they hold, a
+single channel spread along a ramp with no exposure to push. The program
+guesses from the file, and guesses wrong on some: a 16-bit grayscale scan
+saved without its profile opens as data, auto-leveled, and pressing *Photo*
+reads it again as the photograph it is; an elevation model saved as an
+ordinary 8-bit image opens as a picture, and *Data* reads it as the
+measurement it is. The choice stays with the file for the rest of the
+session, so stepping away and back finds it read the same way, and the
+same pair is under the Image heading of the information panel. While the
+gain map or the depth map is shown in the picture's place the pair is off:
+a map is data whatever the picture is.
+
+`w`, or the warning sign in the row of buttons at the top of the panel,
+paints the clipped
 pixels on the picture itself: red where any channel has reached white,
 blue where any has reached black. One channel is enough, because one is
 enough to lose the color: a sun whose red has burned out is painted red
 though its green never reached white, and the pink it shows is not what
 the scene held. The marks stay on until pressed off again, from one file
-to the next, and no reset of the display touches them. The paint and the
-corners of the plot count the same thing, a channel at a time, so the
-share in a corner is the share of the picture wearing the paint. A color
+to the next, and no reset of the display touches them. A color
 from a wide-gamut file — Display P3, Adobe RGB, a raw — that an ordinary
 monitor cannot show is painted too, since the screen loses it the same
 way. Neither marks white where nothing is being clipped: on
 an HDR surface with no curve, or under a curve, the highlights are shown
 or rolled off rather than lost.
 
-Under the band, every file gets the exposure: a slider over six stops each
-way, its reading at the end of the row. It snaps to the quarter stops `d`
-and `f` take, and a press anywhere along it puts the exposure there. The
-keys go on past the slider's ends, to ±16 stops, where the handle stands
-hollow at the end and the reading says where it is. Under that is the row
-of windows the `e` key cycles, named for what they do: *As stored* shows
-the values as they are, 0 to 1, which is what a graded file opens with;
-*Full range* stretches everything the file holds to black and white; and
-*Trimmed* leaves the outermost 0.2% out before stretching, which is what a
-file of linear data — sensor counts, a float TIFF, an EXR — opens with.
-Under that, the *Curve* row — *Clip* or *Roll off* — that `t` toggles,
-since a stop or two of exposure puts the top of any file above white. The
-three rows are the same for every file, so the panel is one height.
+Under the band of a photo, the exposure: a slider over six stops each way,
+its reading at the end of the row. It snaps to the quarter stops `d` and
+`f` take, and a press anywhere along it puts the exposure there. The keys
+go on past the slider's ends, to ±16 stops, where the handle stands hollow
+at the end and the reading says where it is. Under it, the *Curve* row —
+*Clip* or *Roll off* — that `t` toggles, since a stop or two of exposure
+puts the top of any picture above white.
+
+A file read as data has neither: its numbers need not be light, so there
+is no exposure to push — the white handle does the same job in the file's
+own units — and a curve would bend the values you are reading off. `d`,
+`f` and `t` do nothing on it, and values past the top of the window are
+clipped at white, on an HDR monitor too. Instead it has a row of windows,
+which the `e` key cycles, named for what they do: *As stored* shows the
+values as they are, 0 to 1; *Full range* stretches everything the file
+holds to black and white; and *Trimmed* leaves the outermost 0.2% out
+before stretching, which is what data — sensor counts, a float TIFF, an
+elevation model — opens with. A photo has no such row: it opens as stored,
+stretching it would only make it look wrong, and the handles are the way
+into its shadows and highlights. To push the exposure of a file read as
+data, press *Photo*. The rows are the same for every photo, and the same
+for every file of data, so the panel changes height only between the two.
 
 The curve is added to bring values brighter than white back down into a
 surface that cannot show them. *Clip* is not a second curve but the absence
@@ -715,13 +745,15 @@ where all of it is set.
 | Key | What it does | Name |
 | --- | --- | --- |
 | `h` | Show or hide the histogram | `interface.histogram` |
-| `y` | Count the histogram's bars up its axis, or the logarithm of them | `interface.log-counts` |
 | `i` | Show the file information on its *Curated* tab, or hide it | `interface.info` |
 | `I` | Show the file information on its *Raw Data* tab, or hide it | `interface.raw-data` |
 | `m` | Show or hide the minimap | `interface.minimap` |
 | `g` | Show or hide the grid over the image | `interface.grid` |
 | `l` | Show or hide the loupe | `interface.loupe` |
 | `Shift+L` | Cycle the loupe's magnification: 2, 4, 8 or 16 times | `interface.loupe-magnification` |
+| `Ctrl+=`, `Ctrl++` | Increase interface scale; the picture is not affected | `interface.scale.up` |
+| `Ctrl+-`, `Ctrl+_` | Decrease interface scale; the picture is not affected | `interface.scale.down` |
+| `Ctrl+0` | Reset interface scale to the monitor's own | `interface.scale.reset` |
 | `x` | Select a region of the image; again, or `Esc`, removes it | `region.select` |
 | `.` | Cycle how the pixel under the pointer is read out: hex → decimal → mapped → depth | `interface.pixel-format` |
 | `,` | In a georeferenced file, cycle where the pixel is read out as: pixel → projected → geographic | `interface.coordinate-format` |
@@ -731,6 +763,13 @@ where all of it is set.
 | `?`, `/` | Show the keys: every one of them, what it does and when. Again, `Esc` or a click outside closes it. The button at the foot of the right strip does the same | `interface.help` |
 | `Ctrl+,` | Open the configuration file in your editor, writing it first if there is none. The button at the foot of the help popup does the same | `interface.settings` |
 | `q`, `Esc` | Quit. `Esc` closes a popup, a message or a region, or brings the panels back | `interface.quit`, `interface.dismiss` |
+
+The interface's size steps through 75%, 100%, 125%, 150%, 175%, 200%, 250%
+and 300% of what the monitor's own scale gives it, and is remembered from one
+run to the next. Use it when the panels' text is too small or too large on
+one monitor without changing every other program's: the picture stays where
+it is, and 100% zoom is still one image pixel to one screen pixel. The window
+keeps its size when you change it.
 
 The panels are opaque and the image is fitted inside them, so hiding them
 gives a fitted image more room and it re-fits immediately. The file list stays
@@ -744,16 +783,14 @@ bring them back: `` ` `` and `Esc`. It appears once — after that you know — 
 the message is still up puts them on screen rather than only taking the message
 off.
 
-The histogram plots each bar as its share of the fullest one, which is the
-plot a photograph wants. It is the wrong plot for measurement data, where one
-value often covers most of the image — a masked sea, the black surround of a
-scan — and that one bar flattens everything the rest of the range is doing
-into the axis. `y`, or the button for it down the left of the plot, counts the
-logarithm instead: the tall bar stays at the top and the short ones rise to
-where they can be read beside it. Heights can no longer be compared with each
-other once it is on, which is the point of it being a switch. It applies to
-whichever image is on screen and stays as you set it, and setting it while the
-histogram is closed leaves it that way for when you open it.
+The histogram's bars are linear. Display and Image share one scale, so a
+bar of the same height holds the same share of the picture in both, and the
+scale stays put while you change the display. Output is scaled to fill its
+plot whatever the display does to the picture. A spike that holds far more than
+the rest — a flat sky, the black surround of a scan — runs off the top
+rather than flattening everything else. It is capped in the accent color,
+and with the pointer on it the section's heading says what share of the
+picture it holds.
 
 Under the plot are the band and the rows of settings the plot is drawing,
 described under [The display](#the-display) above: the exposure, the
@@ -833,7 +870,7 @@ picture under it; the wheel zooms as before.
 
 For the last pixel, use the keys. One handle is always the current one,
 drawn in a brighter color than the others, and the arrows move it one pixel
-rather than panning the view. A region just drawn has its center handle
+rather than stepping to another file. A region just drawn has its center handle
 current, so the arrows move the whole of it; click or drag any other handle
 and it becomes current instead, and the arrows move that: click the right
 edge's handle and press Right to make the region one pixel wider, or Left to
@@ -843,8 +880,9 @@ back to moving the whole. `Ctrl` with an arrow grows the region on that
 side, whichever handle is current, and `Ctrl`+`Shift` with an arrow shrinks
 it that way, pulling the far side in: `Ctrl`+`Shift`+Left moves the right
 edge one pixel to the left. A region never shrinks past one pixel. `Shift`
-with an arrow is not the region's: it pans the picture a pixel under it, as
-it does with no region up.
+with an arrow is not the region's: it pans the picture under it, as it does
+with no region up. To step to another file while a region is up, use `[`,
+`]`, `Page Up` or `Page Down`.
 
 Point at the region and it says what it is: its size under the handle at
 its center, `640 × 480`, and the coordinate of each edge written just inside

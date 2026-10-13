@@ -69,7 +69,7 @@ fn open(paths: Vec<PathBuf>, named: Vec<PathBuf>) -> App {
 #[test]
 fn a_configuration_read_again_rebinds_the_keys() {
     let mut app = opened_on_nothing();
-    app.panels.show_histogram = true;
+    app.panels.side = Some(ui::side::Side::Histogram);
     let mut config = options().config;
     config
         .keys
@@ -82,7 +82,7 @@ fn a_configuration_read_again_rebinds_the_keys() {
     assert_eq!(app.keys.spelled("interface.help"), "F1");
     assert_eq!(app.open_map_link, "https://example.com/?{lat},{lng}");
     assert_eq!(app.exiftool.configured(), "/opt/exiftool/exiftool");
-    assert!(app.panels.show_histogram);
+    assert_eq!(app.panels.side, Some(ui::side::Side::Histogram));
     let toast = app.toasts.showing().expect("the reload is said");
     assert_eq!(toast.message, RECONFIGURED);
 
@@ -105,7 +105,7 @@ fn the_tags_tab_reads_each_file_once_while_it_is_up() {
     // goes nowhere, so each stays waited for.
     app.exiftool = exiftool::Program::at(Path::new("/nonexistent/exiftool"));
     let _ = app.press(ui::Control::Info);
-    assert!(app.panels.show_info);
+    assert_eq!(app.panels.side, Some(ui::side::Side::Info));
     assert_eq!(app.tags.asked(), 0, "the panel opens on the facts");
 
     let _ = app.press(ui::Control::InfoTab(ui::tags::Tab::Tags));
@@ -158,7 +158,6 @@ fn options() -> Options {
             show_filmstrip: false,
             show_histogram: false,
             show_info: false,
-            log_counts: false,
             browse_folder: true,
             open_map_link: crate::settings::OPEN_MAP_LINK.to_string(),
             exiftool: "exiftool".to_string(),
@@ -239,10 +238,12 @@ fn answer(app: &mut App, mode: Reload) {
     // Asked for in the rendering the application prefers, as `App::send`
     // fills every request in with.
     let asked_rendering = app.rendering;
-    let decoded = crate::loader::decode_rendering(&path, app.overrides, asked, asked_rendering);
+    let overrides = app.overrides_for(&path);
+    let decoded = crate::loader::decode_rendering(&path, overrides, asked, asked_rendering);
     let format = decode::reader(&path).unwrap_or_default();
     let outcome = decoded.map(|(image, _, rendering, camera_jpeg)| Ready {
         stats: Stats::scan(&image),
+        stored: crate::image::stats::Stored::scan(&image),
         exif: exif::Exif::read(&path),
         image,
         gpu: None,
@@ -1000,24 +1001,62 @@ fn the_window_keys_step_the_handles_within_the_plot() {
     std::fs::remove_dir_all(dir).expect("we just wrote it");
 }
 
-/// The window row is every file's: on a graded file, whose window opens
-/// at 0..1, *As stored* is what puts a hand-moved window back. It sets
-/// the rule and nothing else, so an exposure on top of the window stays.
+/// The window rules are data's: on a photo, whose window opens at 0..1
+/// and is the handles' to move, the row is not drawn, and both a press on
+/// a rule and the key that cycles them are refused — the reset is what
+/// puts a hand-moved window back there, as it puts everything back.
 #[test]
-fn as_stored_puts_a_hand_moved_window_back_on_a_graded_file() {
+fn the_window_rules_are_refused_on_a_photo() {
     use crate::image::display::AutoWindow;
-    use crate::ui::{Command, Control};
+    use crate::ui::Control;
     use input::{Action, Effect};
 
     let (mut app, dir) = app_over("stored", &[("a.png", 8, 8)]);
     fn display(app: &App) -> &crate::image::display::Display {
         &app.current.as_ref().expect("a picture is up").display
     }
+    assert!(!app.conditions().data);
+    assert!(app.refuses(Control::Window(0)));
     assert_eq!(app.perform(Action::StepBlack(0.05)), Effect::Redraw);
     assert_eq!(app.perform(Action::StepWhite(-0.05)), Effect::Redraw);
-    assert_eq!(app.perform(Action::Exposure(0.5)), Effect::Redraw);
     assert_eq!(display(&app).auto(), AutoWindow::Manual);
     assert_ne!(display(&app).displayed_bounds(), (0.0, 1.0));
+
+    assert_eq!(app.press(Control::Window(0)), Effect::Nothing);
+    assert_eq!(app.perform(Action::CycleAutoWindow), Effect::Nothing);
+    assert_eq!(display(&app).auto(), AutoWindow::Manual, "refused");
+
+    assert_eq!(app.perform(Action::ResetDisplay), Effect::Redraw);
+    assert_eq!(display(&app).auto(), AutoWindow::Off);
+    assert_eq!(
+        (display(&app).window_low(), display(&app).window_high()),
+        (0.0, 1.0)
+    );
+
+    std::fs::remove_dir_all(dir).expect("we just wrote it");
+}
+
+/// On a file read as data the rules are live: *As stored* puts a
+/// hand-moved window back at 0..1, and `e` cycles on from it. The
+/// exposure is refused, data having none.
+#[test]
+fn as_stored_puts_a_hand_moved_window_back_on_data() {
+    use crate::image::display::AutoWindow;
+    use crate::ui::{Command, Control};
+    use input::{Action, Effect};
+
+    let path = fixture("tiff-float32.tif");
+    let mut app = open(vec![path.clone()], vec![path]);
+    answer(&mut app, Reload::Fresh);
+    fn display(app: &App) -> &crate::image::display::Display {
+        &app.current.as_ref().expect("a picture is up").display
+    }
+    assert!(app.conditions().data);
+    assert_eq!(display(&app).auto(), AutoWindow::Percentile);
+    assert_eq!(app.perform(Action::StepBlack(0.05)), Effect::Redraw);
+    assert_eq!(app.perform(Action::Exposure(0.5)), Effect::Nothing);
+    assert_eq!(app.perform(Action::CycleToneMap), Effect::Nothing);
+    assert_eq!(display(&app).auto(), AutoWindow::Manual);
 
     let _ = app.act(Command::Press(Control::Window(0)));
     assert_eq!(display(&app).auto(), AutoWindow::Off);
@@ -1025,13 +1064,108 @@ fn as_stored_puts_a_hand_moved_window_back_on_a_graded_file() {
         (display(&app).window_low(), display(&app).window_high()),
         (0.0, 1.0)
     );
-    assert_eq!(
-        display(&app).exposure_stops(),
-        0.5,
-        "the rule, not the exposure"
-    );
+    assert_eq!(display(&app).exposure_stops(), 0.0);
+    assert_eq!(app.perform(Action::CycleAutoWindow), Effect::Redraw);
+    assert_eq!(display(&app).auto(), AutoWindow::MinMax);
+}
 
-    std::fs::remove_dir_all(dir).expect("we just wrote it");
+/// The switch between the readings reads the file again the other way,
+/// and the choice stays with the file: a 16-bit gray TIFF, taken for a
+/// measurement, read as a photo is sRGB with its window as stored, and
+/// comes back that way after a step away; read as data again it is a
+/// measurement once more. The switch is dead while a map is shown in the
+/// picture's place, and refused on the reading already in force.
+#[test]
+fn the_reading_switch_reads_the_file_again_and_stays_with_it() {
+    use crate::image::decode::Reading;
+    use crate::image::{Referred, Transfer};
+    use crate::ui::Control;
+    use input::Effect;
+
+    let scan = fixture("tiff-gray16.tif");
+    let photo = fixture("png-rgb8.png");
+    let mut app = open(vec![scan.clone(), photo.clone()], vec![scan.clone()]);
+    answer(&mut app, Reload::Fresh);
+    fn image(app: &App) -> &crate::image::DecodedImage {
+        &app.current.as_ref().expect("a picture is up").image
+    }
+    assert_eq!(image(&app).referred, Referred::Measured);
+    assert!(app.conditions().data);
+    assert!(!app.refuses(Control::Reading(Reading::Photo)));
+
+    // The reading in force asks for nothing.
+    assert_eq!(app.press(Control::Reading(Reading::Data)), Effect::Nothing);
+    assert!(app.files.is_idle(), "nothing asked for");
+
+    assert_eq!(app.press(Control::Reading(Reading::Photo)), Effect::Nothing);
+    assert_eq!(app.kept.reading(&scan), Some(Reading::Photo));
+    answer(&mut app, Reload::Reading);
+    assert_eq!(image(&app).referred, Referred::Display);
+    assert_eq!(image(&app).color.transfer, Transfer::Srgb);
+    assert!(!app.conditions().data);
+    assert_eq!(
+        (
+            image_display(&app).window_low(),
+            image_display(&app).window_high()
+        ),
+        (0.0, 1.0),
+        "a photo opens as stored"
+    );
+    fn image_display(app: &App) -> &crate::image::display::Display {
+        &app.current.as_ref().expect("a picture is up").display
+    }
+
+    // Away and back: still a photo, with nothing pressed.
+    let _ = app.step(true);
+    answer(&mut app, Reload::Fresh);
+    assert_eq!(app.files.shown_path(), Some(photo.as_path()));
+    assert_eq!(image(&app).referred, Referred::Display, "the photo's own");
+    let _ = app.step(false);
+    answer(&mut app, Reload::Fresh);
+    assert_eq!(app.files.shown_path(), Some(scan.as_path()));
+    assert_eq!(image(&app).referred, Referred::Display);
+
+    // And back to data by hand.
+    assert_eq!(app.press(Control::Reading(Reading::Data)), Effect::Nothing);
+    answer(&mut app, Reload::Reading);
+    assert_eq!(image(&app).referred, Referred::Measured);
+    assert_eq!(image(&app).color.transfer, Transfer::Linear);
+    assert!(app.conditions().data);
+}
+
+/// `--transfer` carries the reading with it where the decoder's followed
+/// the curve: the deep gray TIFF taken for a measurement is a photo under
+/// `--transfer srgb`, and a raw's linear counts stay graded under
+/// `--transfer linear`.
+#[test]
+fn a_transfer_given_on_the_command_line_carries_the_reading() {
+    use crate::image::{Referred, Transfer};
+
+    let srgb = decode::Overrides {
+        transfer: Some(Transfer::Srgb),
+        ..decode::Overrides::default()
+    };
+    let scan = decode::load(&fixture("tiff-gray16.tif"), srgb).expect("it decodes");
+    assert_eq!(scan.referred, Referred::Display);
+    assert_eq!(scan.color.transfer, Transfer::Srgb);
+
+    let linear = decode::Overrides {
+        transfer: Some(Transfer::Linear),
+        ..decode::Overrides::default()
+    };
+    let raw = decode::load(&fixture("dng-cfa.dng"), linear).expect("it decodes");
+    assert_eq!(
+        raw.referred,
+        Referred::Display,
+        "a raw's reading is its own"
+    );
+    let scan = decode::load(&fixture("tiff-gray16.tif"), decode::Overrides::default())
+        .expect("it decodes");
+    assert_eq!(
+        scan.referred,
+        Referred::Measured,
+        "left alone, left as it was"
+    );
 }
 
 /// Escape is what brings the interface back, and it does that before it
@@ -1056,7 +1190,7 @@ fn escape_brings_the_interface_back_before_it_quits() {
     // And with it back, Escape is the quit it always was.
     assert_eq!(app.perform(Action::Dismiss), Effect::Quit);
 
-    // The key that closes the floating panels on its way says it too:
+    // The key that closes the panels on its way says it too:
     // what it hides is the same thing, by the same route.
     app.said_how_to_restore = false;
     let _ = app.perform(Action::ToggleInterfaceAndPanels);
@@ -1288,7 +1422,7 @@ fn a_region_takes_the_keys_that_move_the_picture() {
     let _ = app.perform(Action::Pan(Direction::Right, PanStep::Coarse));
     assert!(app.motion.is_some(), "a pan of the view is a move");
     // Without a region the region's own keys do nothing, and the arrow
-    // is the view's again.
+    // held with Shift is the view's again.
     app.motion = None;
     assert_eq!(
         app.perform(Action::MoveRegion(Direction::Right)),
@@ -1296,8 +1430,10 @@ fn a_region_takes_the_keys_that_move_the_picture() {
     );
     let left = Key::Named(NamedKey::ArrowLeft);
     let back = PhysicalKey::Code(KeyCode::ArrowLeft);
+    app.pointer.modifiers = winit::keyboard::ModifiersState::SHIFT;
     assert_eq!(app.handle_key(&left, back, Pressed), Effect::Redraw);
     assert!(app.motion.is_some(), "the arrow pans");
+    app.pointer.modifiers = winit::keyboard::ModifiersState::empty();
 
     // And a region is of the picture it was drawn on: stepping to
     // another file leaves it behind.
@@ -1817,6 +1953,7 @@ fn a_reply_the_user_has_stepped_past_is_dropped() {
         },
         outcome: Ok(Ready {
             stats: Stats::scan(&image),
+            stored: crate::image::stats::Stored::scan(&image),
             exif: exif::Exif::default(),
             image,
             gpu: None,
@@ -2068,7 +2205,9 @@ fn the_transport_bar_is_the_arriving_files_from_the_key() {
 
     let _ = app.step(true);
     assert!(input(&mut app).transport.is_none(), "b's header is unread");
-    let bare = app.content();
+    let content =
+        |app: &App| ui::chrome::content_area(app.logical_size(), app.panels.show_ui, app.parts());
+    let bare = content(&app);
     let _ = app.chooser.learn(
         &b,
         Facts {
@@ -2092,7 +2231,7 @@ fn the_transport_bar_is_the_arriving_files_from_the_key() {
         })
     );
     assert!(app.parts().transport, "the bar takes its room at the key");
-    assert!(app.content().height < bare.height);
+    assert!(content(&app).height < bare.height);
     assert_eq!(app.press(ui::Control::StepForward), Effect::Nothing);
 
     std::fs::remove_dir_all(dir).expect("we just wrote it");
@@ -3278,7 +3417,7 @@ fn the_file_list_comes_up_beside_the_picture_and_shows_what_is_pressed() {
 
 /// Hiding the interface leaves the file list up without its head, the
 /// picture beside it rather than under it; the key that closes the
-/// floating panels with the bars closes the list too.
+/// other panels with the bars closes the list too.
 #[test]
 fn hiding_the_interface_keeps_the_file_list_and_the_full_hide_closes_it() {
     use crate::app::input::Action;
@@ -3769,18 +3908,58 @@ fn a_press_says_what_it_owes() {
     // A window a pixel across has no room for the histogram.
     let histogram = ui::Tip::Control(ui::Control::Histogram);
     assert_eq!(app.press(ui::Control::Histogram), Effect::Nothing);
-    assert!(!app.panels.show_histogram);
+    assert_eq!(app.panels.side, None);
     assert_eq!(
         app.namer().tooltip(histogram).map(|tooltip| tooltip.title),
         Some(vec![ui::tooltip::NO_ROOM.to_string()])
     );
     app.headless = Some(WINDOW);
     assert_eq!(app.press(ui::Control::Histogram), Effect::Redraw);
-    assert!(app.panels.show_histogram);
+    assert_eq!(app.panels.side, Some(ui::side::Side::Histogram));
     assert_ne!(
         app.namer().tooltip(histogram).map(|tooltip| tooltip.title),
         Some(vec![ui::tooltip::NO_ROOM.to_string()])
     );
+}
+
+/// The histogram's and the information's buttons are tabs of the side panel:
+/// it holds one of the two at a time, the button of the one it holds takes it
+/// down, and the picture is fitted into what it leaves.
+#[test]
+fn the_side_panel_holds_one_of_the_two_at_its_own_width() {
+    use ui::side::{Side, WIDTH};
+
+    let (mut app, dir) = app_over("side-panel", &[("a.png", 8, 8)]);
+    app.headless = Some(WINDOW);
+    let content =
+        |app: &App| ui::chrome::content_area(app.logical_size(), app.panels.show_ui, app.parts());
+    let bare = content(&app);
+
+    let _ = app.press(ui::Control::Histogram);
+    assert_eq!(app.side_showing(), Some(Side::Histogram));
+    assert!(app.panels.lit(ui::Control::Histogram));
+    assert!(!app.panels.lit(ui::Control::Info));
+    assert_eq!(content(&app).width, bare.width - WIDTH);
+
+    let _ = app.press(ui::Control::Info);
+    assert_eq!(app.side_showing(), Some(Side::Info));
+    assert!(!app.panels.lit(ui::Control::Histogram));
+    assert_eq!(content(&app).width, bare.width - WIDTH);
+
+    let _ = app.press(ui::Control::Info);
+    assert_eq!(app.side_showing(), None);
+    assert_eq!(content(&app), bare);
+
+    // The bars hidden, it stays, down the window's edge; the key that
+    // hides the panels with them takes it down.
+    let _ = app.press(ui::Control::Histogram);
+    let _ = app.perform(input::Action::ToggleInterface);
+    assert_eq!(app.side_showing(), Some(Side::Histogram));
+    assert_eq!(content(&app).right(), WINDOW[0] - WIDTH);
+    let _ = app.perform(input::Action::ToggleInterface);
+    let _ = app.perform(input::Action::ToggleInterfaceAndPanels);
+    assert_eq!(app.panels.side, None);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A click on the interface reaches the application: the grid button,
@@ -3980,7 +4159,7 @@ fn the_wheel_and_the_clicks_do_what_their_slots_say() {
     app.motion = None;
     let (image, viewport) = (app.image_size(), app.viewport());
     let mut dragged = app.view;
-    let by = ui::WHEEL_PIXELS_PER_STEP * app.scale_factor();
+    let by = ui::WHEEL_PIXELS_PER_STEP * app.pixels_per_point();
     dragged.pan_by(-by, by, image, viewport);
     assert_ne!(
         dragged.position(image, viewport),
@@ -4015,6 +4194,97 @@ fn the_wheel_and_the_clicks_do_what_their_slots_say() {
         Effect::Redraw
     );
     assert_eq!(app.view.zoom(image, viewport), 1.0);
+
+    std::fs::remove_dir_all(dir).expect("we just wrote it");
+}
+
+/// The interface's scale steps a rung at a time by its keys, stops at the
+/// top of the ladder owing no frame, comes back to the monitor's own on
+/// the reset, and is what the state file is handed as the loop ends.
+#[test]
+fn the_interface_scale_steps_by_key_and_is_kept() {
+    use input::Action::{ScaleDown, ScaleReset, ScaleUp};
+    use ui::scale::{DEFAULT, SCALES};
+
+    let (mut app, dir) = app_over("ui-scale", &[("a.png", 64, 48)]);
+    app.headless = Some(WINDOW);
+    assert_eq!(app.ui_scale, DEFAULT);
+    assert_eq!(app.perform(ScaleUp), Effect::Redraw);
+    assert_eq!(app.perform(ScaleUp), Effect::Redraw);
+    assert_eq!(app.ui_scale, SCALES[3]);
+    assert_eq!(app.pixels_per_point(), SCALES[3]);
+    assert_eq!(
+        app.toasts.showing().map(|toast| toast.message.as_str()),
+        Some("Interface scale: 150%")
+    );
+    assert_eq!(app.perform(ScaleDown), Effect::Redraw);
+    assert_eq!(app.ui_scale, SCALES[2]);
+    assert_eq!(app.kept_state().ui_scale, SCALES[2]);
+    assert_eq!(app.perform(ScaleReset), Effect::Redraw);
+    assert_eq!(app.ui_scale, DEFAULT);
+    assert_eq!(app.perform(ScaleReset), Effect::Nothing);
+
+    // At the top of the ladder there is nowhere to go.
+    while app.perform(ScaleUp) == Effect::Redraw {}
+    assert_eq!(app.ui_scale, SCALES[SCALES.len() - 1]);
+    assert_eq!(app.perform(ScaleUp), Effect::Nothing);
+    assert_eq!(app.kept_state().ui_scale, SCALES[SCALES.len() - 1]);
+
+    // The window is the same size in device pixels; the interface has
+    // fewer points of it to lay out in.
+    let logical = app.logical_size();
+    assert_eq!(logical, WINDOW.map(|side| side / SCALES[SCALES.len() - 1]));
+
+    std::fs::remove_dir_all(dir).expect("we just wrote it");
+}
+
+/// A trackpad's scroll arrives in the interface's points and is turned back
+/// into device pixels by the same scale, so the picture follows the fingers
+/// as far at any interface scale: a scroll of so many device pixels pans the
+/// picture by that many.
+#[test]
+fn the_wheel_pans_as_far_at_any_interface_scale() {
+    use crate::gestures::{Behavior, Slot, WheelAction};
+    use crate::ui::Command;
+
+    let (mut app, dir) = app_over("ui-scale-wheel", &[("a.png", 64, 48)]);
+    app.headless = Some(WINDOW);
+    let mut gestures = Gestures::table();
+    gestures.set(
+        Slot::read("image.wheel").unwrap(),
+        Behavior::Wheel(WheelAction::Pan),
+    );
+    app.gestures = Rc::new(gestures);
+    app.pointer.modifiers = winit::keyboard::ModifiersState::empty();
+    let _ = app.perform(input::Action::ZoomTo(16.0));
+    app.motion = None;
+    let device = [30.0, -20.0];
+    for ui_scale in [1.0, 2.0] {
+        let _ = app.rescale(ui_scale);
+        let (image, viewport) = (app.image_size(), app.viewport());
+        let mut expected = app.view;
+        expected.pan_by(-device[0], -device[1], image, viewport);
+        let points = device.map(|pixels| pixels / app.pixels_per_point());
+        let delta = points.map(|points| points / ui::WHEEL_PIXELS_PER_STEP);
+        assert_eq!(
+            app.act(Command::Wheel {
+                delta,
+                notched: false,
+                held: None,
+            }),
+            Effect::Redraw
+        );
+        let (got, wanted) = (
+            app.view.position(image, viewport),
+            expected.position(image, viewport),
+        );
+        assert!(
+            (got.u[0] - wanted.u[0]).abs() < 1e-3
+                && (got.u[1] - wanted.u[1]).abs() < 1e-3
+                && got.v == wanted.v,
+            "{ui_scale}: {got:?} {wanted:?}"
+        );
+    }
 
     std::fs::remove_dir_all(dir).expect("we just wrote it");
 }
@@ -4233,6 +4503,36 @@ fn a_monitor_change_is_noticed_once_and_kept() {
     assert_eq!(app.output.headroom, None);
 }
 
+/// A surface with room above white on a monitor that has not said how much
+/// shows a gain map's lift whole, rather than none of it.
+#[test]
+fn an_unknown_room_takes_the_whole_lift() {
+    use crate::image::gain_map::{GainMap, Lift};
+    let (mut app, _dir) = app_over("unknown room", &[("a.png", 4, 3)]);
+    let current = app.current.as_mut().unwrap();
+    let mut image = (*current.image).clone();
+    image.gain_map = Some(Arc::new(GainMap {
+        width: 2,
+        height: 1,
+        channels: 1,
+        data: vec![0, 255],
+        lift: Lift::Apple { headroom: 4.0 },
+    }));
+    current.image = Arc::new(image);
+    app.headless_surface_hdr = true;
+    assert_eq!(app.headroom(), Headroom::Above);
+    assert_eq!(app.output.headroom, None);
+    app.refresh_lift();
+    let weight = app
+        .current
+        .as_ref()
+        .unwrap()
+        .lift
+        .as_ref()
+        .map(|table| table.weight());
+    assert_eq!(weight, Some(1.0));
+}
+
 /// A display whose room grows while the headroom stays above white — a
 /// Mac's, ramping up from none once the window asks for room — has the
 /// lift of a gain-mapped picture weighed again, not left at the weight
@@ -4349,9 +4649,17 @@ fn the_numbers_follow_the_lift_off_the_loop() {
     assert_eq!(max(&app), base, "the numbers are");
     assert_eq!(app.measured(first), Effect::Nothing, "overtaken");
     assert_eq!(max(&app), base);
+    let stored = Arc::clone(&app.current.as_ref().unwrap().stored);
     assert_eq!(app.measured(next()), Effect::Redraw);
     let lifted = max(&app);
     assert!(lifted > base, "{lifted} over {base}");
+    // The file as stored is measured once, whatever the lift: a measure of
+    // the lift leaves it be.
+    assert!(Arc::ptr_eq(&app.current.as_ref().unwrap().stored, &stored));
+    assert!(
+        stored.planes.iter().all(|plane| plane.max <= 1.0),
+        "the base, as stored"
+    );
 
     // The switch, off and on: each measure is there already.
     let _ = app.toggle_hdr();
@@ -4476,7 +4784,12 @@ fn i_and_shift_i_each_put_up_their_own_tab() {
     let (mut app, dir) = app_over("info-keys", &[("a.png", 8, 8)]);
     app.headless = Some(WINDOW);
     app.exiftool = exiftool::Program::at(Path::new("/nonexistent/exiftool"));
-    let shown = |app: &App| (app.panels.show_info, app.panels.info_tab);
+    let shown = |app: &App| {
+        (
+            app.panels.side == Some(ui::side::Side::Info),
+            app.panels.info_tab,
+        )
+    };
 
     let _ = app.perform(input::Action::ToggleRawData);
     assert_eq!(shown(&app), (true, Tab::Tags));
@@ -4484,10 +4797,10 @@ fn i_and_shift_i_each_put_up_their_own_tab() {
     let _ = app.perform(input::Action::ToggleInfo);
     assert_eq!(shown(&app), (true, Tab::Facts));
     let _ = app.perform(input::Action::ToggleInfo);
-    assert!(!app.panels.show_info);
+    assert_eq!(app.panels.side, None);
     let _ = app.perform(input::Action::ToggleRawData);
     let _ = app.perform(input::Action::ToggleRawData);
-    assert!(!app.panels.show_info);
+    assert_eq!(app.panels.side, None);
 
     let _ = app.press(ui::Control::Info);
     assert_eq!(shown(&app), (true, Tab::Tags), "the button keeps the tab");

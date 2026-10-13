@@ -74,11 +74,11 @@ fn a_button_is_named_by_the_key_that_does_the_same_job() {
 
     assert_eq!(
         named(Control::Previous).as_deref(),
-        Some("Previous file ([, Page Up)")
+        Some("Previous file (Left, Up, [, Page Up)")
     );
     assert_eq!(
         named(Control::Next).as_deref(),
-        Some("Next file (], Page Down)")
+        Some("Next file (Right, Down, ], Page Down)")
     );
     assert_eq!(
         named(Control::Minimap).as_deref(),
@@ -140,7 +140,8 @@ fn a_button_is_named_by_the_key_that_does_the_same_job() {
     assert_eq!(
         named(Control::Back),
         Some(format!(
-            "Back in image history ({}, {})",
+            "Back in image history ({}, {}, {})",
+            alt("Left"),
             alt("["),
             alt("Page Up")
         ))
@@ -582,15 +583,9 @@ fn a_menu_cell_is_named_in_its_own_words_and_by_the_key_that_reaches_it() {
 fn the_histogram_panels_buttons_are_named_briefly_and_by_their_keys() {
     let named = |widget| names(Tip::Control(widget));
 
-    assert_eq!(named(Control::Luma).as_deref(), Some("Luminance plane (j)"));
-    assert_eq!(named(Control::Planes).as_deref(), Some("Color planes (k)"));
-    assert_eq!(
-        named(Control::Log).as_deref(),
-        Some("Logarithmic counts (y)")
-    );
     assert_eq!(
         named(Control::Marks).as_deref(),
-        Some("Mark the clipped pixels (w)")
+        Some("Mark clipped pixels (w)")
     );
     assert_eq!(
         named(Control::Reset).as_deref(),
@@ -637,9 +632,6 @@ fn the_histogram_panels_buttons_are_named_briefly_and_by_their_keys() {
     // Short enough to be read where they are drawn: beside a toggle, on
     // a panel one panel wide.
     for widget in [
-        Control::Luma,
-        Control::Planes,
-        Control::Log,
         Control::Marks,
         Control::Reset,
         Control::Ramp(1),
@@ -673,6 +665,7 @@ fn the_handles_say_which_keys_step_them() {
         camera: None,
         conditions: Conditions {
             openable: false,
+            data: false,
             ..Conditions::ALIVE
         },
     };
@@ -882,8 +875,8 @@ fn the_count_says_where_it_is_and_what_a_press_on_it_opens() {
         tooltip.hints,
         [
             spelled_here("Click to choose a file from the list (Ctrl+P)"),
-            spelled_here("Next file (], Page Down)"),
-            spelled_here("Previous file ([, Page Up)"),
+            spelled_here("Next file (Right, Down, ], Page Down)"),
+            spelled_here("Previous file (Left, Up, [, Page Up)"),
         ]
     );
 }
@@ -1050,23 +1043,36 @@ fn keys_resolve_to_their_actions() {
     );
 }
 
-/// The three pan distances are one key held three ways, and a named key
-/// takes Shift as a modifier: the plain binding must not answer for the
-/// shifted press as well. With a region selected the region's names
-/// hold the same arrows, and are tried first; the fine pan has no
-/// region name on its chord, and pans under a region as without one.
+/// The arrows alone step through the files, and the three pan distances
+/// are the arrows held three ways; a named key takes Shift as a modifier,
+/// so the plain binding must not answer for the shifted press as well.
+/// With a region selected the region's names hold the same arrows, and
+/// are tried first; the coarse pan has no region name on its chord, and
+/// pans under a region as without one.
 #[test]
-fn the_arrows_pan_by_what_is_held_with_them() {
+fn the_arrows_step_files_and_pan_by_what_is_held_with_them() {
     let left = Key::Named(NamedKey::ArrowLeft);
     let held = |mods| action_for(&left, ELSEWHERE, mods);
-    assert_eq!(held(PLAIN), Some(Pan(Left, Coarse)));
-    assert_eq!(held(SHIFT), Some(Pan(Left, Fine)));
+    assert_eq!(held(PLAIN), Some(PreviousFile));
+    assert_eq!(held(SHIFT), Some(Pan(Left, Coarse)));
+    assert_eq!(held(CTRL | SHIFT), Some(Pan(Left, Fine)));
     assert_eq!(held(CTRL), Some(Pan(Left, Edge)));
-    assert_eq!(held(CTRL | SHIFT), None);
+    assert_eq!(held(Mods::ALT), Some(Back));
     assert_eq!(held(CTRL | SHIFT | Mods::ALT), None);
+    for (arrow, step) in [
+        (NamedKey::ArrowRight, NextFile),
+        (NamedKey::ArrowDown, NextFile),
+        (NamedKey::ArrowUp, PreviousFile),
+    ] {
+        assert_eq!(
+            action_for(&Key::Named(arrow), ELSEWHERE, PLAIN),
+            Some(step),
+            "{arrow:?}"
+        );
+    }
     let region = |mods| with_region(&left, ELSEWHERE, mods);
     assert_eq!(region(PLAIN), Some(MoveRegion(Left)));
-    assert_eq!(region(SHIFT), Some(Pan(Left, Fine)));
+    assert_eq!(region(SHIFT), Some(Pan(Left, Coarse)));
     assert_eq!(region(CTRL), Some(GrowRegion(Left)));
     assert_eq!(region(CTRL | SHIFT), Some(ShrinkRegion(Left)));
     assert_eq!(region(CTRL | SHIFT | Mods::ALT), None);

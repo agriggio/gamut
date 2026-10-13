@@ -1,4 +1,4 @@
-Cargo.lock sha256: 209e660482ea734a45d70025986b10906f5decdd4a9f46a5fb0549a81abe76aa
+Cargo.lock sha256: da572cfb3f63179767488ca05e6380ad0ba59fe9afa0ec816077cad740469ade
 
                       gamut: third-party notices
 
@@ -1560,7 +1560,7 @@ Used by:
   alloc-stdlib 0.2.4
   exr 1.74.2
 
-Copyright (c) <year> <owner>. 
+Copyright (c) <year> <owner>.
 
 Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
 
@@ -3706,7 +3706,7 @@ MIT License
 --------------------------------------------------------------------------
 
 Used by:
-  gamut 0.10.0
+  gamut 0.11.0
 
 MIT License
 
@@ -4321,7 +4321,7 @@ MIT License
 --------------------------------------------------------------------------
 
 Used by:
-  gamut 0.10.0
+  gamut 0.11.0
 
 MIT License
 
@@ -5490,5 +5490,3 @@ the following restrictions:
     misrepresented as being the original software.
 
 3. This notice may not be removed or altered from any source distribution.
-
-

@@ -2,7 +2,7 @@
 //!
 //! Adding a format means writing a [`Decoder`] and listing it in [`DECODERS`];
 //! nothing downstream needs to change, because decoders describe their output
-//! with [`Samples`](super::Samples) and [`ColorSpace`]
+//! with [`Samples`] and [`ColorSpace`]
 //! rather than converting it.
 
 use std::any::Any;
@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow, bail};
 
 use super::sequence::{FrameSource, Sequence};
-use super::{ColorSpace, DecodedImage, Primaries, Transfer};
+use super::{ColorSpace, DecodedImage, Primaries, Referred, Samples, Transfer};
 
 pub(crate) use limits::MAX_SEQUENCE_BYTES;
 use limits::{MAX_DECODED_BYTES, MAX_TEXTURE_DIMENSION, check_decoded_size};
@@ -407,6 +407,36 @@ pub enum CameraJpeg {
     Only([u32; 2]),
 }
 
+/// How a file is read when the person looking at it says, over whatever
+/// its header and the decoder's guess made of it: as a photo or as data.
+/// The one distinction a photographer meets — a scan read as sensor counts
+/// opens auto-leveled, an elevation model read as a picture opens black —
+/// put as two words rather than as a transfer function.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Reading {
+    /// Light meant to be looked at: the file's own curve where it states
+    /// one, sRGB where it states none, with 1.0 as white. A file whose
+    /// numbers were taken for a measurement is read as a graded picture
+    /// instead — through the sRGB curve where they are integers, which were
+    /// almost certainly encoded, and as linear light where they are floats,
+    /// which almost never are.
+    Photo,
+    /// Numbers that need not be light: linear as they are, windowed to what
+    /// they hold, a single channel through a ramp — [`Referred::Measured`].
+    Data,
+}
+
+impl Reading {
+    /// What `image` is being read as, by the one fact every reader of it
+    /// goes by.
+    pub fn of(image: &DecodedImage) -> Self {
+        match image.referred {
+            Referred::Measured => Reading::Data,
+            Referred::Display | Referred::Scene => Reading::Photo,
+        }
+    }
+}
+
 /// Overrides for files whose headers cannot say what they mean. A 16-bit TIFF
 /// is the usual case: the same container holds both a scanned photograph and a
 /// frame of sensor counts, and only the person who made it knows which.
@@ -414,6 +444,10 @@ pub enum CameraJpeg {
 pub struct Overrides {
     pub transfer: Option<Transfer>,
     pub primaries: Option<Primaries>,
+    /// Whether the file is read as a photo or as data, where the person
+    /// looking at it has said: the switch on the histogram and information
+    /// panels, per file, over what `transfer` and the decoder made of it.
+    pub reading: Option<Reading>,
     /// Whether to reconstruct the HDR image an Ultra HDR JPEG, or a HEIF
     /// with a gain map, describes. Clearing it shows the SDR base image
     /// many other viewers show, which is worth having when the two need
@@ -426,6 +460,7 @@ impl Default for Overrides {
         Self {
             transfer: None,
             primaries: None,
+            reading: None,
             gain_map: true,
         }
     }
@@ -441,12 +476,38 @@ impl Overrides {
 
     /// What every decoded image goes through on its way out, whether it was
     /// a file's one picture, a page, or a frame: checked for consistency,
-    /// then relabeled as the command line asked.
+    /// then relabeled as the command line asked, and read as the person
+    /// looking at it said.
+    ///
+    /// A transfer function given on the command line carries the reading
+    /// with it where the decoder's reading followed the curve — the deep
+    /// TIFF taken for a measurement is a photo again under `--transfer
+    /// srgb` — and leaves alone a reading the decoder chose against its
+    /// curve: a raw's linear counts are graded, an EXR's are a scene, and
+    /// neither becomes a measurement for being told its curve.
     pub(crate) fn finish(&self, mut image: DecodedImage, path: &Path) -> Result<DecodedImage> {
         image
             .validate()
             .map_err(|problem| anyhow!("{}: {problem}", path.display()))?;
+        let followed_curve = image.referred == Referred::of(image.color.transfer);
         image.color = self.apply(image.color);
+        if self.transfer.is_some() && followed_curve {
+            image.referred = Referred::of(image.color.transfer);
+        }
+        match self.reading {
+            Some(Reading::Data) => {
+                image.color.transfer = Transfer::Linear;
+                image.referred = Referred::Measured;
+            }
+            Some(Reading::Photo) if image.referred == Referred::Measured => {
+                image.referred = Referred::Display;
+                let floats = matches!(image.samples, Samples::F32 { .. });
+                if image.color.transfer.is_linear() && !floats {
+                    image.color.transfer = Transfer::Srgb;
+                }
+            }
+            Some(Reading::Photo) | None => {}
+        }
         Ok(image)
     }
 }

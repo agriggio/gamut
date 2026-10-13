@@ -20,14 +20,542 @@ picture, and a viewer that makes a different picture it cannot save is a tease
 that ends in sidecar files. That work belongs to the programs on the open
 menu. The panel is an instrument, not `Display`'s fields laid out as rows.
 
-## The rows are every file's
+## A column of stages
 
-Three rows of settings under the band — *Exposure*, *Window*, *Curve* —
-and every file gets all three, so the panel is one height
-(`histogram::SIZE`) for every file and for the whole of a file's stay. The
-information column starts under the panel, and a column that jumped from one
-file to the next, or every time a handle was dragged past white, would be a
-column no one could read.
+The panel is the picture's way from the file to the screen, a section to a
+stage, read from the screen back: **Output**, what goes out; **Display**,
+what the display starts from and what it does to it; **Gain map**, how far
+the map lifts the picture, for a picture that carries one; **Image**, the
+picture as the file stores it — named for the picture rather than the file,
+since the gain map is the file's too. `histogram::Section` is that list, in that
+order, and `section::layout` lays out the ones the picture passes through
+(`Section::applies`).
+
+Output is at the top because what goes out is what the panel is most often
+opened to ask about — is anything clipped, and how much — and the head of
+the column is the part that is always in view. Below it the order is the
+data's, so the column reads as one path rather than as four histograms that
+happen to share a panel: a picture's red that is past white on the Display
+plot is at the top of the Image plot under it, and the matrix that moved it
+is the gap between the two. A layout that kept every section in one place
+for every file would have to leave a hole where a picture has no gain map;
+the column closes up instead, and the sections above the gap do not move.
+The same holds while the gain map is shown in the picture's place: the Image
+section is left out (`Section::applies`), since what the display then starts
+from is the map in stops, which the Gain map section already plots — on the
+range its metadata describes, in whole stops, each code spread over the
+stretch it stands for — and an Image section would plot it again as a bare
+measurement, on its measured ends, and under a name that says the file
+stores it, which it does not. The column is then the flow it is on screen:
+the map, the display, the output.
+While the depth map is shown, the Gain map section is left out in its turn:
+nothing on screen is lifted, and its header's share of the lift shown would
+not be true of anything in the window. The Image section is then the depth
+map's own samples. The switch to the gain map is still in the bar and on its
+key, so leaving the section out strands nothing.
+
+Every section is a fixed height (`Section::height`), and the column is as
+tall as its sections, whatever the window. The two exceptions are both the
+Display section's: its row of false colors, which only a gray image has, and
+its row of windows, which only an image read as data has
+(`section::is_data`, `display::rows_height`). Each makes the section taller
+rather than coming out of the plot, so that the Display plot stands as tall
+as the Output's on every file — the two plots read closely, side by side in
+the eye, at one height — and on a gray file, or a measurement, the sections
+below it move down by the row. On a window shorter
+than that the side panel scrolls — an egui `ScrollArea`, the wheel's alone:
+`DragScroll::Never`, since a drag in the column is a drag of a handle, the
+band or the exposure's slider, and must never move the column instead.
+Nothing is shrunk to fit and nothing is dropped. What the panel needs room
+for at least is the head section (`histogram::MIN_HEIGHT`), which is what
+`ui::PANELS_ROOM` and `ui::room` are measured against, so that the toggle is
+alive wherever the question the panel is opened for can be answered; the
+rest is a scroll away. The width is the [side panel's](interface.md#the-side-panel).
+
+The panel is laid out as the [information panel](interface.md#the-side-panel)
+is, so that the two read as two tabs of one panel: a row of buttons at its
+head, as tall as the information's header (`info::CHIP_HEIGHT`), so the
+hairline under it (`info::HEADER_GAP`) stays put as the tabs are switched —
+the pair that reads the file as a photo or as data first (`Control::Reading`,
+see [color](color.md#display-referred-scene-referred-and-measured)), since
+it is upstream of everything in the column, and at the far end the reset,
+with the clipped pixels' toggle just before it;
+then the column, in a scroll area with its bar down the inner edge and the
+gutter kept clear for it; and the sections parted by hairlines through the
+gap between them (`info::SECTION_GAP`). Each section opens with a header
+as the information's sections do: its mark and name in the accent
+(`Section::mark`) — a monitor for Output, sliders for Display, the sun for
+the gain map, as it wears everywhere else in the window, and a picture for
+Image, as the information's Image section wears — and on the right what the pointer is reading at its
+stage. The header's last square (`section::button`) is the section's own
+button where it has one: the Gain map section's eye, which shows the map
+in the picture's place, lit while it is. A section's readout ends short of
+that square where the section has a button, and at the line's end where it
+does not; a section given one later — the switch that passes a stage by —
+takes the square the same way.
+A stage added later — the development stages a ProRAW file describes, a
+baseline exposure, a profile's tone curve, a gain table — is a `Section`
+variant placed between Display and Image at a height of its own: a 1D stage
+composes into the Display curve and takes a header of its own, and a stage
+that lifts each pixel by its own amount is shaped as the Gain map section
+is, a histogram of the lift with how much of it is applied in its header.
+
+The row of buttons — the marks on the picture, and at the far end the
+reset (`histogram::toolbar`) — acts on every plot in the column, or on the
+picture, and on no one section, so it stands above all of them and stays
+in view however far the column is scrolled. With nothing beside them, the
+plots fill the column's width, which is a bin to the point:
+`histogram::COLUMN_WIDTH` is the plot and the inset its ground is drawn
+into, and the side panel's width is worked out from it.
+
+## What each section plots
+
+**Image** is `Face::stored`, a `stats::Stored`: each of the file's channels
+as it stores them — no lift, the file's own primaries, and nothing the file
+does not hold, so no luminance, which is a weighting of the channels the
+display works out and, in the file's own primaries, not even that. It is a
+plot to the channel (`stored::plots`), one under the other in the order the
+file keeps them, each poured from the channel's tally (`stats::Plane::plot`):
+a bin to the code for integer samples, so the plot is exact, and a bin to a
+thousandth of an octave for floats. The tallies are made in the same pass as
+the scan the display starts from (`Stats::scan_both`), when the image
+arrives, on the loader's or the player's thread.
+
+Which range the plots span is the file's reading. A photograph's channels
+are compared against one another, so they share one axis: integer samples
+over the whole range they can hold, a raw's from black to the sensor's
+saturation, so that how far a picture stands short of clipping is the room
+to the right of it; light stored as floats in stops, read off every channel
+together as the Display's axis is read off the luminance. A file read as
+data may hold channels that are different quantities, so each has its own
+range and its own row of values under it (`Stored::shared`): the channel's
+exact extremes, or, where the trim the display's own percentile window uses
+would take a whole pixel or more off either end and the picture is a good
+deal narrower without it, the trimmed range (`stats::PLOT_TRIM`,
+`stats::WHOLE_FROM`), so that one undeclared sentinel does not put the
+whole of a measurement into one bin. What lies past either end piles into
+the end bin. A float tally's bins are too coarse for a measurement standing
+well off zero — a thousandth of an octave at 300 is wider than a bin over
+290..300 — so the fine bins of a float on a linear axis are counted from the
+pixels in a second pass instead (`stats::Binning`).
+
+**Gain map** is `GainMap::lift_plot`: the map's histogram in stops at the
+whole of the lift, evenly spaced, over the range the file describes the map
+for — its lowest code to its highest (`GainMap::described_range`) — for the
+reason a graded file's plot is over 0..1: the axis is the file's, and what
+of it the picture uses is the plot's shape. A map described down into
+darkening it never does leaves the stretch below its lowest code empty,
+with 0 marked inside the axis, which is what the file says. The header
+writes the range the picture's map does hold (`GainMap::lift_range`). The map is 8-bit, and its codes reach
+stops through a curve wherever its gamma is not one or it is Apple's, read
+through Rec. 709's: a bin to a code would put the axis on that curve, and a
+code dropped into the one bin its middle falls in would comb. So each code
+stands for the stretch of stops from halfway to the code below to halfway to
+the code above, and its count is spread over the bins that stretch covers,
+in proportion — the honest plot of a quantized value on an axis that is not
+its own — counted in sixteenths of a pixel (`SHARES`) so that a code spread
+thin keeps something in each bin. A map with a channel each has a plane
+each, and its luminance plane is the mean of the three, spread pixel by
+pixel over the mean of their stretches; a pixel stands on it at the mean of
+`GainMap::stops_at`. How much of the
+lift is applied (`GainMap::applied_stops`, the same number the information
+panel's *Applied* row says) is written in the header while the pointer is
+reading nothing — none on a screen with no room above white, which is most
+screens. There is no band under the plot as the Output and Display plots
+have: theirs show what a value comes out as, and one filled to the applied
+share would only say what the header's words do, and on an SDR screen would
+be an empty strip. The map's
+histogram is a walk over the map, kept in egui's data for as long as the
+picture's map is the same one. The section reads the picture's map
+(`Current::picture_face`), so that it stays while the map is shown in the
+picture's place, and its button is that switch.
+
+**Display** is `Face::stats`, what the display starts from: lifted through
+the gain map at the weight in force, in the working space's primaries — see
+[color management](color.md). It is the plot the window, the exposure and
+the curve act on, so the response curve is drawn over it always, and the
+band and the rows under it. Its planes are drawn as every other section's
+are, so that it compares with the Output's bin for bin; the curve stands
+off them on an outline in the plot's ground (`CURVE_OUTLINE`), which keeps
+it readable where it crosses the planes' lines.
+
+### The axis
+
+What a position on the Display and Image plots stands for is
+`stats::Axis`, and everything that puts a value on either plot or reads one
+off it — the scan, the band and its handles, the response curve, the rows
+of stops, the pointer's rule, the handles' keys (`Display::step_black`) —
+goes through `Axis::place` and `Axis::value`, so that the plot and what is
+drawn over it cannot be spaced two ways. A file on a curve is plotted on
+that curve, and a linear integer file — sensor counts, a measurement — on
+its linear values; the reasons are with `stats::Plot`.
+
+Light stored linear as floats — a Radiance picture, an EXR — is plotted in
+stops instead (`Axis::Stops`): a value stands at its base-2 logarithm. Such
+a file has no curve of its own and no top. A Radiance picture runs from
+nothing to a few hundred with almost all of it in the bottom hundredth,
+which a linear axis puts in its first bin and its first two *fine* bins:
+the Output plot, rebinned from those, came out as two flat steps, and the
+window, the handles and the curve were a sliver at the plot's left edge
+that the exposure slider visibly did nothing to. In stops the shadows get
+the room the eye gives them, a stop of exposure is a shift along the axis
+by one stop, and the window is a stretch of the plot. A measurement keeps
+its linear axis: its values are quantities rather than light, may be
+negative, and have no stops anyone counts.
+
+The axis's range is read off the picture (`stats::stops_axis`): the top is
+the first whole stop at or above the brightest plotted channel, and the
+floor the darkest lit stop after the bottom `FLOOR_TRIM` of the lit pixels
+is left off — a thousandth, enough to keep a few stray pixels at next to
+nothing from putting the floor tens of stops down and the picture back in
+a sliver, and no more, since what is trimmed piles into the first bin — no
+further than `STOPS_REACH` under the top, and at least a stop under it so
+that the axis always has a span. A picture with no light in it has no top
+for a stops axis and is plotted on the linear one, which is why the axis
+is read from `Stats::axis` rather than worked out from the image again.
+
+A value with no light in it — zero, or less — has no logarithm, and stands
+at minus infinity, below every floor. A metered file's window opens at
+0..1, so its black handle stands at the band's left end, hollow, as a
+handle out past the band does; a drag of the band slides the white alone,
+since no light moved along by any distance is still no light
+(`track`); and the black point's key steps it up from the plot's floor,
+where the handle is drawn (`Display::placed`). The response curve is drawn
+on the same axis both ways, so a display doing nothing is still the
+diagonal and a stop of exposure lifts the whole line by a stop; black is
+the plot's floor (`plot::Scale`), which a response at black is drawn at.
+
+**Output** is the Display plot pushed through the display's response and
+encoded on sRGB's curve, over 0 to the surface's room above white
+(`FrameInput::room`, which is `App::display_headroom`). Where a gray image
+is read through a ramp — a false color, or the gray ramp a measurement is
+spread along (`Display::ramp`) — its axis is the ramp instead, from one end
+to the other with no room past it, and the band under the plot is the ramp
+itself: the response is where along the ramp a value lands, and for the
+gray ramp that is the screen's code, so the plot is the Display plot across
+the window with what lies outside piled at the ends, which is the truth of
+what the screen receives. Spaced on sRGB's curve it would put a value's bar
+where the *light* of that code falls, a place the ramp never gave it. It is
+rebinned, not scanned: `Stats::scan` counts the pixels into 4081 fine bins on the input's
+axis (`stats::Fine`), and `Fine::rebinned` pushes each fine bin's value
+through the response and spreads its count over the output bins it stands
+for, out-of-range piling into the end it went out of. A handle dragged
+changes the response on every frame, and four thousand bins through it is
+nothing where two million pixels would be a frame each. The Display and
+Image plots are the same fine bins rebinned through nothing, so all three
+are binned alike.
+
+### Why the counts are spread
+
+Dropping each fine bin's count whole into the one output bin its value
+lands in makes a comb on a plot of data with none in it: two grids beat
+against each other. Fine bins eight and a half to an output bin put eight
+and nine into neighbors by turns, a ripple of a tenth on a smooth picture;
+and an 8-bit file's codes, on the axis a wide-gamut file's color is carried
+onto — about −0.4 to 1.04 for a P3 photograph — stand 0.7 of a bin apart and
+put one and two into neighbors by turns, a ripple of a third on a plot of
+every code there is. Neither says anything about the picture.
+
+So a fine bin's count is spread evenly over the stretch it stands for once
+the response has had it. A quantized file's code (`Fine::code`, the step
+between codes) stands for the stretch from halfway to the code below to
+halfway to the code above, and codes spread so tile the axis and come out
+even. A code is never spread wider than an output bin, though: where the
+display pulls codes further apart than that — a stop or two of exposure on
+an 8-bit file — each is spread over a bin's width around where it lands and
+the bins between are left as empty as the screen leaves them. That comb is
+the posterization a histogram is looked at for, and it stays. A float file
+has no step, and each fine bin is spread over a bin's width. The counts are
+kept in sixteenths of a pixel (`stats::SHARES`), so that a pixel spread over
+two or three bins keeps a share in each; a plot is read by its bins against
+one another, which the unit leaves alone.
+
+There are 255 × 16 + 1 fine bins so that every output bin's middle is a fine
+bin's, and an 8-bit file's codes on an axis of 0..1 stand each on the middle
+of its own bin: a display that does nothing puts every one wholly back in
+it, and a spike that is one code is one bin.
+
+The step is the file's as stored. A gain map's lift pulls the codes further
+apart than that, so a lifted plot can keep a little of the comb.
+
+The color planes go through the same scalar response as the luminance, a
+channel at a time. That is exact where the display treats each channel
+alike — a window, an exposure, a clip — and an approximation under the
+neutral curve, whose desaturation moves a channel by what the others are:
+the planes are then plotted where each channel would go were it gray. They
+are read for their shape, and the luminance is still exact.
+
+The rebinned plot is kept in egui's data (`output::binned`), keyed on the
+fine bins' address — the `Arc` itself is held beside it, so the address
+cannot be another's — the window's offset and gain, the curve, whether a
+false color is on, the surface, and its room. Where the room is not known —
+an HDR surface whose monitor has not said — it is resolved as the largest
+output any value reaches, rounded up to a whole stop above white, and the
+key carries what it was resolved to.
+
+## The row of stops
+
+Under the Output and Display bands, and under the Gain map plot, a row of
+whole stops (`plot::ev_scale`): a tick at each stop where its value falls on
+the plot's axis, and its number under the ticks there is room to write.
+Each section says where a stop is (`place`), and the ticks are worked out
+from the value, not the bins, so they are exact wherever they are drawn.
+
+- **Output** counts from white: its values are ratios to white already, so a
+  stop is `2^n` encoded on sRGB's curve over the axis's top. On a surface with
+  room above white the row runs past 0 to the room, which is the one thing
+  the band, held to what the panel can show, cannot say. It is left off an
+  axis that is a ramp, whose places are not light, and off a measurement
+  (`Referred::Measured`) as the Display row is.
+- **Display** counts from the value the window puts at white — the white
+  handle, `Display::displayed_bounds` — so the plot reads as stops below
+  clipping, as a camera's does, and a stop on the exposure slider moves the
+  row by exactly a stop. A window whose white is past the plot's end has no 0
+  on it, which is the truth: nothing plotted reaches the clip. It is left off
+  a measurement (`Referred::Measured`), whose values are not light.
+- **Gain map** counts the lift itself, the axis's own unit, so its ticks are
+  evenly spaced.
+- **Image** has one only on an axis in stops (`stored::stop_across`),
+  counting from the file's own 1, which holds still while the window and
+  the exposure move the Display row's 0: the values at the axis's ends,
+  which the section writes on any other float axis, would be a column of
+  zeros at three places across twenty stops. On every other axis its point
+  is the file's own units, and its stops would be the Display row's again
+  with no window on them.
+
+Every row is worked out from 0 outward each way, so 0 is always written and
+the numbers further out give way to those nearer 0. A side stops where its
+ticks come closer than `EV_TICK_GAP`: on a curve the shadows crowd past
+reading around eight stops under white, and on a linear axis, where each
+stop down is half the distance of the last, after four or five. On an axis
+in stops the ticks are evenly spaced and the row runs the plot's width.
+
+## The pixel traced down the column
+
+`histogram::marked` hands every section its `Mark`: the bin its rule stands
+on and the words its header writes. A pointer on a pixel of the picture
+marks every section at once, each with the pixel as its own stage has it —
+the Image section reads `Current::sample_as_stored`, the Gain map section
+reads `GainMap::stops_at`,
+the Display section reads `Current::sample` and writes the value and what
+the display makes of it, and the Output section writes that response held
+to the surface's room. The rules down the column are one pixel's path from
+the file to the screen.
+
+The Image section marks the pixel a channel at a time (`Mark::channels`):
+red, green and blue as the file holds them, or a gray file's one channel,
+each with a rule on its own plane's plot in that plane's ink (`Plane::ink`)
+and its number at the end of the header in the same ink, a cell to a
+channel so the numbers stay put as the pointer moves. They are written as
+the bottom bar's Decimal format writes a pixel (`pixel::component`): counts
+for 8- and 16-bit samples, the number for floats. A file's channels land on
+its plot as its codes do, so each rule stands on the bar its channel was
+counted in. A pointer on one of the section's plots marks that plane alone
+(`stored::hovered`), with the value its bin stands for.
+
+Beside each of the section's rules is where its value stands among that
+channel's pixels, as a percentile (`plot::rule_label`): the share of them
+below it and half of those at it (`stats::Plane::rank`), so a value the
+whole picture shares reads 50% rather than 0% or 100%, and a clipped
+channel's top code reads short of 100% by half of what is piled there. It is
+read off the stored tally rather than off the plot's bins, so it is exact to
+the code for integer samples and to the tally's thousandth of an octave for
+floats. The words sit after the rule, or before it where they would run off
+the plot's end, over a fade of the plot's ground so that a plane's line
+crossing them does not cut through them.
+
+The Display and Output sections do the same for each plane they draw, the
+luminance and, on a color picture, the three channels (`Plane::drawn`). A
+pixel puts a rule on each plane's plot in that plane's ink, and each
+percentile on a line of its own down from the top, the luminance's first,
+so that four rules close together do not write over one another
+(`histogram::plane_rules`, `plane_labels`). A pointer on the plot has one
+value, so it keeps the accent's one rule with the four percentiles stacked
+beside it: where that value stands among each plane.
+
+The Display section ranks against the tallies the scan counted the plot
+from (`Stats::rank`, `stats::Quantity`): the luminance's, and each channel's
+— the stored channel's own, shared with the Image section, where nothing
+moves the channels, and the working space's where a lift or a change of
+primaries does. Keeping them costs nothing in time, since the pass counts
+them either way.
+
+The Output section ranks what the response makes of each pixel rather than
+the pixel itself (`Stats::rank_through`, `output::output_rank`), held to
+the plot's axis as the plot holds it, so a pixel the screen clips stands in
+the middle of the pile at white, as that bar's height says, rather than
+where its own value stood before the response. Below the clip it stands
+where it did in the Display section. The response to a gray never falls —
+the window is never inside out (`Display::set_window`), and both curves and
+the clip rise — so the bins that come out below a value are one run from
+the bottom, found by halving the tally rather than putting every bin
+through the response; `the_response_to_a_gray_never_falls` holds that. A
+pixel is ranked as the bin it was counted in comes out (`Stats::binned`), so
+that it lands among the pixels counted with it. A channel goes through the
+response as the plot sends it, as though it were gray: under the neutral
+curve, whose desaturation moves a channel by what the others are, that is
+the plot's approximation, and the percentile agrees with the plot rather
+than with the screen.
+
+A pointer on one section's plot is reading that plot's axis and is on no
+pixel besides, so only that section marks anything, with the value its bin
+stands for. Every hit test is against the rectangles the pass laid out,
+which the scroll has already moved, and a pointer over a section scrolled
+out of the panel is over nothing (the scroll area's clip rect). A value off
+a plot's axis is still written and marks no bar: the rule would otherwise
+claim a bar that is not the pixel's.
+
+## The Output section
+
+The band under the plot is what each output comes out as, and the panel
+cannot show past white: its target is SDR, so the stretch an HDR surface
+lifts above white would be drawn at white, the same as white itself. That
+stretch is overlaid with chevrons pointing right, in the accent
+(`plot::Past::Chevrons`), so that it reads as lifted rather than as a run of
+white. The Display band keeps an accent rule along its top instead
+(`Past::Rule`): there the band is the levels track, its handles are drawn
+over it, and a pattern would fight them.
+
+### The share clipped at either end
+
+`Plot::clipped`, asked of the Output plot at black and at white, is the
+share of the samples the screen puts out at or below black and at or above
+white, per plane, the worst plane reported. Read off the output, it is what
+the screen does with the picture, rather than a share worked out again from
+the window's two ends on the input. A red flower blows its red channel long
+before its luminance goes, and the plane that has piled into the end bin is
+the one the eye finds on the plot. Nothing on the panel writes it yet: the
+plots carry no numbers, and the marks below say where the picture is
+clipped rather than how much of it.
+
+On a quantized file under a window whose ends sit on codes, the share is
+the input's share at the window's to within the rounding of a share of a
+pixel: a code pushed to black or past white lands wholly in an end bin of
+the output, and the codes just inside are pulled further apart than a bin
+and spread no further than one — a test in `stats.rs` holds the two to each
+other. On a float axis the share is to the nearest fine bin.
+
+### The marks on the picture
+
+`w`, or the button beside the Output section's band, paints the clipped
+pixels on the picture: `MARK_WHITE` and `MARK_BLACK` in
+`shaders/image.wgsl`, where any channel of the windowed value is at or
+past the bound, painted in place of the pixel and before the false color,
+whose ramp does not end in white and black. The whole test lives in the
+image shader because that is the one place the windowed value exists per
+pixel; the composite pass sees the image target, which for a false-colored
+file already holds the ramp's color.
+
+A toggle, like the grid: a way of looking at the picture rather than a
+setting of it. `Panels::mark_clipped` is the state, beside the plane and
+count-axis toggles, `shader_codes::marks` the two bits, and
+`Draw::mark_clipped` the way in — not a field of `Display`, which is kept
+per file and restored when a file comes back, where the marks stay on across
+files and are left alone by every reset. The key and the button both go
+through `App::press(Control::Marks)`, so the two cannot drift.
+
+The button is at the start of the row at the panel's head, and paints the Output band's two ends — the pixels the screen has
+taken to black and to white — on the picture. The button wears
+Lucide's `triangle-alert` (`icon::TRIANGLE_ALERT`), the sign every editor's
+clipping warning wears.
+
+Which ends are marked follows `Display::clips_white`, the same rule the
+bottom bar's **clipped** uses: white is only marked where the
+surface is actually clipping it.
+
+One channel at an end is enough to mark a pixel, as it is enough for
+`Plot::clipped` to count it. A channel that has reached the bound has lost what it
+held, and the color left over is not the file's: a raw's white balance
+lifts its red well above its green, so a sun's red burns out while its green
+is still climbing and the disc comes out pink, and on a warm sunrise the
+green may never reach white at all — a test that waited for every channel
+painted nothing on a picture whose sun was plainly gone. The paint and
+`Plot::clipped` then answer the same question, the one as a place and the
+other as a share of the picture wearing the paint. The comparisons are
+exact, as `Plot::clipped`'s are.
+
+The test is made in the working space's channels — the color after
+`params.primaries` has carried it into BT.709, which is the color `shade`
+windows — because that is where the band's two ends are, and where
+`Plot::clipped` counts: `Stats::scan` measures the picture there too. A vivid Rec.
+2020 or P3 color has a BT.709 channel above white, and one below zero, that
+the file never clipped but a surface that stops at either end will, and the
+mark says so; [color management](color.md) says why that is a highlight's
+clip and not a gamut matter of its own, and what becomes of the color on a
+surface with the room. Such a texel is past both ends at once, and the two
+marks are painted as a partition of the pixel, so `judge` gives it one:
+white where white is being painted, and black otherwise — which is why the
+paint's gate, `shader_codes::marks`, is part of `MarksKey`, and a curve
+switched on rewrites the chain. The matrix keeps white, so a BT.709 file is
+judged exactly as its codes are stored.
+
+The mark is a texel's, not a blend's, and it is kept as one. `judge` in the
+image shader is the verdict on one texel of the picture as uploaded, under
+the window in force — through the same `load` and `expanded` the draw reads
+by, so on lifted, straight color — and everything the marks show is that
+verdict, averaged over exactly the texels the picture is averaged over.
+Magnifying, a pixel lies inside one texel and takes its verdict outright.
+Minifying at the picture's own level, up to the chain's step, `marks_over`
+judges the texels under the pixel live, over `area`'s footprint. Farther
+out the draw reads a coarse level of the picture, whose texels are averages
+that no longer say which of their texels were at an end, so the marks have
+a coarse chain of their own (`image_layer::Marks`): `fs_marks` writes its
+first level from the picture, each texel the shares of the `STEP` by `STEP`
+block under it, and the reducer makes the rest from that as it makes the
+picture's chain from the picture, in `Rg8Unorm`, white in one channel and
+black in the other. Every coarse level of the picture is bound beside the
+marks at the same level, and `shade` wears the paint by the share it reads.
+A run of crushed texels stays whole blue at every zoom, a scattered shadow
+thins into its neighbors as the crushed pixels thin among them, and nothing
+changes at 1:1.
+
+Nothing is stored per texel of the picture — the chain begins at a
+sixteenth of it, about a bit a texel — and nothing is stored at all while
+the marks are off or nothing coarse is drawn, so a black point dragged at
+1:1 costs the marks nothing, and dragged on a fitted view costs one pass
+over the picture and the chain from it, the same as the picture's own chain
+costs on every frame of an animation. `MarksKey` is what the chain was
+written under, the window transform and the lift's weight, and
+`ImageLayer::prepare` writes it again when that changes — into the textures
+it has, through `Reducer::build_into`, since a window stepped is the same
+picture judged again and allocates nothing — and drops it when the texels
+change or it is not wanted; every level is rebound only when the chain's
+textures change, which a rewrite does not. The
+pass reads the picture through a bind group of the chain's own
+(`Marks::reading`): the picture's level-1 group names the marks' first level
+beside it, and a texture cannot be a pass's target and its input at once.
+
+Two things this is instead of. Judging the resampled color would have found
+an end only under a pixel every texel of which is at it: a scattered shadow
+vanished the moment the view dropped below 1:1, and at exactly 1:1 came and
+went with the rounding, since where a pixel's center falls in the texture is
+arithmetic on its coordinate that is not exact at the far end of a large
+picture, and `antialiased_nearest` there blends a thousandth of the neighbor
+in — shadows that sparkled as the picture was zoomed and went missing at
+100%. And reading the marks off the picture's own texels under a far-out
+pixel would have cost every texel under it, which is what the chain exists
+to avoid. The paint is laid over the pixel's own color, the average of every
+texel under it, marked ones included, so a pixel partly marked is a hair off
+what painting every texel first and shrinking would give; one wholly marked,
+or not at all, is exactly that.
+
+## The Display section
+
+The response curve is drawn always. On a display with nothing asked of it
+the curve is the diagonal, which in a panel that plotted one stage would
+say nothing the axis under it did not; here the section is the display, and
+its curve is what it is read for, a diagonal saying the display does
+nothing as plainly as a bend says what it does.
+
+### The rows are a photo's or data's
+
+Under the Display section's band, a photo has two rows of settings —
+*Exposure* and *Curve* — and an image read as data has one, *Window*. The
+section is one height for every photo and another for every measurement,
+and for the whole of a file's stay. A section whose controls jumped from
+one photo to the next, or every time a handle was dragged past white,
+would be one no one could keep a hand on; the reading is a choice made on
+the file, and the column moving when it is made says that it did something.
 
 Three kinds of file use this program — `AutoWindow::default_for` splits on
 `Referred`, and the colormaps, the float TIFF and the GeoTIFF keys say who
@@ -36,22 +564,55 @@ where a measurement is windowed to what it holds. Scene light — a Radiance
 picture, an EXR — keeps 0..1 too, in the file's own units, and opens with
 the exposure already turned: `Display::for_image_with` meters it, putting
 the key of the scene at middle gray, and the slider shows the reading in
-stops. The rows do not follow that split, because the black handle moves
+stops. The handles do not follow that split, because the black handle moves
 the window on every file: a graded file's window leaves 0..1 at the bottom
 the moment the black handle is touched, so a white handle that meant the
 exposure on a graded file and the window's top on a measured one would be a
-handle that meant a different thing on the next file along. The two dials
-are honestly two. The window is in the file's own units — both handles,
-both pairs of keys, the *Window* row — and the exposure is in stops — the
-slider, `d`/`f`, `--exposure` — a push on top of whatever the window is,
-which is exactly what a meter's reading is, and why a metered file arrives
-with the exposure dial turned rather than a fourth kind of window. On a
-graded file the *Window* row is where a hand-moved window is put back, *As
-stored* being 0..1, as much as where a rule is chosen.
+handle that meant a different thing on the next file along. On a photo the
+two dials are honestly two. The window is in the file's own units — both
+handles, both pairs of keys — and the exposure is in stops — the slider,
+`d`/`f`, `--exposure` — a push on top of whatever the window is, which is
+exactly what a meter's reading is, and why a metered file arrives with the
+exposure dial turned rather than a fourth kind of window.
 
-The curve row is every file's because the exposure is: a stop up puts the
-top of any file above white and the bar says **clipped**, and the curve is
-the answer to that. A row offered only to a file that opens above white
+The *Window* row of rules is drawn only on an image read as data, and the
+rules are refused on a photo, the button (`tooltip::PHOTO_AS_STORED`) and
+`e` (`When::Data`) alike. A rule is an answer to the question a measurement
+raises — where, in numbers with no white, is the range worth looking at —
+and a photo does not raise it: its window is 0..1 by rights, *Full range*
+on it is the handles put at the darkest and brightest pixel, which a
+finished picture nearly always spans already, and *Trimmed* is an
+auto-levels that makes it look wrong rather than show anything a drag on
+the handles does not. Dragging the handles is how a photo's shadows and
+highlights are looked into, and the reset is what puts a hand-moved window
+back there, as it puts everything back. The interface treats the file's
+three readings as two, photo and data, for the same reason: scene light and
+graded light differ in how they open — the meter — and in nothing a control
+on the panel does.
+
+The *Exposure* and *Curve* rows are drawn only on a photo, and refused on
+data, the buttons (`tooltip::DATA_HAS_NO_EXPOSURE`,
+`tooltip::DATA_HAS_NO_CURVE`), `d`/`f` and `t` (`When::Photo`),
+`--exposure` and `--tone-map` alike — `Display::has_exposure` and
+`Display::has_curve` are the one test, and `Display::set_exposure` and
+`Display::set_tone_map` the one refusal. The exposure because data's
+numbers need not be light, so a stop, a doubling of light, means nothing
+of them; and because a stop up is exactly the white handle brought in to
+the window's middle (`Display::transform` folds it into the gain), which
+the handle does in the file's own units, with a number a reader of data can
+quote. The curve because the window is what puts data on the screen, and
+the neutral curve bends the very mapping being read off: its toe moves
+every shadow and its desaturation every color, three channels as much as
+one. With no curve, data is held to white on every surface
+(`Display::curve_on` going out with no headroom, `Display::clips_white`
+saying so, the Output section's plot running to white): what is past the
+window's top is past what was asked to be shown, not light for the
+headroom to hold. A file of light read as data is switched back to *Photo*
+to have both again.
+
+The curve row is every photo's because the exposure is: a stop up puts the
+top of any picture above white and the bar says **clipped**, and the curve is
+the answer to that. A row offered only to a photo that opens above white
 would leave `t` putting a curve on a file whose panel had no row for it, and
 the bottom bar naming a curve there was no button for. It is not the
 false-color case, where the key is dead because the curve does nothing; on
@@ -63,20 +624,19 @@ stops there, and a cell that named the curve would name a thing to look up
 rather than a thing to see. There is one curve to roll off with —
 [color.md](color.md) says why only one.
 
-`histogram::SIZE` is what `ui::PANELS_ROOM` — the least window the
-interface fits in — is measured against, and what `ui::room` and
-`info::panel` work from, so that the toggles and the column agree with the
-panel about how tall it is.
-
 The three windows are named for what they do — *As stored*, *Full range*,
 *Trimmed* — rather than for the rule that does it, which the tooltip says,
 and the bottom bar says the same in one word each: *stored*, *full*,
 *trimmed*, and *manual* once a handle has moved. There is no fourth button
 for "the image's own", because the file's own is always one of the three —
 *As stored* on a graded file and on scene light, *Trimmed* on a measurement
-— and the reset button puts it back, the meter's exposure with it.
+— and the reset button puts it back, the meter's exposure with it. The one
+measurement that opens on *Full range* is a gain map shown in the picture's
+place (`DecodedImage::opens_on`): its every value is one its metadata
+defines, so there is nothing stray for a trim to throw out, and the tail a
+trim clips is where the map lifts most.
 
-## The band is the levels track
+### The band is the levels track
 
 The band under the plot is the axis — what the display makes of each value
 along it — and the handles on it mark the window, which makes the band the
@@ -141,188 +701,26 @@ the other way is enough to do. Such a handle is drawn hollow at the edge it
 went out of: it can still be taken hold of and brought back, and it does not
 claim a boundary the curve running on past it says is not there.
 
-The value under the hand is written on the line above the plot rather than in
-a tooltip. egui takes a tooltip down for the length of a drag, and a drag is
+The value under the hand is written in the section's header rather than in a
+tooltip. egui takes a tooltip down for the length of a drag, and a drag is
 exactly when the number is wanted.
 
-## What is written in the corners
+### What goes dead
 
-`Plot::clipped` is the share of the samples at or below the value that comes
-out black and at or above the one that comes out white, per plane, the worst
-plane reported. A red flower blows its red channel long before its luminance
-goes, and the plane that has piled into the end bin is the one the eye finds
-on the plot. The panel writes the two shares in the plot's top corners, in
-the accent, over a backing of the plot's own ground so that the number stays a
-number on a bar that has climbed into the corner. Only when there is a share
-to write: an empty corner most of the time is what makes a number in it news.
-
-The right corner is only written where the surface is actually clipping —
-no curve, and an SDR surface, the same test the bottom bar's **clipped**
-makes, or a false color, which clips whatever the curve. A curve rolls the
-highlights off rather than throwing them away, and an HDR surface shows them;
-neither is a share of the picture lost.
-
-The share is exact on a quantized file, whose codes land one to a bin: a bound
-sitting on a code counts that code and everything past it. On a float axis
-the bins are wider than a code and the share is to the nearest bin.
-
-## The marks on the picture
-
-`w`, or the button beside the band at the foot of the strip down the left
-of the panel, paints the clipped pixels on the picture: `MARK_WHITE` and `MARK_BLACK` in
-`shaders/image.wgsl`, where any channel of the windowed value is at or
-past the bound, painted in place of the pixel and before the false color,
-whose ramp does not end in white and black. The whole test lives in the
-image shader because that is the one place the windowed value exists per
-pixel; the composite pass sees the image target, which for a false-colored
-file already holds the ramp's color.
-
-A toggle, like the grid: a way of looking at the picture rather than a
-setting of it. `Panels::mark_clipped` is the state, beside the plane and
-count-axis toggles, `shader_codes::marks` the two bits, and
-`Draw::mark_clipped` the way in — not a field of `Display`, which is kept
-per file and restored when a file comes back, where the marks stay on across
-files and are left alone by every reset. The key and the button both go
-through `App::press(Control::Marks)`, so the two cannot drift.
-
-The button stands beside the band, centered on it
-(`histogram::marks_button`), and not in the stack of buttons above: those
-act on the plot, and this one paints the band's two ends — the pixels the
-window has taken to black and to white — on the picture. The strip's one
-stretch of room that is not the stack's is exactly there: on a color image
-the four buttons beside the plot end a gap above it, and the exposure row
-begins a hair below it, which is what `TOOLBAR_GAP` is tighter than the
-chrome's own gap for. The panel is no taller for it. The button wears
-Lucide's `triangle-alert` (`icon::TRIANGLE_ALERT`), the sign every editor's
-clipping warning wears.
-
-Which ends are marked follows `Display::clips_white`, the same rule the
-corner and the bottom bar's **clipped** use: white is only marked where the
-surface is actually clipping it.
-
-One channel at an end is enough to mark a pixel, as it is enough for the
-corner to count it. A channel that has reached the bound has lost what it
-held, and the color left over is not the file's: a raw's white balance
-lifts its red well above its green, so a sun's red burns out while its green
-is still climbing and the disc comes out pink, and on a warm sunrise the
-green may never reach white at all — a test that waited for every channel
-painted nothing on a picture whose sun was plainly gone. The paint and the
-corner then answer the same question, the corner as a share and the paint
-as a place, and a number in the corner is the share of the picture wearing
-the paint. The comparisons are exact, as the corner's are.
-
-The test is made in the working space's channels — the color after
-`params.primaries` has carried it into BT.709, which is the color `shade`
-windows — because that is where the band's two ends are, and where the
-corner counts: `Stats::scan` measures the picture there too. A vivid Rec.
-2020 or P3 color has a BT.709 channel above white, and one below zero, that
-the file never clipped but a surface that stops at either end will, and the
-mark says so; [color management](color.md) says why that is a highlight's
-clip and not a gamut matter of its own, and what becomes of the color on a
-surface with the room. Such a texel is past both ends at once, and the two
-marks are painted as a partition of the pixel, so `judge` gives it one:
-white where white is being painted, and black otherwise — which is why the
-paint's gate, `shader_codes::marks`, is part of `MarksKey`, and a curve
-switched on rewrites the chain. The matrix keeps white, so a BT.709 file is
-judged exactly as its codes are stored.
-
-The mark is a texel's, not a blend's, and it is kept as one. `judge` in the
-image shader is the verdict on one texel of the picture as uploaded, under
-the window in force — through the same `load` and `expanded` the draw reads
-by, so on lifted, straight color — and everything the marks show is that
-verdict, averaged over exactly the texels the picture is averaged over.
-Magnifying, a pixel lies inside one texel and takes its verdict outright.
-Minifying at the picture's own level, up to the chain's step, `marks_over`
-judges the texels under the pixel live, over `area`'s footprint. Farther
-out the draw reads a coarse level of the picture, whose texels are averages
-that no longer say which of their texels were at an end, so the marks have
-a coarse chain of their own (`image_layer::Marks`): `fs_marks` writes its
-first level from the picture, each texel the shares of the `STEP` by `STEP`
-block under it, and the reducer makes the rest from that as it makes the
-picture's chain from the picture, in `Rg8Unorm`, white in one channel and
-black in the other. Every coarse level of the picture is bound beside the
-marks at the same level, and `shade` wears the paint by the share it reads.
-A run of crushed texels stays whole blue at every zoom, a scattered shadow
-thins into its neighbors as the crushed pixels thin among them, and nothing
-changes at 1:1.
-
-Nothing is stored per texel of the picture — the chain begins at a
-sixteenth of it, about a bit a texel — and nothing is stored at all while
-the marks are off or nothing coarse is drawn, so a black point dragged at
-1:1 costs the marks nothing, and dragged on a fitted view costs one pass
-over the picture and the chain from it, the same as the picture's own chain
-costs on every frame of an animation. `MarksKey` is what the chain was
-written under, the window transform and the lift's weight, and
-`ImageLayer::prepare` writes it again when that changes — into the textures
-it has, through `Reducer::build_into`, since a window stepped is the same
-picture judged again and allocates nothing — and drops it when the texels
-change or it is not wanted; every level is rebound only when the chain's
-textures change, which a rewrite does not. The
-pass reads the picture through a bind group of the chain's own
-(`Marks::reading`): the picture's level-1 group names the marks' first level
-beside it, and a texture cannot be a pass's target and its input at once.
-
-Two things this is instead of. Judging the resampled color would have found
-an end only under a pixel every texel of which is at it: a scattered shadow
-vanished the moment the view dropped below 1:1, and at exactly 1:1 came and
-went with the rounding, since where a pixel's center falls in the texture is
-arithmetic on its coordinate that is not exact at the far end of a large
-picture, and `antialiased_nearest` there blends a thousandth of the neighbor
-in — shadows that sparkled as the picture was zoomed and went missing at
-100%. And reading the marks off the picture's own texels under a far-out
-pixel would have cost every texel under it, which is what the chain exists
-to avoid. The paint is laid over the pixel's own color, the average of every
-texel under it, marked ones included, so a pixel partly marked is a hair off
-what painting every texel first and shrinking would give; one wholly marked,
-or not at all, is exactly that.
-
-## What is drawn only when it says something
-
-The response curve is the whole of what the display does, and on a display
-with nothing asked of it — `Display::is_identity` — it is the diagonal from
-corner to corner, which says nothing the axis under it does not. It is drawn
-only once the display is doing something, so that a line across the plot is
-news rather than furniture.
-
-The value under the pointer is written only while the pointer is over the
-plot. The rule that marks a bin still follows the pointer over the picture as
-well, since where a pixel falls on the plot is worth pointing at, but the
-pixel's own numbers are the bottom bar's readout, and writing them twice was
-one readout too many.
-
-The ends of the axis are written only where they are not 0 and 1 decoded — a
-graded file's plot runs from black to white, which every histogram of such a
-file does and no one needs told — and, where they are written, without
-the zeros they do not need: a linear file's axis reads `0` and `3.984`, or in
-counts where the file stores them.
-
-The channel planes are drawn in a red, a green and a blue held short of the
-primaries (`theme::HISTOGRAM_PLANES`). Screened over one another on the
-plot's ground they still give a yellow, a cyan and a magenta where two overlap
-and a near white where all three do, which is the reading a channel histogram
-is looked at for; the full primaries, at a pixel to the bin, come out as a
-hedge of pure red, green and blue spikes that the eye cannot leave alone.
-The ground is the same in every theme and so are the inks, so the reading is
-the same everywhere — see [theme](theme.md) for the two things that resist
-being themed. A bin is a logical pixel, which fixes the panel's width and is
-why nothing here smooths the plot.
-
-## What goes dead
-
-The row of curves is dead under a false color, and says why when rested on.
-The compositor holds the curve at a clip there — `Display::curve_on` is
-where the choice is made, and `composite.rs` and the pointer's readout both
-ask it, the bar's words `Display::false_colored` — because a ramp has no
-color past its end for a
-highlight to roll off into, and a curve over the ramp would bend the very
-mapping the reading is being taken off. `Display::response` runs the curve
+The row of curves is dead under a false color, and says why when rested on
+(`FALSE_COLOR_CLIPS`). The compositor holds the curve at a clip there —
+`Display::curve_on` is where the choice is made, and `composite.rs` and the pointer's readout both ask it, both
+reading `Display::ramp`; the bar's words read `Display::false_colored`,
+since the gray ramp is nothing to name — because a ramp has no color past
+its end for a highlight to roll off into, and a curve over the ramp would
+bend the very mapping the reading is being taken off. `Display::response` runs the curve
 the compositor runs, the buttons refuse the press and `t` does nothing, and
-the row stays where it is — the panel's height is the file's — rather than
-leaving. A panel that lit whichever curve was chosen and let the buttons
+the row stays where it is — the section's height is the file's — rather
+than leaving. A panel that lit whichever curve was chosen and let the buttons
 change it would have a press change nothing on screen and then change the
 picture some time later, when the ramp came off.
 
-## The exposure is a slider
+### The exposure is a slider
 
 A spinner — a number with a step either side of it — is the right control
 for a value that is mostly typed and occasionally nudged; the exposure is
@@ -340,7 +738,8 @@ It runs six stops each way (`SLIDER_STOPS`), not the sixteen the keys and
 row has that is a few pixels each at six, which is a slider that can be
 put on a value, and under two at sixteen, which is not; and six is the
 whole of what a viewer does with an exposure, a shadow lifted out of black
-or a highlight brought back from four stops over. Past the end the handle
+or a highlight brought back from four stops over. It is drawn dead on a
+single-channel measurement, which has no exposure (see *What goes dead*). Past the end the handle
 stands hollow at it, as a band handle out past the plot does, and the
 reading says where the exposure really is. The slider is dragged *to* the
 pointer, as the handles are, and asks through `Command::Exposure` only for
@@ -349,3 +748,69 @@ on it is not a redraw a frame. It snaps to the quarter stops, so the
 reading beside it is always one the keys could have reached, and so that
 the keys and the slider cannot take the picture to two different places
 that read the same.
+## How a plot is drawn
+
+Each plane is drawn as a line along its top (`plot::lines`), 1.5 device
+pixels wide, over an area laid down under it in a faint gray taken some way
+toward the line's own color (`plot::line_area`). The areas stack, so where
+the planes overlap the plot darkens to a neutral gray and where one stands
+alone it wears that plane's cast. Every plane is always drawn, the
+luminance plane in a neutral gray and first, so that its line runs under the
+color planes'. In the Image section a channel's line comes down to the axis
+after its last lit column and ends there (`plot::Tail::Dropped`): its plot
+runs on a range shared with the other channels, or wider than its pixels,
+and a line along the floor past its brightest pixel would read as a count of
+nothing there rather than as the end of the channel. The other sections
+draw the line to the plot's end (`plot::Tail::Drawn`).
+The planes' inks are a red, a green and a blue held short of the primaries
+(`plot::HISTOGRAM_PLANES`), each leading in its own channel so that three
+lines crossing stay three; the full primaries, at a pixel to the bin, come
+out as a hedge of pure red, green and blue spikes that the eye cannot leave
+alone.
+The ground is the same in every theme and so are the inks, so the reading is
+the same everywhere — see [theme](theme.md) for the two things that resist
+being themed. A bin is a point, which fixes the panel's width and is what
+the pointer reads the plot by. What is drawn is one column to the device pixel (`icon::Grid::columns`),
+each as tall as the fullest bin under it (`plot::bins_under`,
+`plot::tallest`): a column to the bin lands half its edges mid-pixel at a
+fractional scale, and the feathering shows as a comb, where a column to the
+pixel is even at any scale; and taking the fullest bin rather than the mean
+keeps a spike from being averaged away where a column is wider than a bin.
+At one device pixel to the point the two are the same picture. The bands
+under the plots and a ramp's swatch are cut the same way, which is why
+nothing here smooths the plot.
+
+### The count axes
+
+A bar's height is the share of its plane's pixels in its bin, against a top
+(`plot::Counts`). The Display's stands on the input
+(`histogram::input_counts`), which nothing set on the panel changes, so its
+scale holds still while the window, the exposure and the curve are dragged
+about. The Image section's plots share one of their own
+(`stored::Plotted::counts`), so that a bar of one height is the same share
+of the picture on each channel's plot, and a channel that piles up where
+another spreads out reads as such.
+
+The Output's top is its own, worked out again from what goes out. A scale
+held to the input's is the wrong one for it: a display that stretches the
+picture — a stop of exposure up, a narrowed window — spreads it over more of
+the Output's axis, and its bars would fall to a tenth of the plot, on the
+section that answers the panel's main question, while it is being set. The comparison it gave up, Display against Output
+bar for bar, is what the curve over the Display plot already draws.
+
+Each top is set the same way: of a plot's bins holding anything inside the
+two end bins, across every plane, the fullest fiftieth (`plot::CUT`) stand
+past it, and two plots sharing one take the higher (`Counts::wider`), the one
+cutting fewer bars off. The ends are left out because what the window throws
+away piles up there. A bar
+past the top runs to it with a cap in the accent.
+
+Linear, because heights only compare linearly. A logarithmic switch was the
+plot's answer to one bin flattening the rest — a masked sea, a scan's
+surround, a flat sky — and the cut is a better one: the shape stays the
+distribution, and the cap says the spike runs on.
+
+The gain map's plot has a top of its own, worked out the same way: it is of
+another image, the map, in stops of lift, and no height on it compares with
+one on the picture's.
+
