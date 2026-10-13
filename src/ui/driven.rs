@@ -2781,8 +2781,8 @@ fn a_raws_profile_has_a_section_and_a_switch_of_its_own() {
         profile.min.y < curve.min.y && curve.min.y < table.min.y && table.min.y < exposure.min.y,
         "read upward in the order they are applied"
     );
-    let pixel = painted_in_side(&harness, super::histogram::PIXEL).expect("the pixel's row");
-    assert!(exposure.min.y < pixel.min.y && pixel.min.y < file.min.y);
+    let prophoto = painted_in_side(&harness, super::histogram::PROPHOTO).expect("the ProPhoto row");
+    assert!(exposure.min.y < prophoto.min.y && prophoto.min.y < file.min.y);
     assert_eq!(
         click(&mut harness, &Control::Profile.label()),
         [Command::Press(Control::Profile)]

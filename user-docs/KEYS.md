@@ -623,22 +623,23 @@ are. `G` shows how far the profile brightens each pixel in the picture's
 place, in stops, as it shows a gain map — the profile's effective gain map
 — and its button, just before `HDR`, wears a dimmed sun.
 
-Under the *Profile* plot are the rendering's three parts, read upward in
-the order they are applied: the tone curve; the exposure and the gain
-table together, how far they lift a pixel by how bright it is, coming down
-to no lift at white, with the spread across the picture as a band and the
-pixel under the pointer as a line and a dot; and the exposure on its own
-row. Pointing at the picture puts the pixel on each part's plot as a dot
-with two guides, one up from the axis labeled *in* with what went in, and
-one across from the side labeled *out* on the curve and *lift* on the
-table with what came of it; resting on a part, or on the exposure row,
-says what it is. The *Pixel* row at the foot follows the pixel up through
-all three: its
-brightest channel in stops below white as developed, then exposed, then
-through the table, then through the curve. Brightness is measured that way
-everywhere in the section except across the gain table's plot, which is
-placed by the blend of the channels the table itself reads; its height,
-added to the developed brightness, is what the curve reads next.
+Under the *Profile* plot are the rendering's stages, read upward in the
+order they are applied: the tone curve; the gain table, how far it lifts
+a pixel by how bright it is, with the spread across the picture as a band
+and the pixel under the pointer as a line; the exposure on its own row;
+and at the foot the pixel in *ProPhoto*, the space the profile works in,
+which a matrix carries it into from the developed picture. Pointing at the
+picture follows the pixel up the stages a color at a time, every number
+in stops below white and each in its color: the three in ProPhoto, the
+three after the exposure, the three after the gain in the table's caption,
+and the three the curve makes of them in the curve's. Each stage's numbers
+are the next one's inputs, and the three at the top of the section are how
+far the profile lifted each color of the pixel. The table is read once a
+pixel, at a blend of its colors — the dot on its curve, with the gain it
+reads there — and the one gain multiplies all three, shown as ticks on the
+axis. The curve is applied to the brightest and dimmest colors, the dots
+on it, and the middle one keeps its place between them, the hollow dot.
+Resting on a stage says what it is.
 
 The window is the one place the case of a key matters: `a` and `s` move
 the value that comes out black, `A` and `S` the value that comes out white.

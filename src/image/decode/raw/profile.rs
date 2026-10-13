@@ -213,28 +213,10 @@ pub fn prophoto() -> Result<(Narrow, Narrow)> {
     Ok((narrow(into), narrow(back)))
 }
 
-/// A tone curve applied to a color as the DNG SDK's `RGBTone` applies a
-/// profile's: the curve on the largest channel and the smallest, and the
-/// middle one put where it stood between them, so that the hue holds
-/// rather than sliding toward a primary as a curve on each channel would.
-/// The channels are taken to 0..1 first, the curve's own domain.
-pub fn rgb_tone(curve: impl Fn(f32) -> f32, color: [f32; 3]) -> [f32; 3] {
-    let color = color.map(|value| value.clamp(0.0, 1.0));
-    let mut order = [0, 1, 2];
-    order.sort_by(|a, b| color[*b].total_cmp(&color[*a]));
-    let [high, middle, low] = order;
-    let (top, bottom) = (curve(color[high]), curve(color[low]));
-    let mut out = [0.0; 3];
-    out[high] = top;
-    out[low] = bottom;
-    let span = color[high] - color[low];
-    out[middle] = if span > 0.0 {
-        bottom + (top - bottom) * (color[middle] - color[low]) / span
-    } else {
-        top
-    };
-    out
-}
+/// The tone curve's application to a color, which the histogram's Profile
+/// section reads as the developer does: kept beside the profile it is
+/// part of.
+pub use crate::image::gain_map::rgb_tone;
 
 /// The color temperature, in kelvin, of the illuminant an EXIF light source
 /// code names, as Adobe's DNG SDK reckons them: the fluorescent lamps at the

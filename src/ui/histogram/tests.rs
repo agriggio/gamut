@@ -585,11 +585,11 @@ fn the_profile_section_takes_the_gain_maps_place_for_a_raw() {
         exposure.y > table.bottom() + PLOT_INSET + EV_ROW,
         "clear of the table's row"
     );
-    let trace = section::trace_row(rect);
-    assert!(trace.y > exposure.bottom());
+    let prophoto = section::prophoto_row(rect);
+    assert!(prophoto.y > exposure.bottom());
     assert!(
-        (trace.bottom() - rect.bottom()).abs() < 1e-3,
-        "the pixel's row ends the section"
+        (prophoto.bottom() - rect.bottom()).abs() < 1e-3,
+        "the ProPhoto row ends the section"
     );
 }
 

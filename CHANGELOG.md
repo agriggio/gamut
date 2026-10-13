@@ -46,9 +46,13 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
   every raw, and the choice is kept between runs. The histogram panel's
   *Profile* section plots how far the rendering lifts each pixel, and under
   it its parts in the order they are applied: the file's tone curve, the
-  exposure and the gain table together, and the exposure, each with the
-  pointer's pixel on it and guides from the axes labeled with what went in
-  and what came of it, and each explained under the pointer. `G` and the
+  gain table, the exposure, and the pixel in ProPhoto, where the profile
+  works. Pointing at the picture follows it up the stages a color at a
+  time, in stops below white, each stage's three numbers the next one's
+  inputs and the three at the top the profile's lift of each color; the
+  table shows the blend it is read at and the one gain all three get, the
+  curve the two colors it is applied to and the one placed between them,
+  and each stage is explained under the pointer. `G` and the
   dimmed sun beside `HDR` show the profile's effective gain map in the
   picture's place, and the information panel describes the profile. `--no-gain-map` leaves the rendering behind too.
 

@@ -296,7 +296,7 @@ fn share_words(share: f32) -> String {
 /// picture, the ground alone.
 fn grid(pass: &Pass, ui: &egui::Ui, current: &Current, rect: Rect, shape: Shape) {
     let (caption, ground) = grid_part(rect, shape);
-    profile::caption(pass, ui, caption, PHOTOSITES, PHOTOSITES_AXES, "");
+    profile::caption(pass, ui, caption, PHOTOSITES, PHOTOSITES_AXES, None);
     let painter = ui.painter();
     painter.rect_filled(
         egui::Rect::from(ground.inset(-PLOT_INSET, -PLOT_INSET)),

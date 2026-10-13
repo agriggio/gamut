@@ -119,71 +119,79 @@ else to be on the screen; its header says whether the rendering is applied.
 Its mark is Lucide's `spline`, which the information panel's section about
 the profile wears too.
 
-Under the lift's plot are the rendering's three parts, read upward in the
-order they are applied, as the column is: the tone curve, the gain table
-with the exposure in it, and the exposure's own row (`section::curve_part`,
-`section::table_part`, `section::exposure_row`). The lift's histogram stays
-above them as the section's own plot, the net of the three, as the Display
-section's plot stands above its rows. The last row, `section::trace_row`,
-follows the pointer's pixel up through them.
+Under the lift's plot are the rendering's stages, read upward in the
+order they are applied, as the column is: the tone curve, the gain table,
+the exposure's row, and at the foot the developed pixel in the profile's
+own space (`section::curve_part`, `section::table_part`,
+`section::exposure_row`, `section::prophoto_row`). The lift's histogram
+stays above them as the section's own plot, the net of the stages, as the
+Display section's plot stands above its rows.
 
-Each part's plot has a caption over it (`profile::caption`), its name
-alone, and the pointer's pixel on it as a dot with two guides
-(`profile::guides`): one up from the axis, worded `in` with the number
-that went in, and one across from the scale, worded `out` on the curve and
-`lift` on the table with what came of it — so that nothing has to be read
-off the position of a dot, and what each axis is is said at the point
-where it is read rather than in a line of its own under the name. What
-the part is, and what the brightness the table reads is, is the part's
-tooltip (`Tip::ToneCurve`, `Tip::GainTable`), over the caption and the plot
-together; the exposure's row has one too (`Tip::Baseline`). Its ground is
-set in from the left (`section::SCALE_GUTTER`) for the stops its height
-is in, a few numbers up the side, so that the height has a scale as the
-row of stops under it gives the width one.
+The pointer's pixel is followed up the stages a channel at a time
+(`profile::Pixel`), every number in stops below white and each channel in
+its own ink, as the Display section writes its planes: the three channels
+carried into linear ProPhoto on the ProPhoto row, which is where the
+profile's arithmetic begins and a matrix away from the Develop header's
+three; the three after the exposure on its row; the three after the
+table's gain in the table's caption; and the three the curve makes of them
+in the curve's. Each stage's numbers are the stage above's inputs, so the
+chain reads straight up, and the header's three lifts are the curve's
+three outputs carried back into Rec. 2020 over the developed channels
+(`Tip::ProfileLift`), each a rule in its ink on the lift's histogram. A
+single number — the brightest channel — was tried first and could not be
+made to meet the header's three on a colored pixel. The two places the
+chain is not three arrows are drawn as what they are, below.
 
-Every reading is in one quantity wherever it can be: the pixel's brightest
-channel in linear ProPhoto, in stops below white. That is the channel the
-curve is put through (`raw::profile::rgb_tone` applies the curve to the
-largest and smallest channel and places the middle one between them), and
-the table's gain is one number for every channel, so the brightest channel
-stays the brightest from the developed pixel to the curve. The pixel's row
-writes it at each stage — as developed, exposed, through the table, through
-the curve — and the stage after the table is the developed brightness plus
-the table plot's height, which is what makes the parts one chain
-(`profile::Pixel`). The gain table alone reads something else: a blend of
-the channels by its own weights, which on an iPhone is half a
-luminance-weighted sum and half the brightest channel, and since its
-weights sum to the exposure taken away again, that blend is in effect the
-developed pixel's. Its plot is placed across by that blend, its caption
-says so and gives it, and its height is still the lift that carries the
-brightest channel on to the curve.
+Each part's plot has a caption over it (`profile::caption`): its name, and
+on the right what the pixel comes out of the part as, a channel to the
+cell. What a part is is its tooltip (`Tip::ToneCurve`, `Tip::GainTable`),
+over the caption and the plot together; the exposure's row and the
+ProPhoto row have theirs (`Tip::Baseline`, `Tip::ProPhoto`). A part's
+ground is set in from the left (`section::SCALE_GUTTER`) for the stops its
+height is in, a few numbers up the side, so that the height has a scale as
+the row of stops under it gives the width one.
 
 The tone curve is drawn with both axes in stops below white down to ten.
 The curve is the one stage of the profile that is a function of one value,
 and so the one that can be drawn rather than counted; and in stops is where
 it can be read, since everything that tells one file's curve from another's
 is the toe, which a linear plot squeezes into its first hundredth while in
-stops the shoulder is the straight line every curve shares. The pointer's
-pixel is a dot on it at the brightest channel the curve read and what it
-made of it. The whole of the profile, whether or not the switch has it on
-screen, since the parts are the profile's and not the screen's.
+stops the shoulder is the straight line every curve shares. The curve is
+applied as the DNG SDK's `RGBTone` applies it (`gain_map::rgb_tone`): to
+the brightest and dimmest channels, with the middle one placed between
+them where it stood, which is what keeps the hue. So the brightest and
+dimmest are filled dots on the curve, each with a tick on the axis where
+it went in and one on the scale where it came out, and the middle channel
+is a hollow dot off the curve between them (`gain_map::tone_order`). The
+whole of the profile, whether or not the switch has it on screen, since
+the parts are the profile's and not the screen's.
 
-The gain table is drawn with the exposure in it: across, the brightness the
-table reads, in stops below white; up, the baseline plus the table's gain,
-in stops. Neither part means anything alone — the exposure lifts everything
-alike, and the table gives back in the highlights what the exposure took
-past white — and drawn together the line comes down to no lift at white,
-which is the point of the pair. The table is a curve at each point of a
-grid over the picture; their spread (`GainTable::spread_at`, a reading of
-every point at every device column, kept in egui's data for as long as the
-table is the same one) is a wash behind, and while the pointer is on the
-picture its own curve — the four points around it blended for where it is
-— is the line, with the pixel's dot on it (`GainTable::input`,
-`GainTable::gain_for`). Two faint rules across mark no lift and the
-exposure alone, and the scale names both before anything else. A profile
-with no table is the exposure alone, a level line. The exposure itself,
-being one number, is a row of words, as the Display section's settings
-are.
+The gain table is drawn as the gain alone: across, the brightness the
+table reads, in stops below white; up, the table's gain in stops. The
+exposure is its own row under it, so the chain reads up through both
+rather than the table's height hiding the shift. The table is read once a
+pixel, at a blend of its channels by its own weights (`GainTable::input`),
+which on an iPhone is part a luminance-weighted sum and part the brightest
+channel; the weights sum to the exposure taken away again
+(`GainTable::scale`), so in exposed terms the blend is a weighted mean of
+the exposed channels, and the axis is in exposed terms, a column at `e`
+stops reading the table at `2^e` times that sum. The pointer's pixel is
+the blend's dot on its own curve with a guide across from the scale worded
+`gain`, and the three channels are ticks on the axis where they went in:
+all three get the one gain the dot reads. The table is a curve at each
+point of a grid over the picture — laid over the picture as the file holds
+it, so the pixel's place is found in that frame through the camera's
+orientation (`Sensor::turned`) — and their spread (`GainTable::spread_at`,
+a reading of every point at every device column, kept in egui's data for
+as long as the table is the same one) is a wash behind, while the pixel's
+own curve, the four points around it blended for where it is, is the line
+(`GainTable::gain_for`). Two faint rules across mark no gain and the gain
+that undoes the exposure, and the scale names both before anything else:
+on an iPhone the table comes down to the second at white, which is what
+takes the highlights back to where the file stored them. A profile with no
+table is no gain, a level line. The exposure itself, being one number, is a
+row of words with the pixel's three channels after it, as the Display
+section's settings are.
 
 The **Develop** section, with the Image section's change of meaning for a
 raw, is what makes the column honest about one. A raw's `DecodedImage` is

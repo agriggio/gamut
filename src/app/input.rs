@@ -486,7 +486,8 @@ pub(super) fn action_of(tip: Tip) -> Option<Action> {
         | Tip::WhitePoint
         | Tip::Window
         | Tip::Exposure
-        | Tip::ProfilePixel
+        | Tip::ProPhoto
+        | Tip::ProfileLift
         | Tip::Demosaic(_)
         | Tip::Clipped
         | Tip::Baseline

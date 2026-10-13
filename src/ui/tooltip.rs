@@ -50,9 +50,11 @@ pub enum Tip {
     /// things in force; the tooltip is the whole of it in sentences, the
     /// window's own bounds included — see `App::tooltip`.
     State,
-    /// The Profile section's last row, the pixel followed up through the
-    /// profile's parts: what quantity its numbers are.
-    ProfilePixel,
+    /// The Profile section's ProPhoto row, the developed pixel in the
+    /// profile's own space; and its header, what the profile lifted each
+    /// channel by.
+    ProPhoto,
+    ProfileLift,
     /// The Develop section's demosaic row: what the name on it means.
     Demosaic(Demosaic),
     /// The Develop section's clipped row: what the shares on it are of.
@@ -714,9 +716,17 @@ pub fn words(tip: Tip) -> Option<String> {
         // The Profile section's trace and the Develop section's demosaic:
         // rows of numbers and a name, with what they are said under the
         // pointer, since the rows have no room to say it themselves.
-        Tip::ProfilePixel => {
-            "The pixel's brightest channel in linear ProPhoto, in stops below white: \
-             as developed, after the exposure, after the gain table, after the tone curve"
+        Tip::ProPhoto => {
+            "The developed pixel carried into linear ProPhoto, the space the profile's \
+             curve is applied in, each channel in stops below white: a matrix mixes the \
+             channels, so these are not the Develop header's three, and a color past \
+             ProPhoto's reach is held at black"
+        }
+        Tip::ProfileLift => {
+            "What the profile lifted each channel by: the tone curve's three outputs \
+             carried back into Rec. 2020, over the developed channels. They stand off \
+             the chain above where a colored pixel's dimmer channels went through the \
+             curve's toe"
         }
         Tip::Demosaic(Demosaic::Ahd) => {
             "Adaptive homogeneity-directed interpolation: each missing color is taken \
@@ -734,17 +744,18 @@ pub fn words(tip: Tip) -> Option<String> {
              pushed before the gain table and the tone curve"
         }
         Tip::GainTable => {
-            "The profile's gain table with the exposure in it: a table of gains by \
-             brightness at each point of a grid over the picture, the camera's local tone \
-             map. The band is the spread of every point's; the line is the pointer's \
-             pixel's own, blended from the points around it. In is the brightness the \
-             table reads, a blend of the pixel's channels; lift is how far the exposure \
-             and the gain together push a pixel of that brightness, back to none at white"
+            "The profile's gain table: a table of gains by brightness at each point of a \
+             grid over the picture, the camera's local tone map. The band is the spread \
+             of every point's; the line is the pointer's pixel's own. The table is read \
+             once a pixel, at a blend of its exposed channels, the dot; the one gain then \
+             multiplies all three, the ticks. The rule at the exposure's own number is \
+             the gain that undoes it"
         }
         Tip::ToneCurve => {
-            "The profile's tone curve, applied last: what it makes of a pixel's brightest \
-             channel, in and out both in stops below white; the other channels follow it. \
-             The faint diagonal is a curve doing nothing"
+            "The profile's tone curve, applied last to a pixel's brightest and dimmest \
+             channels, the two dots on it; the middle channel keeps its place between \
+             them, the hollow dot. In and out are stops below white, and the faint \
+             diagonal is a curve doing nothing"
         }
         // No words of its own: an item of the open menu wears the name of
         // the program it hands the file to, and there is nothing an

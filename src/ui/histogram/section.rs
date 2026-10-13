@@ -235,9 +235,10 @@ pub fn exposure_row(rect: Rect) -> Rect {
     Rect::new(rect.x, y, rect.width, display::ROW_HEIGHT)
 }
 
-/// The Profile section's last row: the pointer's pixel followed up through
-/// the parts above it.
-pub fn trace_row(rect: Rect) -> Rect {
+/// The Profile section's last row, the first of its stages read upward:
+/// the developed pixel in the profile's own space, which the exposure's
+/// row above takes from.
+pub fn prophoto_row(rect: Rect) -> Rect {
     let exposure = exposure_row(rect);
     Rect::new(
         rect.x,

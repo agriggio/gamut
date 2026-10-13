@@ -158,6 +158,20 @@ impl GainTable {
         self.steps
     }
 
+    /// What the weights sum to: what the table's input is of the pixel's
+    /// channels, taken as a mean of them. On an iPhone it is 2 to the
+    /// minus baseline, which carries the exposure back out, so the table
+    /// is in effect indexed by the developed pixel. 1 for a table whose
+    /// weights say nothing.
+    pub fn scale(&self) -> f32 {
+        let sum: f32 = self.weights.iter().sum();
+        if sum > 0.0 && sum.is_finite() {
+            sum
+        } else {
+            1.0
+        }
+    }
+
     /// The brightness `color` indexes the table by, 0 to 1: the weighted
     /// sum of its channels, the least of them and the most. The weights'
     /// order — red, green, blue, the least, the most — is as the one open
@@ -226,6 +240,12 @@ impl GainTable {
 impl Profile {
     /// The tone curve at `input`, through its points, linear between them:
     /// what the histogram draws. The identity where there is no curve.
+    /// The curve on a color, as the DNG SDK's `RGBTone` applies it: see
+    /// [`rgb_tone`].
+    pub fn tone(&self, color: [f32; 3]) -> [f32; 3] {
+        rgb_tone(|value| self.curve_at(value), color)
+    }
+
     pub fn curve_at(&self, input: f32) -> f32 {
         let Some(points) = self.curve.as_deref() else {
             return input;
@@ -845,6 +865,37 @@ impl Tap {
             fraction: position - position.floor(),
         }
     }
+}
+
+/// A tone curve applied to a color as the DNG SDK's `RGBTone` applies a
+/// profile's: the curve on the largest channel and the smallest, and the
+/// middle one put where it stood between them, so that the hue holds
+/// rather than sliding toward a primary as a curve on each channel would.
+/// The channels are taken to 0..1 first, the curve's own domain. Which
+/// channel is which is [`tone_order`]'s.
+pub fn rgb_tone(curve: impl Fn(f32) -> f32, color: [f32; 3]) -> [f32; 3] {
+    let color = color.map(|value| value.clamp(0.0, 1.0));
+    let [high, middle, low] = tone_order(color);
+    let (top, bottom) = (curve(color[high]), curve(color[low]));
+    let mut out = [0.0; 3];
+    out[high] = top;
+    out[low] = bottom;
+    let span = color[high] - color[low];
+    out[middle] = if span > 0.0 {
+        bottom + (top - bottom) * (color[middle] - color[low]) / span
+    } else {
+        top
+    };
+    out
+}
+
+/// The channels of `color` from the largest to the smallest, by index: the
+/// two the curve is applied to at either end, and the one placed between
+/// them in the middle.
+pub fn tone_order(color: [f32; 3]) -> [usize; 3] {
+    let mut order = [0, 1, 2];
+    order.sort_by(|a, b| color[*b].total_cmp(&color[*a]));
+    order
 }
 
 #[cfg(test)]
