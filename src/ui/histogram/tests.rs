@@ -558,26 +558,37 @@ fn the_profile_section_takes_the_gain_maps_place_for_a_raw() {
     assert!(Section::Profile.has_button());
     assert_eq!(section::button(rect).right(), rect.right());
     let lift = Section::Profile.plot(rect);
-    let curve = section::curve_plot(rect);
+    let (caption, curve) = section::curve_part(rect);
     assert!(
-        curve.y - PLOT_INSET > lift.bottom() + PLOT_INSET,
-        "clear of the lift's ground"
+        caption.y > lift.bottom() + PLOT_INSET + EV_ROW,
+        "clear of the lift's row"
     );
-    assert_eq!((curve.x, curve.width), (lift.x, lift.width));
-    let table = section::table_plot(rect);
     assert!(
-        table.y - PLOT_INSET > curve.bottom() + PLOT_INSET + EV_ROW,
+        curve.y - PLOT_INSET >= caption.bottom(),
+        "the caption over the ground"
+    );
+    assert_eq!(
+        (curve.x, curve.right()),
+        (lift.x + section::SCALE_GUTTER, lift.right()),
+        "set in for the scale"
+    );
+    let (caption, table) = section::table_part(rect);
+    assert!(
+        caption.y > curve.bottom() + PLOT_INSET + EV_ROW,
         "clear of the curve's row"
     );
-    assert_eq!((table.x, table.width), (lift.x, lift.width));
+    assert!(table.y - PLOT_INSET >= caption.bottom());
+    assert_eq!((table.x, table.width), (curve.x, curve.width));
     let exposure = section::exposure_row(rect);
     assert!(
         exposure.y > table.bottom() + PLOT_INSET + EV_ROW,
         "clear of the table's row"
     );
+    let trace = section::trace_row(rect);
+    assert!(trace.y > exposure.bottom());
     assert!(
-        (exposure.bottom() - rect.bottom()).abs() < 1e-3,
-        "the exposure's row ends the section"
+        (trace.bottom() - rect.bottom()).abs() < 1e-3,
+        "the pixel's row ends the section"
     );
 }
 

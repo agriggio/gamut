@@ -232,38 +232,6 @@ impl Profile {
         };
         curve_through(points, input)
     }
-
-    /// What the curve took to `output`: the curve run backwards, which it
-    /// can be since it rises from black to white. Where it is flat, the
-    /// least input that reaches `output`.
-    pub fn curve_input(&self, output: f32) -> f32 {
-        let (mut low, mut high) = (0.0f32, 1.0f32);
-        for _ in 0..32 {
-            let middle = (low + high) / 2.0;
-            if self.curve_at(middle) < output {
-                low = middle;
-            } else {
-                high = middle;
-            }
-        }
-        high
-    }
-
-    /// Where the developed color `linear`, in the picture's primaries,
-    /// lifted by `ratios`, stands on the curve: the largest of its channels
-    /// in the curve's space, which is the one the curve was applied to,
-    /// and what the curve took there from. `None` for a pixel the
-    /// rendering left black.
-    pub fn on_curve(&self, linear: [f32; 3], ratios: [f32; 3]) -> Option<[f32; 2]> {
-        let lifted: [f32; 3] = std::array::from_fn(|c| linear[c] * ratios[c]);
-        let output = self
-            .to_curve
-            .iter()
-            .map(|row| row[0] * lifted[0] + row[1] * lifted[1] + row[2] * lifted[2])
-            .fold(0.0f32, f32::max)
-            .min(1.0);
-        (output > 0.0).then(|| [self.curve_input(output), output])
-    }
 }
 
 /// `points`, from black to white, read at `input` linearly between them,
@@ -1169,24 +1137,6 @@ mod tests {
     }
 
     const IDENTITY: [[f32; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
-
-    /// The curve run backwards finds what it took to an output, and a
-    /// pixel stands on it at its largest channel once lifted.
-    #[test]
-    fn a_pixel_is_placed_on_the_curve_by_its_largest_channel() {
-        let mut map = profile(0.0, &[1.0; 3], 1);
-        let Lift::Profile(profile) = &mut map.lift else {
-            unreachable!()
-        };
-        profile.curve = Some(Arc::new(vec![[0.0, 0.0], [0.5, 0.25], [1.0, 1.0]]));
-        assert!((profile.curve_input(0.25) - 0.5).abs() < 1e-5);
-        assert!((profile.curve_input(0.625) - 0.75).abs() < 1e-5);
-        let [input, output] = profile
-            .on_curve([0.1, 0.2, 0.05], [2.0, 2.0, 2.0])
-            .expect("lit");
-        assert!((output - 0.4).abs() < 1e-6 && (input - 0.6).abs() < 1e-4);
-        assert_eq!(profile.on_curve([0.0; 3], [2.0; 3]), None);
-    }
 
     /// A profile's ratios are the gains themselves: all of each at the
     /// whole of the lift, none at no weight, and a channel the developed

@@ -628,7 +628,13 @@ the order they are applied: the tone curve; the exposure and the gain
 table together, how far they lift a pixel by how bright it is, coming down
 to no lift at white, with the spread across the picture as a band and the
 pixel under the pointer as a line and a dot; and the exposure on its own
-row.
+row. Pointing at the picture writes each part's reading over its plot, and
+the *Pixel* row at the foot follows the pixel up through all three: its
+brightest channel in stops below white as developed, then exposed, then
+through the table, then through the curve. Brightness is measured that way
+everywhere in the section except across the gain table's plot, which is
+placed by the blend of the channels the table itself reads; its height,
+added to the developed brightness, is what the curve reads next.
 
 The window is the one place the case of a key matters: `a` and `s` move
 the value that comes out black, `A` and `S` the value that comes out white.

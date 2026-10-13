@@ -20,7 +20,7 @@ mod output;
 mod plot;
 mod profile;
 #[cfg(test)]
-pub(in crate::ui) use profile::{GAIN_TABLE, TONE_CURVE};
+pub(in crate::ui) use profile::{GAIN_TABLE, PIXEL, TONE_CURVE};
 mod section;
 mod slider;
 mod stored;
