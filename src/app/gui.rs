@@ -12,6 +12,9 @@ use winit::window::Window;
 use crate::theme::Theme;
 use crate::ui;
 
+/// How far a panel scrolls for one notch of the wheel, in points.
+const LINE_SCROLL: f32 = 100.0;
+
 pub(super) struct Gui {
     pub ctx: egui::Context,
     state: egui_winit::State,
@@ -34,9 +37,16 @@ impl Gui {
         // grid, and those chords are the key table's to give out — so with
         // them off, nothing but this and `rescale` moves egui's zoom factor,
         // which is the interface's scale on top of the monitor's.
+        //
+        // A notch of the wheel scrolls a panel about as far as it scrolls a
+        // browser's page, rather than egui's 40 points, which is a crawl down
+        // a long column. A trackpad's scroll is in points and goes 1:1
+        // whatever this says, and the picture reads the wheel's notches for
+        // itself.
         ctx.options_mut(|options| {
             options.zoom_with_keyboard = false;
             options.zoom_factor = ui_scale;
+            options.input_options.line_scroll_speed = LINE_SCROLL;
         });
         ctx.set_fonts(ui::fonts::system()?);
         ui::style::apply(&ctx, theme);

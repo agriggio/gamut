@@ -142,6 +142,10 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
   fill its plot whatever the display does. A spike far fuller than the rest runs off the top of the plot, capped in the
   accent color, rather than flattening the rest, and with the pointer on it
   the section's heading gives the share it holds.
+- A notch of the mouse wheel scrolls the information panel, the file list
+  and the help popup about two and a half times as far as before, nearer
+  what a browser does. A trackpad scrolls as it did, and the wheel's zoom on
+  the picture is unchanged.
 
 ### Removed
 
