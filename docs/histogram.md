@@ -137,7 +137,9 @@ table's gain in the table's caption; and the three the curve makes of them
 in the curve's. Each stage's numbers are the stage above's inputs, so the
 chain reads straight up, and the header's three lifts are the curve's
 three outputs carried back into Rec. 2020 over the developed channels
-(`Tip::ProfileLift`), each a rule in its ink on the lift's histogram. A
+(`Tip::ProfileLift`), each a rule in its ink on the lift's histogram and
+a cell in its ink in the header, as the rows under it write the channels,
+in place of the gain map's one line of words. A
 single number — the brightest channel — was tried first and could not be
 made to meet the header's three on a colored pixel. The two places the
 chain is not three arrows are drawn as what they are, below.
@@ -162,7 +164,15 @@ the brightest and dimmest channels, with the middle one placed between
 them where it stood, which is what keeps the hue. So the brightest and
 dimmest are filled dots on the curve, each with a tick on the axis where
 it went in and one on the scale where it came out, and the middle channel
-is a hollow dot off the curve between them (`gain_map::tone_order`). The
+is a hollow dot off the curve between them (`gain_map::tone_order`). Up
+the left of the plot, beside the scale, is each channel's lift as a bar in
+its ink, from the level it came into the profile at on the ProPhoto row to
+the level it comes out at, worded `lift` on the brightest: the one place
+the chain's levels and the histogram's lifts share a scale, since the
+curve's output axis is in the stops the levels are in and the bar's length
+in those stops is where the channel's rule stands on the histogram above.
+The bar is the lift in ProPhoto and the rule the lift in Rec. 2020, the
+same for a neutral pixel and a little apart for a colored one. The
 whole of the profile, whether or not the switch has it on screen, since
 the parts are the profile's and not the screen's.
 

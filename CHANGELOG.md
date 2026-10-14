@@ -49,7 +49,9 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
   gain table, the exposure, and the pixel in ProPhoto, where the profile
   works. Pointing at the picture follows it up the stages a color at a
   time, in stops below white, each stage's three numbers the next one's
-  inputs and the three at the top the profile's lift of each color; the
+  inputs and the three at the top, in their colors, the profile's lift of
+  each color, which the curve also draws as a bar up its side from where
+  the color came in to where it comes out; the
   table shows the blend it is read at and the one gain all three get, the
   curve the two colors it is applied to and the one placed between them,
   and each stage is explained under the pointer. `G` and the

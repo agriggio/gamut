@@ -2766,9 +2766,16 @@ fn a_raws_profile_has_a_section_and_a_switch_of_its_own() {
         }),
     }));
     current.image = Arc::new(image);
+    harness.state_mut().input.pointer = Some([0, 0]);
     harness.run();
     let display = painted_in_side(&harness, "Display").expect("Display");
     let profile = painted_in_side(&harness, "Profile").expect("Profile");
+    // The pointer's lift a channel to the cell in the header, not the gain
+    // map's one line of words; and each channel's lift as a bar up the
+    // curve, with its word.
+    assert!(painted_in_side(&harness, "\u{2212}1.0").is_some());
+    assert!(painted_in_side(&harness, "\u{2212}1.0 / \u{2212}1.0 / \u{2212}1.0 stops").is_none());
+    assert!(painted_in_side(&harness, super::histogram::LIFT).is_some());
     let file = painted_in_side(&harness, "Image").expect("Image");
     assert!(display.min.y < profile.min.y && profile.min.y < file.min.y);
     assert!(painted_in_side(&harness, "Gain map").is_none());

@@ -42,6 +42,10 @@ const TICK: f32 = 4.0;
 /// How far a guide's words stand off the guide and off the plot's edge.
 const GUIDE_GAP: f32 = 3.0;
 
+/// The room between the tone curve's scale and the first of the channels'
+/// lift bars, and between one bar and the next.
+const LIFT_BAR_GAP: f32 = 2.0;
+
 /// How strongly the spread of the gain table's points is laid on its
 /// ground: a wash of the accent, behind the line it is the range of.
 const SPREAD_ALPHA: f32 = 0.35;
@@ -207,10 +211,36 @@ pub(super) fn show(
         applied,
         icon::CAMERA,
     );
-    let readout = mark
-        .map(|mark| mark.words.clone())
-        .unwrap_or_else(|| summary(applied).to_string());
-    section::header(pass, ui, Section::Profile, rect, Some(&readout));
+    // The header's readout: the pixel's lift a channel to the cell in its
+    // own ink, as every row under it writes the channels, where the pointer
+    // is on the picture; its words otherwise.
+    match mark {
+        Some(mark) if !mark.channels.is_empty() => {
+            section::header(pass, ui, Section::Profile, rect, None);
+            let line = section::header_line(rect);
+            // The gain map's words, which the mark is, with the true minus
+            // the rows under the header write their stops with.
+            let cells: [String; 3] = std::array::from_fn(|c| {
+                mark.channels.get(c).map_or_else(String::new, |channel| {
+                    channel.words.replace('-', "\u{2212}")
+                })
+            });
+            channel_cells(
+                pass,
+                ui,
+                section::readout_end(Section::Profile, line),
+                line.y + line.height / 2.0,
+                &cells,
+                &FontId::proportional(ROW_TEXT),
+            );
+        }
+        _ => {
+            let readout = mark
+                .map(|mark| mark.words.clone())
+                .unwrap_or_else(|| summary(applied).to_string());
+            section::header(pass, ui, Section::Profile, rect, Some(&readout));
+        }
+    }
     // What the header's three numbers are, under the pointer: the line
     // short of the switch, which has a tooltip of its own.
     let line = section::header_line(rect);
@@ -526,6 +556,36 @@ fn curve(
     line(pass, ui, points);
     if let Some(pixel) = pixel {
         let [high, middle, low] = tone_order(pixel.into_curve);
+        // Each channel's lift, up the left beside the scale: from where it
+        // came into the profile, the ProPhoto row's level, to where it
+        // comes out, the tick. Its length in the stops of the scale is
+        // where the channel's rule stands on the lift's histogram above,
+        // which is in stops of lift rather than of light. The word is on
+        // the brightest channel's.
+        let mut guide_at = None;
+        for (c, plane) in Plane::COLOR.into_iter().enumerate() {
+            let (from, to) = (pixel.prophoto[c], pixel.out[c]);
+            if from > 0.0 && to > 0.0 {
+                let x = bars.x + TICK + LIFT_BAR_GAP + c as f32 * (CURVE_WIDTH + LIFT_BAR_GAP);
+                let (top, bottom) = (up(clamped(to)), up(clamped(from)));
+                ui.painter().line_segment(
+                    [pos2(x, top), pos2(x, bottom)],
+                    Stroke::new(CURVE_WIDTH, plane.ink()),
+                );
+                if c == high {
+                    guide_at = Some((x, (top + bottom) / 2.0));
+                }
+            }
+        }
+        if let Some((x, y)) = guide_at {
+            ui.painter().text(
+                pos2(x + CURVE_WIDTH + 3.0 * GUIDE_GAP, y),
+                egui::Align2::LEFT_CENTER,
+                LIFT,
+                FontId::proportional(CLIP_TEXT),
+                Color32::from(pass.theme.text_primary),
+            );
+        }
         for (c, plane) in Plane::COLOR.into_iter().enumerate() {
             let (input, output) = (pixel.into_curve[c], pixel.out[c]);
             if input > 0.0 {
@@ -799,6 +859,10 @@ pub(in crate::ui) const GAIN_TABLE: &str = "Gain table";
 /// The word on the guide to the blend's dot on the gain table: the gain the
 /// table gave there.
 const GAIN: &str = "gain";
+
+/// The word beside the channels' bars up the tone curve: each channel's
+/// lift, from where it came into the profile to where it comes out.
+pub(in crate::ui) const LIFT: &str = "lift";
 
 /// The names of the section's two rows: the exposure, and the developed
 /// pixel in the profile's own space.

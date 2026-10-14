@@ -634,7 +634,10 @@ in stops below white and each in its color: the three in ProPhoto, the
 three after the exposure, the three after the gain in the table's caption,
 and the three the curve makes of them in the curve's. Each stage's numbers
 are the next one's inputs, and the three at the top of the section are how
-far the profile lifted each color of the pixel. The table is read once a
+far the profile lifted each color of the pixel. The curve draws that lift
+too, as a bar up its left side for each color, from where the color came
+into the profile to where it comes out; the bar's length in the curve's
+stops is where the color's line stands on the plot above. The table is read once a
 pixel, at a blend of its colors — the dot on its curve, with the gain it
 reads there — and the one gain multiplies all three, shown as ticks on the
 axis. The curve is applied to the brightest and dimmest colors, the dots

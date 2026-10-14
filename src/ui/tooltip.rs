@@ -755,7 +755,10 @@ pub fn words(tip: Tip) -> Option<String> {
             "The profile's tone curve, applied last to a pixel's brightest and dimmest \
              channels, the two dots on it; the middle channel keeps its place between \
              them, the hollow dot. In and out are stops below white, and the faint \
-             diagonal is a curve doing nothing"
+             diagonal is a curve doing nothing. The bars up the left are each channel's \
+             lift, from where it came into the profile on the ProPhoto row to where it \
+             comes out here: the length of each is where its rule stands on the \
+             histogram above"
         }
         // No words of its own: an item of the open menu wears the name of
         // the program it hands the file to, and there is nothing an
