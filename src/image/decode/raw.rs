@@ -166,13 +166,23 @@ impl super::Decoder for Raw {
         // handle's multipliers, so it could not answer for the camera's
         // balance again, and is spent here.
         let handle = take_handle(source)?;
-        // A DNG whose picture LibRaw cannot unpack, developed here instead;
-        // turned as the developed frame and the preview are. Its profile's
-        // rendering comes with it as a gain map, which the flag that leaves
-        // a photograph's gain map behind leaves behind too.
+        // A DNG stored demosaiced, developed here instead — from its JPEG
+        // XL tiles, which LibRaw cannot unpack, or from what LibRaw unpacks
+        // of any other compression — and turned as the developed frame and
+        // the preview are. Its profile's rendering comes with it as a gain
+        // map, which the flag that leaves a photograph's gain map behind
+        // leaves behind too.
         if let Some(linear) = linear::Linear::read(&handle.bytes)? {
             let orientation = handle.orientation();
-            let image = linear.develop(&handle.bytes, overrides.gain_map, orientation)?;
+            let values = match linear.source() {
+                linear::Source::JpegXl => linear::Values::File(&handle.bytes),
+                linear::Source::LibRaw => {
+                    handle.call("unpacking", ffi::libraw_unpack)?;
+                    let (values, stride) = handle.unpacked(linear.size())?;
+                    linear::Values::Unpacked { values, stride }
+                }
+            };
+            let image = linear.develop(values, overrides.gain_map, orientation)?;
             return Ok(crate::image::orient::apply(image, orientation));
         }
         let (width, height) = handle.output_size();
@@ -710,6 +720,45 @@ impl Handle {
                 kelvin: self.kelvin().map(|kelvin| kelvin as f32),
             },
         })
+    }
+
+    /// A picture stored demosaiced, as the library unpacked it: its values
+    /// row after row, and how many a pixel — three, or four with the last
+    /// nothing, as the library's version lays them out — through the
+    /// linearization table already. An error where the library's frame is
+    /// not `size`, the picture the file describes, or is not laid out so.
+    fn unpacked(&self, size: (u32, u32)) -> Result<(&[u16], usize)> {
+        let sizes = self.sizes();
+        let frame = (u32::from(sizes.raw_width), u32::from(sizes.raw_height));
+        if frame != size {
+            bail!(
+                "LibRaw unpacked a frame of {}x{} where the DNG says its picture is {}x{}",
+                frame.0,
+                frame.1,
+                size.0,
+                size.1
+            );
+        }
+        // SAFETY: accessors on an unpacked handle; each is null or a
+        // pointer into the handle's own allocation of `raw_width` by
+        // `raw_height` pixels of three or four values, read below within
+        // those bounds and for as long as the handle is borrowed.
+        let (values, stride) = unsafe {
+            let three = ffi::gamut_libraw_color3_image(self.data);
+            let (pointer, stride) = if three.is_null() {
+                (ffi::gamut_libraw_color4_image(self.data), 4)
+            } else {
+                (three, 3)
+            };
+            if pointer.is_null() {
+                bail!(
+                    "LibRaw unpacked the DNG's picture as something other than three values a pixel"
+                );
+            }
+            let len = size.0 as usize * size.1 as usize * stride;
+            (std::slice::from_raw_parts(pointer, len), stride)
+        };
+        Ok((values, stride))
     }
 
     /// One step of the pipeline, by the error it would raise.

@@ -212,7 +212,7 @@ unsafe extern "C" {
 /// pattern of blacks over the frame, and the rest that pattern.
 pub const CBLACK_SIZE: usize = 4104;
 
-// The three accessors `shim.c` adds, compiled against the library's own
+// The five accessors `shim.c` adds, compiled against the library's own
 // header by `build.rs`: the fields of the data that the C interface has
 // none for and that sit too deep in the struct to transcribe.
 unsafe extern "C" {
@@ -220,6 +220,14 @@ unsafe extern "C" {
     /// `raw_height`, `raw_pitch` bytes a row; null where the sensor is not
     /// one.
     pub fn gamut_libraw_raw_image(data: *const Data) -> *const u16;
+    /// A picture stored demosaiced, once unpacked: three values a pixel,
+    /// `raw_width` by `raw_height`, through the linearization table
+    /// already; null for a mosaic, and for a library that filled
+    /// [`gamut_libraw_color4_image`] instead.
+    pub fn gamut_libraw_color3_image(data: *const Data) -> *const u16;
+    /// As [`gamut_libraw_color3_image`], four values a pixel, the fourth
+    /// nothing; null where the library filled the other, or for a mosaic.
+    pub fn gamut_libraw_color4_image(data: *const Data) -> *const u16;
     /// The black level every photosite shares.
     pub fn gamut_libraw_black(data: *const Data) -> c_uint;
     /// What each color's black adds, [`CBLACK_SIZE`] long.

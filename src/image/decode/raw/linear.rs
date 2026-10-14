@@ -1,16 +1,20 @@
-//! The DNGs LibRaw cannot unpack, developed here: a picture stored as
-//! Linear Raw — three values a pixel, demosaiced already — in tiles
-//! compressed as JPEG XL, which is how an iPhone has written ProRAW since
-//! DNG 1.7 gave the format that compression. LibRaw reads JPEG XL only
-//! through Adobe's DNG SDK, which the system's library is not built with;
-//! and there is little left to do once the tiles are decoded, since the
+//! A DNG stored as Linear Raw — three values a pixel, demosaiced already —
+//! developed here rather than by LibRaw, so that its profile's rendering
+//! and its stored codes come with it. An iPhone writes ProRAW this way: in
+//! tiles compressed as JPEG XL since DNG 1.7 gave the format that
+//! compression, or as lossless JPEG where the phone was asked for that.
+//! LibRaw reads JPEG XL only through Adobe's DNG SDK, which the system's
+//! library is not built with, so those tiles are decoded by `jxl-oxide`;
+//! the lossless JPEG LibRaw unpacks itself, and its values are taken from
+//! the library's buffer. There is little left to do either way, since the
 //! demosaic is the camera's own.
 //!
-//! What is done is what LibRaw does to a Linear Raw it can read, by the
-//! specification's arithmetic: each tile decoded by `jxl-oxide`, each value
-//! put through the linearization table, the black and white levels, and the
-//! color matrix [`super::profile`] works out, into sixteen bits of linear
-//! Rec. 2020 at the same 1.0 a developed raw has.
+//! What is done is what LibRaw does to a Linear Raw it develops, by the
+//! specification's arithmetic: each value put through the linearization
+//! table — which LibRaw has applied already where it unpacked — the black
+//! and white levels, and the color matrix [`super::profile`] works out,
+//! into sixteen bits of linear Rec. 2020 at the same 1.0 a developed raw
+//! has.
 //!
 //! The file's other instructions, about how it should *look*, are its
 //! profile's: a baseline exposure, a gain table that is Apple's local tone
@@ -29,9 +33,11 @@
 //! is not what the specification says is passed over with a warning, and
 //! the picture develops without it.
 //!
-//! A file of this compression holding anything else — a mosaic, a picture
-//! of other than three channels — is refused by name; where the file
-//! carries the camera's JPEG, the loader shows that instead.
+//! A JPEG XL DNG holding anything else — a mosaic, a picture of other than
+//! three channels — is refused by name; where the file carries the
+//! camera's JPEG, the loader shows that instead. A Linear Raw of another
+//! compression that is not three integer channels of at most sixteen bits
+//! — a float DNG, a monochrome one — is left to LibRaw as every mosaic is.
 
 use std::sync::{Arc, Mutex};
 
@@ -67,6 +73,7 @@ mod tag {
     pub const TILE_LENGTH: u16 = 323;
     pub const TILE_OFFSETS: u16 = 324;
     pub const TILE_BYTE_COUNTS: u16 = 325;
+    pub const SAMPLE_FORMAT: u16 = 339;
     pub const DNG_VERSION: u16 = 50706;
     pub const LINEARIZATION_TABLE: u16 = 50712;
     pub const BLACK_LEVEL_REPEAT_DIM: u16 = 50713;
@@ -95,19 +102,51 @@ mod tag {
 const JPEG_XL: f64 = 52546.0;
 /// The photometric interpretation of a picture demosaiced already.
 const LINEAR_RAW: f64 = 34892.0;
+/// `SampleFormat`'s code for an unsigned integer, which is also what a
+/// file that says nothing means.
+const UNSIGNED: f64 = 1.0;
 
 /// The longest linearization table the specification allows: one entry for
 /// every sixteen-bit value.
 const TABLE_MAX: usize = 1 << 16;
 
-/// A DNG whose picture is Linear Raw in JPEG XL, as its directories
-/// describe it.
+/// How many rows of a picture LibRaw unpacked are developed at a time, a
+/// thread to each: a band's values and ratios are what a thread holds
+/// beside the picture, as a tile's are.
+const BAND_ROWS: u32 = 256;
+
+/// Where a Linear Raw's values come from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Source {
+    /// Tiles in JPEG XL, which LibRaw cannot unpack: decoded here, into the
+    /// codes as the file stores them.
+    JpegXl,
+    /// Any other compression — lossless JPEG, none — which LibRaw unpacks,
+    /// putting each code through the linearization table as it does.
+    LibRaw,
+}
+
+/// The picture's values, as [`Linear::develop`] is handed them, in the
+/// form its [`Source`] says.
+pub enum Values<'a> {
+    /// The file itself, whose JPEG XL tiles are decoded here.
+    File(&'a [u8]),
+    /// The picture as LibRaw unpacked it: `stride` values a pixel, the
+    /// first three a channel each, row after row at the picture's width —
+    /// and through the linearization table already.
+    Unpacked { values: &'a [u16], stride: usize },
+}
+
+/// A DNG whose picture is Linear Raw, as its directories describe it.
 pub struct Linear {
+    source: Source,
     width: u32,
     height: u32,
-    /// Each tile's size; a strip is a tile the width of the picture.
+    /// Each tile's size; a strip is a tile the width of the picture, and a
+    /// picture LibRaw unpacked is developed in bands, which are the same.
     tile: [u32; 2],
-    /// Where each tile's codestream is in the file, row by row.
+    /// Where each tile's codestream is in the file, row by row; nothing
+    /// for a picture LibRaw unpacks.
     tiles: Vec<std::ops::Range<usize>>,
     /// What each stored value means, where the file says. Shared with the
     /// sensor's recovery of a developed pixel's counts.
@@ -418,9 +457,13 @@ fn whole(value: f64, tag: u16) -> Result<u32> {
 }
 
 impl Linear {
-    /// The file in `bytes`, where it is a DNG whose picture is compressed
-    /// with JPEG XL: `None` for any other file, which is LibRaw's to read,
-    /// and an error for one of these this cannot develop.
+    /// The file in `bytes`, where it is a DNG whose picture is developed
+    /// here: `None` for any other file, which is LibRaw's to read, and an
+    /// error for one of these this cannot develop. One compressed with JPEG
+    /// XL is taken whatever it holds, since LibRaw cannot unpack it; any
+    /// other is taken only where it is Linear Raw of three integer channels
+    /// of at most sixteen bits, which LibRaw unpacks into the form
+    /// [`Values::Unpacked`] describes.
     pub fn read(bytes: &[u8]) -> Result<Option<Self>> {
         let Some(order) = Order::of(bytes) else {
             return Ok(None);
@@ -439,21 +482,42 @@ impl Linear {
         let Some(picture) = picture(&first) else {
             return Ok(None);
         };
-        if picture.number(tag::COMPRESSION) != Some(JPEG_XL) {
-            return Ok(None);
-        }
         let photometric = picture.number(tag::PHOTOMETRIC);
-        if photometric != Some(LINEAR_RAW) {
-            bail!(
-                "the DNG's JPEG XL picture is not Linear Raw (photometric {}), which is all \
-                 that can be developed here",
-                photometric.map_or("missing".to_string(), |code| code.to_string())
-            );
-        }
-        Self::of(&first, &picture).map(Some)
+        let source = if picture.number(tag::COMPRESSION) == Some(JPEG_XL) {
+            if photometric != Some(LINEAR_RAW) {
+                bail!(
+                    "the DNG's JPEG XL picture is not Linear Raw (photometric {}), which is all \
+                     that can be developed here",
+                    photometric.map_or("missing".to_string(), |code| code.to_string())
+                );
+            }
+            Source::JpegXl
+        } else {
+            let samples = picture.number(tag::SAMPLES_PER_PIXEL).unwrap_or(1.0);
+            let format = picture.number(tag::SAMPLE_FORMAT).unwrap_or(UNSIGNED);
+            let bits = picture.number(tag::BITS_PER_SAMPLE).unwrap_or(16.0);
+            if photometric != Some(LINEAR_RAW)
+                || samples != 3.0
+                || format != UNSIGNED
+                || !(1.0..=16.0).contains(&bits)
+            {
+                return Ok(None);
+            }
+            Source::LibRaw
+        };
+        Self::of(source, &first, &picture).map(Some)
     }
 
-    fn of(first: &Directory, picture: &Directory) -> Result<Self> {
+    /// The picture's size, which what LibRaw unpacks has to be.
+    pub fn size(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
+    pub fn source(&self) -> Source {
+        self.source
+    }
+
+    fn of(source: Source, first: &Directory, picture: &Directory) -> Result<Self> {
         let width = picture
             .whole(tag::IMAGE_WIDTH)?
             .context("the DNG's picture has no width")?;
@@ -471,59 +535,12 @@ impl Linear {
         if picture.whole(tag::PLANAR_CONFIGURATION)?.unwrap_or(1) != 1 {
             bail!("the DNG's Linear Raw is stored a plane at a time");
         }
-
-        // Tiles, or strips: a strip is a tile as wide as the picture.
-        let (tile, offsets, counts) = match picture.whole(tag::TILE_WIDTH)? {
-            Some(across) => (
-                [
-                    across,
-                    picture
-                        .whole(tag::TILE_LENGTH)?
-                        .context("the DNG's tiles have no height")?,
-                ],
-                tag::TILE_OFFSETS,
-                tag::TILE_BYTE_COUNTS,
-            ),
-            None => (
-                [
-                    width,
-                    picture
-                        .whole(tag::ROWS_PER_STRIP)?
-                        .unwrap_or(height)
-                        .min(height),
-                ],
-                tag::STRIP_OFFSETS,
-                tag::STRIP_BYTE_COUNTS,
-            ),
+        let (tile, tiles) = match source {
+            Source::JpegXl => tiles(first, picture, width, height)?,
+            // LibRaw hands the picture over whole, and it is developed in
+            // bands of rows, a thread to a band.
+            Source::LibRaw => ([width, BAND_ROWS.min(height)], Vec::new()),
         };
-        if tile[0] == 0 || tile[1] == 0 {
-            bail!("the DNG's tiles are {}x{}", tile[0], tile[1]);
-        }
-        // A tile is decoded whole, so it is held to the same ceiling as
-        // the picture: one claiming to be vast is refused before the
-        // decoder is asked for it.
-        crate::image::decode::check_decoded_size(tile[0], tile[1], 3, 16)?;
-        let expected = width.div_ceil(tile[0]) as usize * height.div_ceil(tile[1]) as usize;
-        let offsets = picture.numbers(offsets).unwrap_or_default();
-        let counts = picture.numbers(counts).unwrap_or_default();
-        if offsets.len() != expected || counts.len() != expected {
-            bail!(
-                "the DNG's picture is {expected} tiles, and it says where {} of them are",
-                offsets.len().min(counts.len())
-            );
-        }
-        let tiles = offsets
-            .iter()
-            .zip(&counts)
-            .map(|(&offset, &count)| {
-                let start = whole(offset, tag::TILE_OFFSETS)? as usize;
-                let end = start + whole(count, tag::TILE_BYTE_COUNTS)? as usize;
-                if end > first.bytes.len() {
-                    bail!("a tile of the DNG's picture runs past the end of the file");
-                }
-                Ok(start..end)
-            })
-            .collect::<Result<Vec<_>>>()?;
 
         let table = match picture.numbers(tag::LINEARIZATION_TABLE) {
             Some(table) if table.is_empty() || table.len() > TABLE_MAX => {
@@ -570,6 +587,7 @@ impl Linear {
         let matrix = camera.to_bt2020()?;
         let rendering = Rendering::read(first, picture)?;
         Ok(Self {
+            source,
             width,
             height,
             tile,
@@ -610,32 +628,74 @@ impl Linear {
             .collect()
     }
 
+    /// The code each value LibRaw unpacked was stored as, for every value a
+    /// sixteen-bit word holds: the first code the table takes to the value
+    /// or past it, which is the one it was where the table only rises.
+    /// Nothing where there is no table, the value being the code.
+    fn codes_of_values(&self) -> Option<Vec<u16>> {
+        let table = self.table.as_ref()?;
+        let last = table.len() - 1;
+        Some(
+            (0..=u16::MAX)
+                .map(|value| {
+                    table
+                        .partition_point(|&linear| linear < f32::from(value))
+                        .min(last) as u16
+                })
+                .collect(),
+        )
+    }
+
     /// The picture, as stored: the turn the file asks for is the caller's,
     /// and `turned` says which it will be, for the sensor's counts beside
     /// the picture. With `profile`, its profile's rendering beside it, where
-    /// it has one, as the gain map the display lifts it by.
+    /// it has one, as the gain map the display lifts it by. `values` is the
+    /// picture in the form the source asks for.
     pub fn develop(
         &self,
-        bytes: &[u8],
+        values: Values,
         profile: bool,
         turned: crate::image::orient::Orientation,
     ) -> Result<DecodedImage> {
         let (width, height) = (self.width as usize, self.height as usize);
+        match (&values, self.source) {
+            (Values::File(_), Source::JpegXl) => {}
+            (Values::Unpacked { values, stride }, Source::LibRaw) => {
+                if *stride < 3 || values.len() != width * height * stride {
+                    bail!(
+                        "LibRaw unpacked {} values, {stride} a pixel, for a picture of {width}x{height}",
+                        values.len()
+                    );
+                }
+            }
+            _ => bail!("the DNG's picture was handed over in a form its compression does not take"),
+        }
+        let codes_of_values = match values {
+            Values::Unpacked { .. } => self.codes_of_values(),
+            Values::File(_) => None,
+        };
         let output = Mutex::new(vec![0u16; width * height * 3]);
         let rendering = self.rendering.as_ref().filter(|_| profile);
         let ratios = rendering.map(|_| Mutex::new(vec![f16::ONE; width * height * 3]));
         let range: Mutex<Range> = Mutex::new(None);
         let tallies = Mutex::new(vec![vec![0u32; self.full() as usize + 1]; 3]);
         let across = self.width.div_ceil(self.tile[0]) as usize;
-        let mut failures: Vec<Option<anyhow::Error>> =
-            (0..self.tiles.len()).map(|_| None).collect();
+        let count = across * self.height.div_ceil(self.tile[1]) as usize;
+        let mut failures: Vec<Option<anyhow::Error>> = (0..count).map(|_| None).collect();
         rayon_core::scope(|scope| {
             for (index, failure) in failures.iter_mut().enumerate() {
                 let (output, ratios, range, tallies) = (&output, ratios.as_ref(), &range, &tallies);
+                let (values, codes_of_values) = (&values, codes_of_values.as_deref());
                 scope.spawn(move |_| {
                     let at = [index % across, index / across];
                     let lifted = rendering.zip(ratios);
-                    match self.tile(bytes, index, at, output, lifted, tallies) {
+                    let tile = Tile {
+                        index,
+                        at,
+                        values,
+                        codes_of_values,
+                    };
+                    match self.tile(tile, output, lifted, tallies) {
                         Ok(found) => {
                             if let Ok(mut range) = range.lock() {
                                 *range = widen(*range, found);
@@ -736,6 +796,26 @@ impl Linear {
         })
     }
 
+    /// The values of tile `index`, the `at`th across and down, three a
+    /// pixel at the tile's width: decoded from the file's JPEG XL, or
+    /// copied out of what LibRaw unpacked, the rows past the picture left
+    /// off.
+    fn values(&self, tile: &Tile) -> Result<Vec<u16>> {
+        match *tile.values {
+            Values::File(bytes) => decode_tile(&bytes[self.tiles[tile.index].clone()], self.tile),
+            Values::Unpacked { values, stride } => {
+                let (width, height) = (self.width as usize, self.height as usize);
+                let top = tile.at[1] * self.tile[1] as usize;
+                let rows = (self.tile[1] as usize).min(height - top);
+                let pixels = &values[top * width * stride..(top + rows) * width * stride];
+                Ok(pixels
+                    .chunks_exact(stride)
+                    .flat_map(|pixel| pixel[..3].iter().copied())
+                    .collect())
+            }
+        }
+    }
+
     /// Decodes tile `index`, the `at`th across and down, develops it in
     /// place, and copies the part of it inside the picture into `output`;
     /// with `lifted`, works out what the profile renders each pixel as, and
@@ -743,15 +823,16 @@ impl Linear {
     /// anything by, in stops.
     fn tile(
         &self,
-        bytes: &[u8],
-        index: usize,
-        at: [usize; 2],
+        tile: Tile,
         output: &Mutex<Vec<u16>>,
         lifted: Option<(&Rendering, &Mutex<Vec<f16>>)>,
         tallies: &Mutex<Vec<Vec<u32>>>,
     ) -> Result<Range> {
         let [tile_width, tile_height] = self.tile.map(|side| side as usize);
-        let mut values = decode_tile(&bytes[self.tiles[index].clone()], self.tile)?;
+        let at = tile.at;
+        let mut values = self.values(&tile)?;
+        // Through the table already, where LibRaw unpacked.
+        let linearized = matches!(tile.values, Values::Unpacked { .. });
         let left = at[0] * tile_width;
         let top = at[1] * tile_height;
         // A tile at the right or the bottom is padded past the picture.
@@ -770,12 +851,21 @@ impl Linear {
                 let x = left + column;
                 let pixel = (row * tile_width + column) * 3;
                 let camera: [f32; 3] = std::array::from_fn(|c| {
-                    let stored = values[pixel + c];
-                    tallied[c][usize::from(stored).min(codes - 1)] += 1;
-                    let linear = match &self.table {
-                        Some(table) => table[usize::from(stored).min(table.len() - 1)],
-                        None => f32::from(stored),
+                    let value = values[pixel + c];
+                    let (code, linear) = if linearized {
+                        let code = match tile.codes_of_values {
+                            Some(codes) => codes[usize::from(value)],
+                            None => value,
+                        };
+                        (code, f32::from(value))
+                    } else {
+                        let linear = match &self.table {
+                            Some(table) => table[usize::from(value).min(table.len() - 1)],
+                            None => f32::from(value),
+                        };
+                        (value, linear)
                     };
+                    tallied[c][usize::from(code).min(codes - 1)] += 1;
                     let black = self.black[c] + self.black_across[x] + self.black_down[y];
                     ((linear - black) / (self.white[c] - black)).clamp(0.0, 1.0)
                 });
@@ -831,6 +921,79 @@ impl Linear {
         }
         Ok(range)
     }
+}
+
+/// One tile's work, as a thread is given it.
+struct Tile<'a> {
+    /// Which tile, row by row, and the `at`th across and down.
+    index: usize,
+    at: [usize; 2],
+    values: &'a Values<'a>,
+    /// [`Linear::codes_of_values`], for a picture LibRaw unpacked.
+    codes_of_values: Option<&'a [u16]>,
+}
+
+/// Where a JPEG XL picture's tiles are: each tile's size, and each one's
+/// codestream in the file, row by row. Tiles, or strips: a strip is a tile
+/// as wide as the picture.
+fn tiles(
+    first: &Directory,
+    picture: &Directory,
+    width: u32,
+    height: u32,
+) -> Result<([u32; 2], Vec<std::ops::Range<usize>>)> {
+    let (tile, offsets, counts) = match picture.whole(tag::TILE_WIDTH)? {
+        Some(across) => (
+            [
+                across,
+                picture
+                    .whole(tag::TILE_LENGTH)?
+                    .context("the DNG's tiles have no height")?,
+            ],
+            tag::TILE_OFFSETS,
+            tag::TILE_BYTE_COUNTS,
+        ),
+        None => (
+            [
+                width,
+                picture
+                    .whole(tag::ROWS_PER_STRIP)?
+                    .unwrap_or(height)
+                    .min(height),
+            ],
+            tag::STRIP_OFFSETS,
+            tag::STRIP_BYTE_COUNTS,
+        ),
+    };
+    if tile[0] == 0 || tile[1] == 0 {
+        bail!("the DNG's tiles are {}x{}", tile[0], tile[1]);
+    }
+    // A tile is decoded whole, so it is held to the same ceiling as the
+    // picture: one claiming to be vast is refused before the decoder is
+    // asked for it.
+    crate::image::decode::check_decoded_size(tile[0], tile[1], 3, 16)?;
+    let expected = width.div_ceil(tile[0]) as usize * height.div_ceil(tile[1]) as usize;
+    let offsets = picture.numbers(offsets).unwrap_or_default();
+    let counts = picture.numbers(counts).unwrap_or_default();
+    if offsets.len() != expected || counts.len() != expected {
+        bail!(
+            "the DNG's picture is {expected} tiles, and it says where {} of them are",
+            offsets.len().min(counts.len())
+        );
+    }
+    let tiles = offsets
+        .iter()
+        .zip(&counts)
+        .map(|(&offset, &count)| {
+            let start = whole(offset, tag::TILE_OFFSETS)? as usize;
+            let end = start + whole(count, tag::TILE_BYTE_COUNTS)? as usize;
+            if end > first.bytes.len() {
+                bail!("a tile of the DNG's picture runs past the end of the file");
+            }
+            Ok(start..end)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok((tile, tiles))
 }
 
 /// The tile's values as stored, three to a pixel, `tile` in size.
@@ -952,11 +1115,16 @@ mod tests {
         std::fs::read(path).expect("the fixture is there")
     }
 
-    /// Only a DNG whose picture is in JPEG XL is taken: a mosaiced DNG,
-    /// and anything that is not a DNG, are LibRaw's.
+    /// A DNG whose picture is Linear Raw is taken, from its JPEG XL tiles
+    /// or from what LibRaw unpacks of lossless JPEG; a mosaiced DNG, and
+    /// anything that is not a DNG, are LibRaw's.
     #[test]
-    fn only_a_jpeg_xl_dng_is_taken() {
-        assert!(Linear::read(&fixture("dng-jxl.dng")).unwrap().is_some());
+    fn only_a_linear_raw_dng_is_taken() {
+        let jxl = Linear::read(&fixture("dng-jxl.dng")).unwrap().unwrap();
+        assert_eq!(jxl.source(), Source::JpegXl);
+        let ljpeg = Linear::read(&fixture("dng-ljpeg.dng")).unwrap().unwrap();
+        assert_eq!(ljpeg.source(), Source::LibRaw);
+        assert_eq!(ljpeg.size(), (32, 24));
         assert!(Linear::read(&fixture("dng-cfa.dng")).unwrap().is_none());
         assert!(Linear::read(&fixture("tiff-rgb8.tif")).unwrap().is_none());
         assert!(Linear::read(b"not a tiff").unwrap().is_none());
@@ -1056,7 +1224,7 @@ mod tests {
         let bytes = fixture("dng-jxl.dng");
         let linear = Linear::read(&bytes).unwrap().unwrap();
         let image = linear
-            .develop(&bytes, true, Orientation::NoTransforms)
+            .develop(Values::File(&bytes), true, Orientation::NoTransforms)
             .unwrap();
         let map = image.gain_map.as_deref().expect("a profile");
         let Lift::Profile(profile) = &map.lift else {
@@ -1076,7 +1244,7 @@ mod tests {
 
         assert!(
             linear
-                .develop(&bytes, false, Orientation::NoTransforms)
+                .develop(Values::File(&bytes), false, Orientation::NoTransforms)
                 .unwrap()
                 .gain_map
                 .is_none()
@@ -1092,7 +1260,7 @@ mod tests {
         let bytes = fixture("dng-jxl.dng");
         let linear = Linear::read(&bytes).unwrap().unwrap();
         let image = linear
-            .develop(&bytes, true, Orientation::NoTransforms)
+            .develop(Values::File(&bytes), true, Orientation::NoTransforms)
             .unwrap();
         let sensor = image.sensor.as_deref().expect("the sensor");
         let table = linear.table.as_deref().expect("the fixture's table");
@@ -1153,7 +1321,7 @@ mod tests {
         let bytes = fixture("dng-jxl-profile-cut.dng");
         let linear = Linear::read(&bytes).unwrap().unwrap();
         let image = linear
-            .develop(&bytes, true, Orientation::NoTransforms)
+            .develop(Values::File(&bytes), true, Orientation::NoTransforms)
             .unwrap();
         let Some(Lift::Profile(profile)) = image.gain_map.as_deref().map(|map| &map.lift) else {
             panic!("the rest of the profile");

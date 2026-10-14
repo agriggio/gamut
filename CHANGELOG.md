@@ -38,9 +38,10 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
   Display plot spreads a dark frame across the panel instead of piling it
   against the left edge, white stays at the top however dark the frame,
   and the Display's readout of a value is stops below white.
-- An iPhone's ProRAW, whose picture is compressed with JPEG XL, is
-  developed like any other raw — the camera's balance and color, in
-  Rec. 2020 — and shown as its camera profile renders it: the baseline
+- An iPhone's ProRAW — compressed with JPEG XL, or with lossless JPEG
+  where the phone was set to the older form — is developed like any other
+  raw — the camera's balance and color, in Rec. 2020 — and shown as its
+  camera profile renders it: the baseline
   exposure, Apple's local tone map and the profile's tone curve, which put
   it close to the camera's JPEG. `P` switches the rendering off and on for
   every raw, and the choice is kept between runs. The histogram panel's

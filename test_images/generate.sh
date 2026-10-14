@@ -865,15 +865,18 @@ out = b"II\x2a\x00" + struct.pack("<I", directory_at) + struct.pack("<H", len(en
 open(sys.argv[1], "wb").write(out)
 DNG
 
-# A DNG 1.7 laid out as an iPhone's ProRAW is: the camera's JPEG of the
+# A DNG laid out as an iPhone's ProRAW is: the camera's JPEG of the
 # picture in the first directory, and in a SubIFD the picture itself as
-# Linear Raw — three channels, demosaiced already — in 16x16 tiles, each a
-# JPEG XL file. As an iPhone's are, the tiles are sixteen-bit codestreams
-# holding ten-bit codes, which a linearization table of 1024 entries maps
-# onto 0..65535 — here a square, so that a code read as a value is far too
-# dark. The pattern is padded to whole tiles with black, as a tiled TIFF's
-# last row and column are. The matrix is `dng-cfa.dng`'s, making the
-# camera's space Rec. 2020.
+# Linear Raw — three channels, demosaiced already — in 16x16 tiles, each
+# compressed as COMPRESSION says: 52546 is JPEG XL, which DNG 1.7 added and
+# an iPhone writes by default, and 7 is lossless JPEG, which it writes when
+# asked for the older form. As an iPhone's are, the tiles hold ten-bit
+# codes — in sixteen-bit JPEG XL codestreams, or at a precision of ten in
+# the lossless JPEG — which a linearization table of 1024 entries maps onto
+# 0..65535 — here a square, so that a code read as a value is far too dark.
+# The pattern is padded to whole tiles with black, as a tiled TIFF's last
+# row and column are. The matrix is `dng-cfa.dng`'s, making the camera's
+# space Rec. 2020.
 #
 # PROFILE is the profile's rendering beside it: `whole` is a baseline
 # exposure of -2 EV, a gain table of 2 x 2 points whose every gain is 2,
@@ -881,15 +884,16 @@ DNG
 # (0.5, 0.25) — so that white is rendered at a quarter, two stops down —
 # `cut` the same with the gain table's last gain cut off, and `none` no
 # profile at all.
-#   dng_jxl OUT PROFILE TILE...
-dng_jxl() {
-  local out=$1 profile=$2; shift 2
+#   dng_tiled OUT PROFILE COMPRESSION TILE...
+dng_tiled() {
+  local out=$1 profile=$2 compression=$3; shift 3
   magick "$work/color.png" -quality 95 "$work/dng-preview.jpg"
-  python3 - "$out" "$profile" "$work/dng-preview.jpg" "$@" <<'DNG'
+  python3 - "$out" "$profile" "$compression" "$work/dng-preview.jpg" "$@" <<'DNG'
 import struct, sys
 
-out, profile, preview = sys.argv[1], sys.argv[2], open(sys.argv[3], "rb").read()
-tiles = [open(path, "rb").read() for path in sys.argv[4:]]
+out, profile, compression = sys.argv[1], sys.argv[2], int(sys.argv[3])
+preview = open(sys.argv[4], "rb").read()
+tiles = [open(path, "rb").read() for path in sys.argv[5:]]
 WIDTH, HEIGHT, TILE = 32, 24, 16
 
 matrix = [1716651, -355671, -253366, -666684, 1616481, 15769, 17640, -42771, 942103]
@@ -927,7 +931,7 @@ first = [
 raw = [
     (254, LONG, [0]),                                  # the picture itself
     (256, LONG, [WIDTH]), (257, LONG, [HEIGHT]),
-    (258, SHORT, [10, 10, 10]), (259, SHORT, [52546]), # JPEG XL
+    (258, SHORT, [10, 10, 10]), (259, SHORT, [compression]),
     (262, SHORT, [34892]),                             # Linear Raw
     (277, SHORT, [3]), (284, SHORT, [1]),
     (322, LONG, [TILE]), (323, LONG, [TILE]),
@@ -987,7 +991,7 @@ open(out, "wb").write(b"II\x2a\x00" + struct.pack("<I", 8) + directories + block
 DNG
 }
 
-# The pattern cut into the four tiles `dng_jxl` takes, padded to whole
+# The pattern cut into the four tiles `dng_tiled` takes, padded to whole
 # tiles, as ten-bit codes: full scale, 65535, becomes 1023.
 magick "$work/color.png" +repage -background black -extent 32x32 \
   -crop 16x16 +repage -depth 16 -evaluate Multiply 0.015609979 \
@@ -995,10 +999,75 @@ magick "$work/color.png" +repage -background black -extent 32x32 \
 for i in 0 1 2 3; do
   cjxl -d 0 -e 1 --quiet "$work/dng-tile-$i.png" "$work/dng-tile-$i.jxl"
 done
-dng_jxl dng-jxl.dng whole "$work"/dng-tile-{0,1,2,3}.jxl
+dng_tiled dng-jxl.dng whole 52546 "$work"/dng-tile-{0,1,2,3}.jxl
 # The same with its gain table cut short: it develops, the profile left
 # behind with a warning.
-dng_jxl dng-jxl-profile-cut.dng cut "$work"/dng-tile-{0,1,2,3}.jxl
+dng_tiled dng-jxl-profile-cut.dng cut 52546 "$work"/dng-tile-{0,1,2,3}.jxl
+
+# The same tiles as lossless JPEG, which an iPhone writes when asked for
+# the older ProRAW and LibRaw unpacks: a frame of three components at a
+# precision of ten bits, predicted as the iPhone's are — each sample from
+# the mean of the ones to its left and above, the first row from the left
+# alone, the first column from above, and the first sample from half scale
+# — the differences Huffman-coded under one table for the three, each
+# category of difference a code one bit longer than the last. Nothing on
+# the desktop writes a lossless JPEG, so this is written by hand.
+for i in 0 1 2 3; do
+  magick "$work/dng-tile-$i.png" -depth 16 "PPM:$work/dng-tile-$i.ppm"
+  python3 - "$work/dng-tile-$i.ppm" "$work/dng-tile-$i.ljpg" <<'LJPEG'
+import re, struct, sys
+
+header = re.match(rb"P6\s+(\d+)\s+(\d+)\s+(\d+)\s", open(sys.argv[1], "rb").read())
+width, height, deepest = (int(number) for number in header.groups())
+assert deepest == 65535
+pixels = open(sys.argv[1], "rb").read()[header.end():]
+samples = struct.unpack(f">{width * height * 3}H", pixels)
+PRECISION, PREDICTOR = 10, 7
+assert max(samples) < 1 << PRECISION
+
+bits = []
+def put(value, count):
+    bits.extend((value >> shift) & 1 for shift in reversed(range(count)))
+
+for y in range(height):
+    for x in range(width):
+        for c in range(3):
+            at = (y * width + x) * 3 + c
+            left, above = samples[at - 3] if x else None, samples[at - width * 3] if y else None
+            if y == 0:
+                prediction = left if x else 1 << (PRECISION - 1)
+            elif x == 0:
+                prediction = above
+            else:
+                prediction = (left + above) >> 1
+            difference = samples[at] - prediction
+            category = abs(difference).bit_length()
+            put((1 << (category + 1)) - 2, category + 1)  # the category's code: ones, then a zero
+            if difference < 0:
+                difference += (1 << category) - 1
+            put(difference, category)
+
+while len(bits) % 8:
+    bits.append(1)
+scan = bytearray()
+for index in range(0, len(bits), 8):
+    byte = int("".join(map(str, bits[index:index + 8])), 2)
+    scan.append(byte)
+    if byte == 0xFF:
+        scan.append(0)
+
+categories = PRECISION + 1
+frame = struct.pack(">BHHB", PRECISION, height, width, 3)
+frame += b"".join(struct.pack(">BBB", c, 0x11, 0) for c in range(3))
+table = bytes([0]) + bytes([1] * categories + [0] * (16 - categories)) + bytes(range(categories))
+scan_header = bytes([3]) + b"".join(struct.pack(">BB", c, 0) for c in range(3)) + bytes([PREDICTOR, 0, 0])
+def segment(marker, body):
+    return struct.pack(">BBH", 0xFF, marker, len(body) + 2) + body
+out = b"\xff\xd8" + segment(0xC3, frame) + segment(0xC4, table) + segment(0xDA, scan_header) + scan + b"\xff\xd9"
+open(sys.argv[2], "wb").write(out)
+LJPEG
+done
+dng_tiled dng-ljpeg.dng whole 7 "$work"/dng-tile-{0,1,2,3}.ljpg
 
 # ------------------------------------------------------- negative fixtures
 # A DNG cut off inside its directory: claimed by the raw decoder, since the
@@ -1009,7 +1078,7 @@ head -c 100 dng-cfa.dng > bad-truncated.dng
 for i in 0 1 2 3; do
   head -c 40 "$work/dng-tile-$i.jxl" > "$work/dng-tile-cut-$i.jxl"
 done
-dng_jxl bad-dng-jxl.dng none "$work"/dng-tile-cut-{0,1,2,3}.jxl
+dng_tiled bad-dng-jxl.dng none 52546 "$work"/dng-tile-cut-{0,1,2,3}.jxl
 # A PNG header followed by rubbish: the decoder is chosen, then fails.
 { printf '\211PNG\r\n\032\n'; head -c 64 /dev/zero | tr '\0' 'X'; } > bad-truncated.png
 # A real image in a format this build does not include. Targa has no decoder

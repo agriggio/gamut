@@ -1768,9 +1768,27 @@ const FIXTURES: &[Fixture] = &[
         profile: Some(-2.0),
         ..PLAIN
     },
-    // The same with its gain table cut short: the picture develops, and so
-    // does the rest of the profile, white at a quarter through the curve
-    // with no table to double it first.
+    // The same picture in lossless JPEG tiles, which an iPhone writes when
+    // asked for the older ProRAW: LibRaw unpacks them, and the same
+    // development makes the same picture of them, with the same profile.
+    Fixture {
+        file: "dng-ljpeg.dng",
+        covers: "DNG, Linear Raw in lossless JPEG tiles developed from what LibRaw unpacks",
+        channels: Channels::Rgb,
+        kind: Kind::U16,
+        color: LINEAR_2020,
+        alpha: AlphaMode::Opaque,
+        tone: Tone::Color,
+        coverage: Coverage::Opaque,
+        nodata: None,
+        tolerance: DEVELOPED,
+        camera_jpeg: Some([32, 24]),
+        profile: Some(-2.0),
+        ..PLAIN
+    },
+    // The JPEG XL one with its gain table cut short: the picture develops,
+    // and so does the rest of the profile, white at a quarter through the
+    // curve with no table to double it first.
     Fixture {
         file: "dng-jxl-profile-cut.dng",
         covers: "a DNG profile's malformed gain table passed over",
