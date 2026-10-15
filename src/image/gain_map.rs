@@ -192,35 +192,43 @@ impl GainTable {
         (step, position - step as f32)
     }
 
+    /// Where `share` of the picture's height (`axis` 0) or width (1) falls
+    /// on the grid: the points either side of it, the edge's held past it.
+    /// Worked out once a row or a column by the developer, which reads the
+    /// table at every pixel.
+    pub fn tap(&self, axis: usize, share: f32) -> Tap {
+        let at = ((f64::from(share) - self.origin[axis]) / self.spacing[axis])
+            .clamp(0.0, (self.points[axis] - 1) as f64);
+        let near = (at as usize).min(self.points[axis] - 1);
+        Tap {
+            near,
+            far: (near + 1).min(self.points[axis] - 1),
+            fraction: (at - near as f64) as f32,
+        }
+    }
+
     /// The gain at brightness `input` at `[down, across]`, each a share of
-    /// the picture's height and width: linear between the table's steps,
-    /// and blended between the four points of the grid around the place,
-    /// the edge's held past it.
+    /// the picture's height and width: [`GainTable::gain_between`] the
+    /// taps of the place.
     pub fn gain_for(&self, input: f32, place: [f32; 2]) -> f32 {
+        self.gain_between(input, self.tap(0, place[0]), self.tap(1, place[1]))
+    }
+
+    /// The gain at brightness `input` between the grid's points `down` and
+    /// `across` tap: linear between the table's steps, and blended between
+    /// the four points of the grid around the place.
+    pub fn gain_between(&self, input: f32, down: Tap, across: Tap) -> f32 {
         let (step, along) = self.along(input);
-        let tap = |axis: usize| {
-            let at = ((f64::from(place[axis]) - self.origin[axis]) / self.spacing[axis])
-                .clamp(0.0, (self.points[axis] - 1) as f64);
-            let near = (at as usize).min(self.points[axis] - 1);
-            let far = (near + 1).min(self.points[axis] - 1);
-            (near, far, (at - near as f64) as f32)
-        };
-        let (top, bottom, down) = tap(0);
-        let (left, right, across) = tap(1);
         let point = |row: usize, column: usize| {
             let start = (row * self.points[1] + column) * self.steps + step;
             let pair = &self.gains[start..start + 2];
             pair[0] + (pair[1] - pair[0]) * along
         };
-        let upper = point(top, left) + (point(top, right) - point(top, left)) * across;
-        let lower = point(bottom, left) + (point(bottom, right) - point(bottom, left)) * across;
-        upper + (lower - upper) * down
-    }
-
-    /// The gain for `color` at `place`: [`GainTable::gain_for`] at the
-    /// color's own brightness.
-    pub fn gain_at(&self, color: [f32; 3], place: [f32; 2]) -> f32 {
-        self.gain_for(self.input(color), place)
+        let upper = point(down.near, across.near)
+            + (point(down.near, across.far) - point(down.near, across.near)) * across.fraction;
+        let lower = point(down.far, across.near)
+            + (point(down.far, across.far) - point(down.far, across.near)) * across.fraction;
+        upper + (lower - upper) * down.fraction
     }
 
     /// The least and the most gain at `input` over every point of the grid:
@@ -846,15 +854,20 @@ const SHARES: f64 = 16.0;
 /// threads that read it.
 pub type Shared = Arc<GainMap>;
 
-/// Where a base pixel's row or column falls on the map: the two map rows
-/// (or columns) either side of it and how far it is from the first.
-struct Tap {
+/// Where a place falls along one axis of a grid — a gain map's pixels over
+/// the base's, or a [`GainTable`]'s points over the picture: the two rows
+/// (or columns) either side of it and how far it is from the first toward
+/// the other.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Tap {
     near: usize,
     far: usize,
     fraction: f32,
 }
 
 impl Tap {
+    /// Where the base's row or column `at` of `base` falls on `map` rows
+    /// or columns.
     fn at(at: u32, base: u32, map: u32) -> Self {
         let position = (at as f32 / base as f32) * map as f32;
         let last = map.saturating_sub(1) as usize;
@@ -892,9 +905,20 @@ pub fn rgb_tone(curve: impl Fn(f32) -> f32, color: [f32; 3]) -> [f32; 3] {
 /// The channels of `color` from the largest to the smallest, by index: the
 /// two the curve is applied to at either end, and the one placed between
 /// them in the middle.
+/// Run at every pixel of a raw as it develops, so the three comparisons
+/// are written out rather than handed to a sort; a tie keeps the channels'
+/// own order, as a stable sort would.
 pub fn tone_order(color: [f32; 3]) -> [usize; 3] {
     let mut order = [0, 1, 2];
-    order.sort_by(|a, b| color[*b].total_cmp(&color[*a]));
+    if color[order[1]] > color[order[0]] {
+        order.swap(0, 1);
+    }
+    if color[order[2]] > color[order[1]] {
+        order.swap(1, 2);
+    }
+    if color[order[1]] > color[order[0]] {
+        order.swap(0, 1);
+    }
     order
 }
 

@@ -1769,11 +1769,12 @@ const FIXTURES: &[Fixture] = &[
         ..PLAIN
     },
     // The same picture in lossless JPEG tiles, which an iPhone writes when
-    // asked for the older ProRAW: LibRaw unpacks them, and the same
-    // development makes the same picture of them, with the same profile.
+    // asked for the older ProRAW: `decode::raw::ljpeg` decodes them, a
+    // thread to a tile, and the same development makes the same picture of
+    // them, with the same profile.
     Fixture {
         file: "dng-ljpeg.dng",
-        covers: "DNG, Linear Raw in lossless JPEG tiles developed from what LibRaw unpacks",
+        covers: "DNG, Linear Raw in lossless JPEG tiles decoded and developed without LibRaw",
         channels: Channels::Rgb,
         kind: Kind::U16,
         color: LINEAR_2020,

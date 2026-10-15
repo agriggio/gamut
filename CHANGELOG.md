@@ -41,7 +41,9 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
 - An iPhone's ProRAW — compressed with JPEG XL, or with lossless JPEG
   where the phone was set to the older form — is developed like any other
   raw — the camera's balance and color, in Rec. 2020 — and shown as its
-  camera profile renders it: the baseline
+  camera profile renders it, and opens in a fraction of the time it took
+  LibRaw to unpack, since its tiles are decoded in parallel under either
+  compression: the baseline
   exposure, Apple's local tone map and the profile's tone curve, which put
   it close to the camera's JPEG. `P` switches the rendering off and on for
   every raw, and the choice is kept between runs. The histogram panel's

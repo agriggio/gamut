@@ -39,6 +39,7 @@
 
 mod ffi;
 mod linear;
+mod ljpeg;
 mod profile;
 
 use std::cell::Cell;
@@ -175,7 +176,9 @@ impl super::Decoder for Raw {
         if let Some(linear) = linear::Linear::read(&handle.bytes)? {
             let orientation = handle.orientation();
             let values = match linear.source() {
-                linear::Source::JpegXl => linear::Values::File(&handle.bytes),
+                linear::Source::JpegXl | linear::Source::LosslessJpeg => {
+                    linear::Values::File(&handle.bytes)
+                }
                 linear::Source::LibRaw => {
                     handle.call("unpacking", ffi::libraw_unpack)?;
                     let (values, stride) = handle.unpacked(linear.size())?;

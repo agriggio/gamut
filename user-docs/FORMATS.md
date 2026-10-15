@@ -474,7 +474,7 @@ Caveats:
 - **Lens corrections are not applied,** and neither is noise reduction: the
   frame is the sensor's, distortion and vignetting included.
 - **An iPhone's ProRAW opens as the iPhone rendered it.** A recent
-  iPhone's ProRAW is developed the same way as any other raw, in about a
+  iPhone's ProRAW is developed the same way as any other raw, in under a
   second for 48 megapixels, and then shown as the file says it should look:
   its exposure, the brightening of the shadows the iPhone stores for each
   part of the picture, and its tone curve, which put it close to the camera's

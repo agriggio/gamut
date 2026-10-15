@@ -295,10 +295,12 @@ image/         the data model, nothing GPU
                  dynamic.rs the shared DynamicImage bridge; heif/tmap.rs reads ISO 21496-1's gain-map item and
                  heif/apple.rs Apple's maker note; raw/ffi.rs LibRaw's C interface by hand and raw/shim.c
                  the three accessors it lacks, compiled against the library's header by build.rs;
-                 raw/linear.rs develops a Linear Raw DNG — an iPhone's ProRAW, from its JPEG XL
-                 tiles decoded here or from what LibRaw unpacks of its lossless JPEG — and bakes its
-                 profile's rendering beside it as a gain map of ratios, and raw/profile.rs the DNG
-                 color arithmetic both go through; fixture_tests.rs runs every file in test_images/
+                 raw/linear.rs develops a Linear Raw DNG — an iPhone's ProRAW, from its JPEG XL or
+                 lossless JPEG tiles decoded here, a thread to a tile, or from what LibRaw unpacks
+                 of any other compression — and bakes its profile's rendering beside it as a gain
+                 map of ratios; raw/ljpeg.rs is the lossless JPEG decoder, T.81's process 14 as a
+                 DNG holds it; raw/profile.rs the DNG color arithmetic both go through;
+                 fixture_tests.rs runs every file in test_images/
 render/        the GPU
   mod.rs         Renderer: surface, device, the three passes; Scene is what a frame draws;
                  UiPaint is what egui drew, and the ui-layer pass hands it to egui-wgpu

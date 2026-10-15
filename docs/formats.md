@@ -529,36 +529,53 @@ which neither Homebrew's build nor Arch's is made with, and fails with
 carrying both, and libjxl, in the package; what is left to do once the
 tiles are decoded is small, since there is no demosaic, and `jxl-oxide` is
 in the tree already. The other, which the phone writes when set to the
-older ProRAW, is lossless JPEG in tiles of 504 pixels at a precision of
-ten bits, which LibRaw unpacks as it unpacks any DNG. It would develop
-that one too, but its development brings neither the profile's rendering
-nor the stored codes with it, and the file is the same picture under the
-other compression; so the one developer takes both, and only where the
-values come from differs (`linear::Source`, and the `Values` it is handed).
-`Linear::read` is asked first in `Raw::decode`, on the bytes LibRaw's
-handle already holds: it takes a JPEG XL DNG whatever it holds, refusing
-by name one that is not Linear Raw, a mosaic among them, and a DNG of any
-other compression only where it is Linear Raw of three integer channels of
-at most sixteen bits — a float DNG, a monochrome one and every mosaic go
-on to LibRaw. For a JPEG XL file the tiles are decoded here; for any other
-`Raw::decode` has LibRaw unpack it and hands the library's buffer over
-(`Handle::unpacked`, through `gamut_libraw_color3_image` or the
-`color4_image` LibRaw 0.22 fills instead, four values a pixel), which
-holds each code put through the linearization table already, as LibRaw's
-`adobe_copy_pixel` does. The code each value was stored as, which the
-Image section tallies, is worked back through the table (`codes_of_values`,
-one lookup for every sixteen-bit value), the first code the table takes to
-the value or past it.
+older ProRAW, is lossless JPEG in tiles of 504 or 1008 pixels at a
+precision of ten bits, which LibRaw unpacks as it unpacks any DNG — but
+tile after tile on one thread, which on a 48-megapixel picture is a second
+and a half of the two it took to open. It would develop that one too, but
+its development brings neither the profile's rendering nor the stored
+codes with it, and the file is the same picture under the other
+compression; so the one developer takes both, and only where the values
+come from differs (`linear::Source`, and the `Values` it is handed). The
+lossless JPEG tiles are decoded by `raw::ljpeg`, a decoder of T.81's
+lossless process written for the purpose — a frame of up to four
+components at one sampling, two to sixteen bits deep, the seven predictors,
+restart intervals of whole rows, and nothing a DNG cannot hold — a thread
+to a tile as the JPEG XL ones are, which brings the file level with the
+JPEG XL one. `Linear::read` is asked first in `Raw::decode`, on the bytes
+LibRaw's handle already holds: it takes a JPEG XL DNG whatever it holds,
+refusing by name one that is not Linear Raw, a mosaic among them, and a
+DNG of any other compression only where it is Linear Raw of three integer
+channels of at most sixteen bits — a float DNG, a monochrome one and every
+mosaic go on to LibRaw. For a JPEG XL or lossless JPEG file the tiles are
+decoded here; for any other compression `Raw::decode` has LibRaw unpack it
+and hands the library's buffer over (`Handle::unpacked`, through
+`gamut_libraw_color3_image` or the `color4_image` LibRaw 0.22 fills
+instead, four values a pixel), which holds each code put through the
+linearization table already, as LibRaw's `adobe_copy_pixel` does. The code
+each value was stored as, which the Image section tallies, is worked back
+through the table (`codes_of_values`, one lookup for every sixteen-bit
+value), the first code the table takes to the value or past it.
 
 The development is the specification's, chosen to be what LibRaw does to a
 Linear Raw it can read; on a lossless JPEG ProRAW, which both can develop,
 the two agree to within a percent, the camera calibration matrices aside.
 The tiles — or, for a picture LibRaw unpacked, bands of 256 rows
-(`BAND_ROWS`) — are developed in parallel on rayon's pool, each in place
-and copied into the picture under a lock, so the memory held is the
-picture and a tile per thread rather than the picture twice; a picture
-LibRaw unpacked is held once more, in the library's buffer, until the
-handle is dropped. A value goes through the linearization table, the black
+(`BAND_ROWS`) — are decoded in parallel on rayon's pool, and each tile is
+then developed in bands of the same 256 rows, a thread to each, straight
+into its own rows of the picture and of the map of ratios, which
+`rows_of_tiles` hands out so that no thread writes where another does and
+no lock is needed: a tile at a time left the last tiles of a picture to as
+many threads as there were tiles while the rest of the pool waited, and on
+a processor of fast cores and slow ones a slow core's tile to itself. The
+memory held is the picture and a tile per thread rather than the picture
+twice; a picture LibRaw unpacked is held once more, in the library's
+buffer, until the handle is dropped. The profile's rendering, which costs
+more per pixel than the development does, reads the gain table through
+the `Tap`s of the pixel's row and column — where each falls on the grid,
+worked out once a row and once a column of the tile rather than at every
+pixel — and `tone_order` is three comparisons rather than a sort. A value
+goes through the linearization table, the black
 level with its per-row and per-column deltas, and the white, clipped to
 0..1; then through one matrix to linear Rec. 2020, which `raw::profile` works out: the
 color matrices blended for the light the as-shot neutral says the picture
@@ -572,9 +589,10 @@ a signature match a phone's own profile does not make.
 
 Turning is LibRaw's reading of the orientation, as for the developed frame,
 and LibRaw's size for the file is the full picture with no crop, so the
-probe and the develop agree. A 48-megapixel ProRAW develops in about a
-second on this machine from JPEG XL, and in two from lossless JPEG, of
-which LibRaw's unpacking, on one thread, is most.
+probe and the develop agree. A 48-megapixel ProRAW decodes and develops
+in about a quarter of a second on this machine from either compression:
+decoding the tiles is a fifth of the processor time, the development two
+fifths and the profile's rendering the rest.
 
 Its sensor (`Linear::sensor`) is the stored codes tallied a plane to the
 channel in the tile pass, before the table and the levels, over the
@@ -721,10 +739,14 @@ profile: it will not develop, and the loader shows its JPEG instead.
 `dng-ljpeg.dng` is `dng-jxl.dng` with its tiles as lossless JPEG, which
 the script encodes by hand since nothing on the desktop writes one — three
 components at a precision of ten, predicted as an iPhone's are, under one
-Huffman table — so that LibRaw unpacks it and the same development makes
-the same picture, profile and all. There is no cut-short lossless JPEG
-beside it: LibRaw unpacks one without complaint, reading nothing past the
-end, so there is no failure to fix a test to.
+Huffman table — so that `raw::ljpeg` decodes it and the same development
+makes the same picture, profile and all, which `raw::linear`'s tests hold
+the two fixtures to sample for sample. There is no cut-short lossless JPEG
+beside it: zeros inside a lossless JPEG decode as samples of no
+difference, so a cut is a marker rather than a truncation, and the
+developer's test makes one from the fixture; the decoder's own tests
+encode frames of their own, every predictor, sixteen bits, a point
+transform and restart intervals among them, and cut one short.
 
 ## JPEG XL
 

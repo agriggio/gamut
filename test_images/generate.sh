@@ -1005,7 +1005,7 @@ dng_tiled dng-jxl.dng whole 52546 "$work"/dng-tile-{0,1,2,3}.jxl
 dng_tiled dng-jxl-profile-cut.dng cut 52546 "$work"/dng-tile-{0,1,2,3}.jxl
 
 # The same tiles as lossless JPEG, which an iPhone writes when asked for
-# the older ProRAW and LibRaw unpacks: a frame of three components at a
+# the older ProRAW and the program decodes itself: a frame of three components at a
 # precision of ten bits, predicted as the iPhone's are — each sample from
 # the mean of the ones to its left and above, the first row from the left
 # alone, the first column from above, and the first sample from half scale

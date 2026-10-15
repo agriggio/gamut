@@ -5,9 +5,12 @@
 //! compression, or as lossless JPEG where the phone was asked for that.
 //! LibRaw reads JPEG XL only through Adobe's DNG SDK, which the system's
 //! library is not built with, so those tiles are decoded by `jxl-oxide`;
-//! the lossless JPEG LibRaw unpacks itself, and its values are taken from
-//! the library's buffer. There is little left to do either way, since the
-//! demosaic is the camera's own.
+//! the lossless JPEG LibRaw could unpack, but on one thread, tile after
+//! tile, which is most of the time a large picture takes, so those tiles
+//! are decoded by [`super::ljpeg`] a thread to a tile as the JPEG XL ones
+//! are. A Linear Raw of any other compression is unpacked by LibRaw, and
+//! its values taken from the library's buffer. There is little left to do
+//! any way, since the demosaic is the camera's own.
 //!
 //! What is done is what LibRaw does to a Linear Raw it develops, by the
 //! specification's arithmetic: each value put through the linearization
@@ -43,11 +46,12 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, anyhow, bail};
 use half::f16;
+use half::vec::HalfBitsVecExt;
 use jxl_oxide::image::BitDepth;
 use jxl_oxide::{AllocTracker, JxlImage, PixelFormat};
 
 use super::profile::{self, Matrix, Profile};
-use crate::image::gain_map::{self, Data, GainMap, GainTable, Lift};
+use crate::image::gain_map::{self, Data, GainMap, GainTable, Lift, Tap};
 use crate::image::sensor::{self, Sensor};
 use crate::image::stats::Stored;
 use crate::image::tiff::{self, Entry, Order};
@@ -98,8 +102,10 @@ mod tag {
     pub const PROFILE_GAIN_TABLE_MAP: u16 = 52525;
 }
 
-/// The compression code DNG 1.7 gives JPEG XL.
+/// The compression code DNG 1.7 gives JPEG XL, and TIFF's for JPEG, which
+/// in a DNG is lossless JPEG.
 const JPEG_XL: f64 = 52546.0;
+const LOSSLESS_JPEG: f64 = 7.0;
 /// The photometric interpretation of a picture demosaiced already.
 const LINEAR_RAW: f64 = 34892.0;
 /// `SampleFormat`'s code for an unsigned integer, which is also what a
@@ -110,10 +116,13 @@ const UNSIGNED: f64 = 1.0;
 /// every sixteen-bit value.
 const TABLE_MAX: usize = 1 << 16;
 
-/// How many rows of a picture LibRaw unpacked are developed at a time, a
-/// thread to each: a band's values and ratios are what a thread holds
-/// beside the picture, as a tile's are.
-const BAND_ROWS: u32 = 256;
+/// How many rows are developed at a time, a thread to each: a tile is
+/// decoded whole, then developed in bands of this many rows, so that the
+/// last tiles of a picture are not left to as many threads as there are
+/// tiles while the rest of the pool waits, and a slow core's tile is
+/// finished by the others. A picture LibRaw unpacked is developed in bands
+/// the picture's width, one to a tile.
+const BAND_ROWS: usize = 256;
 
 /// Where a Linear Raw's values come from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -121,7 +130,10 @@ pub enum Source {
     /// Tiles in JPEG XL, which LibRaw cannot unpack: decoded here, into the
     /// codes as the file stores them.
     JpegXl,
-    /// Any other compression — lossless JPEG, none — which LibRaw unpacks,
+    /// Tiles in lossless JPEG, which LibRaw unpacks one after another on one
+    /// thread: decoded here, a thread to a tile, into the codes as stored.
+    LosslessJpeg,
+    /// Any other compression — none, most likely — which LibRaw unpacks,
     /// putting each code through the linearization table as it does.
     LibRaw,
 }
@@ -129,7 +141,8 @@ pub enum Source {
 /// The picture's values, as [`Linear::develop`] is handed them, in the
 /// form its [`Source`] says.
 pub enum Values<'a> {
-    /// The file itself, whose JPEG XL tiles are decoded here.
+    /// The file itself, whose JPEG XL or lossless JPEG tiles are decoded
+    /// here.
     File(&'a [u8]),
     /// The picture as LibRaw unpacked it: `stride` values a pixel, the
     /// first three a channel each, row after row at the picture's width —
@@ -332,12 +345,21 @@ impl Rendering {
         }))
     }
 
-    /// What the profile renders `developed`, linear Rec. 2020, as, at
-    /// `place` — down and across, as shares of the picture.
-    fn render(&self, developed: [f32; 3], place: [f32; 2]) -> [f32; 3] {
+    /// Where `share` of the picture's height (`axis` 0) or width (1) falls
+    /// on the gain table's grid, for [`Rendering::render`]; nothing where
+    /// there is no table.
+    fn tap(&self, axis: usize, share: f32) -> Tap {
+        self.table
+            .as_ref()
+            .map_or_else(Tap::default, |table| table.tap(axis, share))
+    }
+
+    /// What the profile renders `developed`, linear Rec. 2020, as, at the
+    /// place `down` and `across` tap.
+    fn render(&self, developed: [f32; 3], down: Tap, across: Tap) -> [f32; 3] {
         let mut color = apply(self.into, developed).map(|value| value * self.exposure);
         if let Some(table) = &self.table {
-            let gain = table.gain_at(color, place);
+            let gain = table.gain_between(table.input(color), down, across);
             color = color.map(|value| value * gain);
         }
         let toned = match &self.curve {
@@ -462,7 +484,8 @@ impl Linear {
     /// error for one of these this cannot develop. One compressed with JPEG
     /// XL is taken whatever it holds, since LibRaw cannot unpack it; any
     /// other is taken only where it is Linear Raw of three integer channels
-    /// of at most sixteen bits, which LibRaw unpacks into the form
+    /// of at most sixteen bits — its lossless JPEG tiles decoded here, and
+    /// any other compression unpacked by LibRaw into the form
     /// [`Values::Unpacked`] describes.
     pub fn read(bytes: &[u8]) -> Result<Option<Self>> {
         let Some(order) = Order::of(bytes) else {
@@ -503,7 +526,11 @@ impl Linear {
             {
                 return Ok(None);
             }
-            Source::LibRaw
+            if picture.number(tag::COMPRESSION) == Some(LOSSLESS_JPEG) {
+                Source::LosslessJpeg
+            } else {
+                Source::LibRaw
+            }
         };
         Self::of(source, &first, &picture).map(Some)
     }
@@ -536,10 +563,10 @@ impl Linear {
             bail!("the DNG's Linear Raw is stored a plane at a time");
         }
         let (tile, tiles) = match source {
-            Source::JpegXl => tiles(first, picture, width, height)?,
+            Source::JpegXl | Source::LosslessJpeg => tiles(first, picture, width, height)?,
             // LibRaw hands the picture over whole, and it is developed in
             // bands of rows, a thread to a band.
-            Source::LibRaw => ([width, BAND_ROWS.min(height)], Vec::new()),
+            Source::LibRaw => ([width, (BAND_ROWS as u32).min(height)], Vec::new()),
         };
 
         let table = match picture.numbers(tag::LINEARIZATION_TABLE) {
@@ -659,7 +686,7 @@ impl Linear {
     ) -> Result<DecodedImage> {
         let (width, height) = (self.width as usize, self.height as usize);
         match (&values, self.source) {
-            (Values::File(_), Source::JpegXl) => {}
+            (Values::File(_), Source::JpegXl | Source::LosslessJpeg) => {}
             (Values::Unpacked { values, stride }, Source::LibRaw) => {
                 if *stride < 3 || values.len() != width * height * stride {
                     bail!(
@@ -674,28 +701,45 @@ impl Linear {
             Values::Unpacked { .. } => self.codes_of_values(),
             Values::File(_) => None,
         };
-        let output = Mutex::new(vec![0u16; width * height * 3]);
         let rendering = self.rendering.as_ref().filter(|_| profile);
-        let ratios = rendering.map(|_| Mutex::new(vec![f16::ONE; width * height * 3]));
+        // Both zeroed, so that the pages are the kernel's until the tiles'
+        // threads write them, rather than filled here on one thread: a
+        // picture of this size is hundreds of megabytes each.
+        let mut data = vec![0u16; width * height * 3];
+        let mut ratios: Option<Vec<f16>> =
+            rendering.map(|_| vec![0u16; width * height * 3].reinterpret_into());
         let range: Mutex<Range> = Mutex::new(None);
         let tallies = Mutex::new(vec![vec![0u32; self.full() as usize + 1]; 3]);
-        let across = self.width.div_ceil(self.tile[0]) as usize;
-        let count = across * self.height.div_ceil(self.tile[1]) as usize;
+        let [tile_width, tile_height] = self.tile.map(|side| side as usize);
+        let across = width.div_ceil(tile_width);
+        let count = across * height.div_ceil(tile_height);
         let mut failures: Vec<Option<anyhow::Error>> = (0..count).map(|_| None).collect();
+        // Each tile's rows of the picture, its thread's alone to write.
+        let outputs = rows_of_tiles(&mut data, width * 3, tile_width * 3, tile_height, across);
+        let mut lifted_rows = ratios
+            .as_mut()
+            .map(|ratios| rows_of_tiles(ratios, width * 3, tile_width * 3, tile_height, across));
         rayon_core::scope(|scope| {
-            for (index, failure) in failures.iter_mut().enumerate() {
-                let (output, ratios, range, tallies) = (&output, ratios.as_ref(), &range, &tallies);
+            for (index, (failure, rows)) in failures.iter_mut().zip(outputs).enumerate() {
+                let (range, tallies) = (&range, &tallies);
                 let (values, codes_of_values) = (&values, codes_of_values.as_deref());
+                let lifted = match (rendering, lifted_rows.as_mut()) {
+                    (Some(rendering), Some(all)) => {
+                        Some((rendering, std::mem::take(&mut all[index])))
+                    }
+                    _ => None,
+                };
                 scope.spawn(move |_| {
                     let at = [index % across, index / across];
-                    let lifted = rendering.zip(ratios);
                     let tile = Tile {
                         index,
                         at,
                         values,
                         codes_of_values,
+                        rows,
+                        lifted,
                     };
-                    match self.tile(tile, output, lifted, tallies) {
+                    match self.tile(tile, tallies) {
                         Ok(found) => {
                             if let Ok(mut range) = range.lock() {
                                 *range = widen(*range, found);
@@ -713,9 +757,6 @@ impl Linear {
         {
             return Err(error.context(format!("decoding tile {index} of the DNG's picture")));
         }
-        let data = output
-            .into_inner()
-            .map_err(|_| anyhow!("a tile's thread panicked"))?;
         let mut image = DecodedImage::new(
             self.width,
             self.height,
@@ -737,9 +778,6 @@ impl Linear {
             .map_err(|_| anyhow!("a tile's thread panicked"))?;
         image.sensor = Some(Arc::new(self.sensor(tallies, turned)?));
         if let (Some(rendering), Some(ratios)) = (rendering, ratios) {
-            let ratios = ratios
-                .into_inner()
-                .map_err(|_| anyhow!("a tile's thread panicked"))?;
             let range = range
                 .into_inner()
                 .map_err(|_| anyhow!("a tile's thread panicked"))?
@@ -797,12 +835,21 @@ impl Linear {
     }
 
     /// The values of tile `index`, the `at`th across and down, three a
-    /// pixel at the tile's width: decoded from the file's JPEG XL, or
-    /// copied out of what LibRaw unpacked, the rows past the picture left
-    /// off.
+    /// pixel at the tile's width: decoded from the file's JPEG XL or
+    /// lossless JPEG, or copied out of what LibRaw unpacked, the rows past
+    /// the picture left off.
     fn values(&self, tile: &Tile) -> Result<Vec<u16>> {
         match *tile.values {
-            Values::File(bytes) => decode_tile(&bytes[self.tiles[tile.index].clone()], self.tile),
+            Values::File(bytes) => {
+                let codestream = &bytes[self.tiles[tile.index].clone()];
+                match self.source {
+                    Source::LosslessJpeg => {
+                        let samples = self.tile[0] as usize * self.tile[1] as usize * 3;
+                        super::ljpeg::decode(codestream, samples)
+                    }
+                    _ => decode_tile(codestream, self.tile),
+                }
+            }
             Values::Unpacked { values, stride } => {
                 let (width, height) = (self.width as usize, self.height as usize);
                 let top = tile.at[1] * self.tile[1] as usize;
@@ -816,44 +863,126 @@ impl Linear {
         }
     }
 
-    /// Decodes tile `index`, the `at`th across and down, develops it in
-    /// place, and copies the part of it inside the picture into `output`;
-    /// with `lifted`, works out what the profile renders each pixel as, and
-    /// copies the ratio into its map. Says the least and the most it lifted
-    /// anything by, in stops.
-    fn tile(
-        &self,
-        tile: Tile,
-        output: &Mutex<Vec<u16>>,
-        lifted: Option<(&Rendering, &Mutex<Vec<f16>>)>,
-        tallies: &Mutex<Vec<Vec<u32>>>,
-    ) -> Result<Range> {
+    /// Decodes tile `index`, the `at`th across and down, and develops the
+    /// part of it inside the picture into the tile's rows of the picture, a
+    /// band of rows to a thread; with `lifted`, works out what the profile
+    /// renders each pixel as, and writes the ratio into the tile's rows of
+    /// the map. Says the least and the most it lifted anything by, in
+    /// stops.
+    fn tile(&self, tile: Tile, tallies: &Mutex<Vec<Vec<u32>>>) -> Result<Range> {
         let [tile_width, tile_height] = self.tile.map(|side| side as usize);
         let at = tile.at;
-        let mut values = self.values(&tile)?;
+        let values = self.values(&tile)?;
         // Through the table already, where LibRaw unpacked.
         let linearized = matches!(tile.values, Values::Unpacked { .. });
+        let Tile {
+            mut rows,
+            lifted,
+            codes_of_values,
+            ..
+        } = tile;
         let left = at[0] * tile_width;
         let top = at[1] * tile_height;
         // A tile at the right or the bottom is padded past the picture.
         let columns = tile_width.min(self.width as usize - left);
-        let rows = tile_height.min(self.height as usize - top);
-        let mut ratios = lifted.map(|_| vec![f16::ONE; columns * rows * 3]);
+        if rows.len() != tile_height.min(self.height as usize - top)
+            || rows.iter().any(|row| row.len() != columns * 3)
+        {
+            bail!("the tile's rows of the picture are not the tile's size");
+        }
+        let (rendering, mut map) = match lifted {
+            Some((rendering, map)) => (Some(rendering), Some(map)),
+            None => (None, None),
+        };
+        // Where each column of the tile falls on the gain table's grid,
+        // worked out once rather than at every pixel; a row's, likewise,
+        // in the band.
+        let across: Vec<Tap> = match rendering {
+            Some(rendering) => (0..columns)
+                .map(|column| rendering.tap(1, ((left + column) as f32 + 0.5) / self.width as f32))
+                .collect(),
+            None => Vec::new(),
+        };
+        let bands = rows.len().div_ceil(BAND_ROWS);
+        let mut map_bands: Vec<Option<&mut [&mut [f16]]>> = match map.as_mut() {
+            Some(map) => map.chunks_mut(BAND_ROWS).map(Some).collect(),
+            None => (0..bands).map(|_| None).collect(),
+        };
+        let mut results: Vec<Option<Result<Developed>>> = (0..bands).map(|_| None).collect();
+        rayon_core::scope(|scope| {
+            let bands = rows
+                .chunks_mut(BAND_ROWS)
+                .zip(values.chunks(BAND_ROWS * tile_width * 3))
+                .zip(results.iter_mut())
+                .enumerate();
+            for (index, ((rows, values), result)) in bands {
+                let band = Band {
+                    top: top + index * BAND_ROWS,
+                    left,
+                    columns,
+                    tile_width,
+                    values,
+                    linearized,
+                    codes_of_values,
+                    rows,
+                    map: map_bands[index].take(),
+                    rendering,
+                    across: &across,
+                };
+                scope.spawn(move |_| *result = Some(self.band(band)));
+            }
+        });
         let mut range: Range = None;
-        // The tile's own tallies of the stored values, merged into the
+        let mut tallies = tallies
+            .lock()
+            .map_err(|_| anyhow!("a tile's thread panicked"))?;
+        for result in results {
+            let developed = result.ok_or_else(|| anyhow!("a band's thread panicked"))??;
+            for (plane, counts) in tallies.iter_mut().zip(&developed.tallied) {
+                for (sum, count) in plane.iter_mut().zip(counts) {
+                    *sum += count;
+                }
+            }
+            range = widen(range, developed.range);
+        }
+        Ok(range)
+    }
+
+    /// Develops one band of a tile's rows, as a thread is given it.
+    fn band(&self, band: Band) -> Result<Developed> {
+        let Band {
+            top,
+            left,
+            columns,
+            tile_width,
+            values,
+            linearized,
+            codes_of_values,
+            rows,
+            mut map,
+            rendering,
+            across,
+        } = band;
+        // The least and the most ratio made, in stops once the band is done
+        // rather than a logarithm a value.
+        let mut ratios: Range = None;
+        // The band's own tallies of the stored values, merged into the
         // picture's once at the end rather than under a lock a value at a
         // time.
         let codes = self.full() as usize + 1;
         let mut tallied = vec![vec![0u32; codes]; 3];
-        for row in 0..rows {
+        for (row, out) in rows.iter_mut().enumerate() {
             let y = top + row;
+            let down = rendering.map_or_else(Tap::default, |rendering| {
+                rendering.tap(0, (y as f32 + 0.5) / self.height as f32)
+            });
             for column in 0..columns {
                 let x = left + column;
                 let pixel = (row * tile_width + column) * 3;
                 let camera: [f32; 3] = std::array::from_fn(|c| {
                     let value = values[pixel + c];
                     let (code, linear) = if linearized {
-                        let code = match tile.codes_of_values {
+                        let code = match codes_of_values {
                             Some(codes) => codes[usize::from(value)],
                             None => value,
                         };
@@ -870,57 +999,54 @@ impl Linear {
                     ((linear - black) / (self.white[c] - black)).clamp(0.0, 1.0)
                 });
                 let developed = apply(self.matrix, camera).map(|value| value.clamp(0.0, 1.0));
-                for (c, value) in developed.iter().enumerate() {
-                    values[pixel + c] = (value * 65535.0 + 0.5) as u16;
-                }
-                if let (Some((rendering, _)), Some(ratios)) = (lifted, ratios.as_mut()) {
-                    let place = [
-                        (y as f32 + 0.5) / self.height as f32,
-                        (x as f32 + 0.5) / self.width as f32,
-                    ];
-                    let out = rendering.render(developed, place);
-                    let at = (row * columns + column) * 3;
+                let stored = developed.map(|value| (value * 65535.0 + 0.5) as u16);
+                out[column * 3..column * 3 + 3].copy_from_slice(&stored);
+                if let (Some(rendering), Some(map)) = (rendering, map.as_mut()) {
+                    let rendered = rendering.render(developed, down, across[column]);
                     for c in 0..3 {
-                        let lift = ratio(out[c], values[pixel + c]);
-                        ratios[at + c] = f16::from_f32(lift);
-                        let stops = f16::from_f32(lift).to_f32().log2();
-                        range = widen(range, Some([stops, stops]));
+                        let lift = f16::from_f32(ratio(rendered[c], stored[c]));
+                        map[row][column * 3 + c] = lift;
+                        let lift = lift.to_f32();
+                        ratios = widen(ratios, Some([lift, lift]));
                     }
                 }
             }
         }
-        let width = self.width as usize;
-        let mut output = output
-            .lock()
-            .map_err(|_| anyhow!("a tile's thread panicked"))?;
-        for row in 0..rows {
-            let from = row * tile_width * 3;
-            let to = ((top + row) * width + left) * 3;
-            output[to..to + columns * 3].copy_from_slice(&values[from..from + columns * 3]);
-        }
-        drop(output);
-        {
-            let mut tallies = tallies
-                .lock()
-                .map_err(|_| anyhow!("a tile's thread panicked"))?;
-            for (plane, counts) in tallies.iter_mut().zip(&tallied) {
-                for (sum, count) in plane.iter_mut().zip(counts) {
-                    *sum += count;
-                }
-            }
-        }
-        if let (Some((_, map)), Some(ratios)) = (lifted, ratios) {
-            let mut map = map
-                .lock()
-                .map_err(|_| anyhow!("a tile's thread panicked"))?;
-            for row in 0..rows {
-                let from = row * columns * 3;
-                let to = ((top + row) * width + left) * 3;
-                map[to..to + columns * 3].copy_from_slice(&ratios[from..from + columns * 3]);
-            }
-        }
-        Ok(range)
+        Ok(Developed {
+            tallied,
+            range: ratios.map(|[least, most]| [least.log2(), most.log2()]),
+        })
     }
+}
+
+/// One band of a tile's rows, as a thread is given it.
+struct Band<'a> {
+    /// The band's first row of the picture, and the tile's first column.
+    top: usize,
+    left: usize,
+    /// How many of the tile's columns are inside the picture.
+    columns: usize,
+    tile_width: usize,
+    /// The tile's values for the band's rows, three a pixel at the tile's
+    /// width; whether they are through the linearization table already,
+    /// and [`Linear::codes_of_values`] where they are.
+    values: &'a [u16],
+    linearized: bool,
+    codes_of_values: Option<&'a [u16]>,
+    /// The band's rows of the picture, and of the map of ratios where the
+    /// profile's rendering is asked for.
+    rows: &'a mut [&'a mut [u16]],
+    map: Option<&'a mut [&'a mut [f16]]>,
+    rendering: Option<&'a Rendering>,
+    /// Where each of the tile's columns falls on the gain table's grid.
+    across: &'a [Tap],
+}
+
+/// What a band's development found: the stored codes tallied a plane to
+/// the channel, and the least and the most it lifted anything by.
+struct Developed {
+    tallied: Vec<Vec<u32>>,
+    range: Range,
 }
 
 /// One tile's work, as a thread is given it.
@@ -931,6 +1057,41 @@ struct Tile<'a> {
     values: &'a Values<'a>,
     /// [`Linear::codes_of_values`], for a picture LibRaw unpacked.
     codes_of_values: Option<&'a [u16]>,
+    /// The tile's rows of the picture, each as wide as the tile is inside
+    /// the picture.
+    rows: Vec<&'a mut [u16]>,
+    /// The profile's rendering, and the tile's rows of the map of its
+    /// ratios, where the rendering is asked for.
+    lifted: Option<(&'a Rendering, Vec<&'a mut [f16]>)>,
+}
+
+/// `buffer`, a picture of `stride` values a row, cut into each tile's rows
+/// — `across` tiles to a row of tiles, `tile_width` values across and
+/// `tile_height` rows down, the last across and down as wide and as deep as
+/// the picture leaves them — in the tiles' order, row by row, so that each
+/// tile's thread writes its own part of the picture with no lock between
+/// them.
+fn rows_of_tiles<T>(
+    buffer: &mut [T],
+    stride: usize,
+    tile_width: usize,
+    tile_height: usize,
+    across: usize,
+) -> Vec<Vec<&mut [T]>> {
+    let mut tiles: Vec<Vec<&mut [T]>> = Vec::new();
+    for band in buffer.chunks_mut(stride * tile_height) {
+        let first = tiles.len();
+        tiles.extend((0..across).map(|_| Vec::with_capacity(tile_height)));
+        for row in band.chunks_exact_mut(stride) {
+            let mut rest = row;
+            for tile in &mut tiles[first..] {
+                let (mine, after) = rest.split_at_mut(tile_width.min(rest.len()));
+                tile.push(mine);
+                rest = after;
+            }
+        }
+    }
+    tiles
 }
 
 /// Where a JPEG XL picture's tiles are: each tile's size, and each one's
@@ -1115,19 +1276,78 @@ mod tests {
         std::fs::read(path).expect("the fixture is there")
     }
 
-    /// A DNG whose picture is Linear Raw is taken, from its JPEG XL tiles
-    /// or from what LibRaw unpacks of lossless JPEG; a mosaiced DNG, and
-    /// anything that is not a DNG, are LibRaw's.
+    /// A DNG whose picture is Linear Raw is taken, from its JPEG XL or
+    /// lossless JPEG tiles; a mosaiced DNG, and anything that is not a
+    /// DNG, are LibRaw's.
     #[test]
     fn only_a_linear_raw_dng_is_taken() {
         let jxl = Linear::read(&fixture("dng-jxl.dng")).unwrap().unwrap();
         assert_eq!(jxl.source(), Source::JpegXl);
         let ljpeg = Linear::read(&fixture("dng-ljpeg.dng")).unwrap().unwrap();
-        assert_eq!(ljpeg.source(), Source::LibRaw);
+        assert_eq!(ljpeg.source(), Source::LosslessJpeg);
         assert_eq!(ljpeg.size(), (32, 24));
+        assert_eq!(ljpeg.tile, [16, 16]);
+        assert_eq!(ljpeg.tiles.len(), 4);
         assert!(Linear::read(&fixture("dng-cfa.dng")).unwrap().is_none());
         assert!(Linear::read(&fixture("tiff-rgb8.tif")).unwrap().is_none());
         assert!(Linear::read(b"not a tiff").unwrap().is_none());
+    }
+
+    /// The lossless JPEG fixture is the JPEG XL one's picture under the
+    /// other compression, so the two develop to the same picture, profile
+    /// and all; and one with a tile cut short will not develop, as the cut
+    /// JPEG XL one will not.
+    #[test]
+    fn lossless_jpeg_tiles_develop_as_the_jpeg_xl_ones_do() {
+        let jxl = fixture("dng-jxl.dng");
+        let ljpeg = fixture("dng-ljpeg.dng");
+        let from_jxl = Linear::read(&jxl)
+            .unwrap()
+            .unwrap()
+            .develop(Values::File(&jxl), true, Orientation::NoTransforms)
+            .unwrap();
+        let linear = Linear::read(&ljpeg).unwrap().unwrap();
+        let from_ljpeg = linear
+            .develop(Values::File(&ljpeg), true, Orientation::NoTransforms)
+            .unwrap();
+        let (Samples::U16 { data: a, .. }, Samples::U16 { data: b, .. }) =
+            (&from_jxl.samples, &from_ljpeg.samples)
+        else {
+            panic!("sixteen bits");
+        };
+        assert_eq!(a, b);
+        let (Some(a), Some(b)) = (&from_jxl.gain_map, &from_ljpeg.gain_map) else {
+            panic!("both profiles");
+        };
+        let (Data::Ratios(a_ratios), Data::Ratios(b_ratios)) = (&a.data, &b.data) else {
+            panic!("ratios");
+        };
+        assert_eq!(a_ratios, b_ratios);
+        let (Lift::Profile(a), Lift::Profile(b)) = (&a.lift, &b.lift) else {
+            panic!("profiles");
+        };
+        assert_eq!(a.range, b.range);
+        assert_eq!(a.baseline, b.baseline);
+        let planes = |image: &DecodedImage| -> Vec<(f32, f32)> {
+            let sensor = image.sensor.as_ref().unwrap();
+            sensor
+                .stored
+                .planes
+                .iter()
+                .map(|plane| (plane.min, plane.max))
+                .collect()
+        };
+        assert_eq!(planes(&from_jxl), planes(&from_ljpeg));
+        // Cut short by a marker forty bytes before its end: what is past
+        // the marker is not read, and the frame is not finished.
+        let mut cut = ljpeg.clone();
+        let end = linear.tiles[1].end;
+        cut[end - 40..end].fill(0xFF);
+        let Err(error) = linear.develop(Values::File(&cut), true, Orientation::NoTransforms) else {
+            panic!("refused");
+        };
+        assert!(format!("{error:#}").contains("tile 1"), "{error:#}");
+        assert!(format!("{error:#}").contains("ends before"), "{error:#}");
     }
 
     /// A JPEG XL picture that is a mosaic rather than Linear Raw is
@@ -1201,7 +1421,8 @@ mod tests {
         // rise 1, 2, 3 and the right point's are 4 throughout.
         let bytes = table_bytes(Order::Big, [1, 2], 3, &[1.0, 2.0, 3.0, 4.0, 4.0, 4.0]);
         let table = GainTable::read(&bytes, Order::Little).unwrap();
-        let left = |red: f32| table.gain_at([red, 0.0, 0.0], [0.5, 0.0]);
+        let gain_at = |color: [f32; 3], place: [f32; 2]| table.gain_for(table.input(color), place);
+        let left = |red: f32| gain_at([red, 0.0, 0.0], [0.5, 0.0]);
         assert_eq!(left(0.0), 1.0);
         // A third of the way in is the second step.
         assert!((left(1.0 / 3.0) - 2.0).abs() < 1e-5);
@@ -1210,10 +1431,10 @@ mod tests {
         assert_eq!(left(1.0), 3.0);
         assert_eq!(left(4.0), 3.0, "clamped first");
         // Half way across is half way between the two points.
-        let middle = table.gain_at([0.0; 3], [0.5, 0.5]);
+        let middle = gain_at([0.0; 3], [0.5, 0.5]);
         assert!((middle - 2.5).abs() < 1e-5, "{middle}");
-        assert_eq!(table.gain_at([0.0; 3], [0.5, 1.0]), 4.0);
-        assert_eq!(table.gain_at([0.0; 3], [0.5, 7.0]), 4.0, "past the edge");
+        assert_eq!(gain_at([0.0; 3], [0.5, 1.0]), 4.0);
+        assert_eq!(gain_at([0.0; 3], [0.5, 7.0]), 4.0, "past the edge");
     }
 
     /// The fixture's profile renders white two stops down; a primary is
