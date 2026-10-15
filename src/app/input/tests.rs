@@ -88,7 +88,7 @@ fn the_gain_map_toggle_on_a_profile_says_where_the_map_comes_from() {
     assert_eq!(
         title(Conditions::ALIVE),
         Some(vec![
-            "Toggle gain map display (Shift+G)".to_string(),
+            spelled_here("Toggle gain map display (Shift+G)"),
             ui::tooltip::GAIN_MAP_FROM_PROFILE.to_string(),
         ])
     );
@@ -98,7 +98,7 @@ fn the_gain_map_toggle_on_a_profile_says_where_the_map_comes_from() {
     };
     assert_eq!(
         title(photograph),
-        Some(vec!["Toggle gain map display (Shift+G)".to_string()])
+        Some(vec![spelled_here("Toggle gain map display (Shift+G)")])
     );
 }
 
