@@ -634,11 +634,18 @@ camera's JPEG through `decode::Opened::camera_picture` where it was asked for an
 the file has one, the developed frame through `decode::Opened::decode` otherwise.
 A raw without a JPEG, or with one that will not decode, is read as developed
 and the read succeeds, so a step onto one is not a step onto a broken file.
+The other way round holds too: a raw whose own data will not develop — a
+compression nothing here reads, or counts cut short, as `bad-dng-jxl.dng`'s
+are — is read as its JPEG by
+`loader::undeveloped`, and arrives as `CameraJpeg::Only`. That is the one
+picture the file has to show, so the switch is left out for it as for a raw
+with none, and the preference is left alone for the files after it.
 `Ready` carries back what was read and `CameraJpeg`, whether the file has one,
 and both land on `Current`, which is what the bottom bar's switch
 (`Pass::camera_switch`), the tooltip (`Namer::tooltip`, from `Namer::camera`)
 and `Conditions::camera_jpeg` read. When the JPEG was asked for and the file
-has none, `App::apply` says so in a toast.
+has none, `App::apply` says so in a toast, and when the developed picture was
+asked for and only the JPEG could be shown, in another.
 
 The switch wears `camera`'s mark and the word for the picture up, `RAW` or
 `JPEG`, the mark saying the rest; where it is read out rather than seen it
@@ -673,6 +680,38 @@ because that read may be a step and a request would cancel it. The reply
 carries the rendering it was asked for on `Opened::rendering`, and
 `App::follow_rendering` asks again once it lands if the preference has moved
 in the meantime.
+
+## The profile's switch
+
+A raw whose profile says how it should look arrives with the rendering
+beside it as a gain map (see [formats](formats.md#camera-raw)), and whether
+it is on screen is `App::profile`: one preference for every raw, kept
+between runs in `settings::State::profile`, on by default, for the reason
+the camera's JPEG is one — the question is how raws are to be looked at,
+and a choice per file would have `P` mean different things from file to
+file. It is on by default because the rendering is what the file asks for;
+off is what a raw developer that ignores the profile would show.
+
+Unlike the camera's JPEG it reads nothing again. The rendering is the gain
+map the raw was read with, so `App::toggle_profile` flips the preference and
+`App::refresh_lift` gives the map's lift a weight of one or of none, which
+moves the picture at once and the numbers once `app/measuring.rs` has them —
+at once for a weight met before, the base and the last lift both being kept.
+Nothing about the view or the display starts over: it is the same picture
+under a different rendering, at the same size, and an exposure set on one is
+an exposure on the other.
+
+The switch is the Profile section's square, at the end of its header in the
+histogram, and `P`; the Mac's Image menu has it as **Profile**. The bottom
+bar's gain map toggle stays, since `G` shows the lift in the picture's
+place for a profile as for a photograph's map, and wears the same sun; its
+tooltip is the key's words as on any picture with a map, with under them
+that the map is calculated from the camera's profile
+(`GAIN_MAP_FROM_PROFILE`, added in `Namer::tooltip` from
+`Conditions::profile`). `Conditions::profile` is what makes the square and
+the key dead, with `NO_PROFILE` as the reason, on a file with no
+profile, which only a press of `P` ever reaches, the section not being drawn
+for such a file.
 
 ## The file's other images
 

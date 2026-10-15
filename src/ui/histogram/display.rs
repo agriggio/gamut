@@ -26,8 +26,8 @@ const SWATCH_INSET: f32 = 3.0;
 
 /// The rows of controls under the band: how tall a row is, and the gap
 /// between one and the next.
-const ROW_HEIGHT: f32 = 20.0;
-const ROW_GAP: f32 = 8.0;
+pub(super) const ROW_HEIGHT: f32 = 20.0;
+pub(super) const ROW_GAP: f32 = 8.0;
 
 /// What the rows of settings under the band take off the section's height:
 /// each row and the gap above it, under the plot's own inset — which the

@@ -325,7 +325,7 @@ fn gain_map(
         width,
         height,
         channels,
-        data,
+        data: crate::image::gain_map::Data::Codes(data),
         lift,
     })))
 }

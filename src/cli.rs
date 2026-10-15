@@ -242,7 +242,8 @@ const FLAGS: &[Flag] = &[
         help: &[
             "Show the SDR base image of an Ultra HDR JPEG or",
             "a HEIC with a gain map, rather than reconstructing",
-            "the HDR one from the map beside it",
+            "the HDR one from the map beside it; and a raw as",
+            "developed, without its camera profile's rendering",
         ],
         apply: |parsed, _| {
             parsed.overrides.gain_map = false;

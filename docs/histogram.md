@@ -25,9 +25,12 @@ menu. The panel is an instrument, not `Display`'s fields laid out as rows.
 The panel is the picture's way from the file to the screen, a section to a
 stage, read from the screen back: **Output**, what goes out; **Display**,
 what the display starts from and what it does to it; **Gain map**, how far
-the map lifts the picture, for a picture that carries one; **Image**, the
+the map lifts the picture, for a picture that carries one; **Profile**, how
+a raw's profile renders it, for a raw whose profile says; **Develop**, how a
+raw was developed from the sensor's counts, for a raw; **Image**, the
 picture as the file stores it — named for the picture rather than the file,
-since the gain map is the file's too. `histogram::Section` is that list, in that
+since the gain map is the file's too, and for a raw the sensor's own counts,
+which are what the file stores. `histogram::Section` is that list, in that
 order, and `section::layout` lays out the ones the picture passes through
 (`Section::applies`).
 
@@ -93,12 +96,185 @@ in the picture's place, lit while it is. A section's readout ends short of
 that square where the section has a button, and at the line's end where it
 does not; a section given one later — the switch that passes a stage by —
 takes the square the same way.
-A stage added later — the development stages a ProRAW file describes, a
-baseline exposure, a profile's tone curve, a gain table — is a `Section`
-variant placed between Display and Image at a height of its own: a 1D stage
-composes into the Display curve and takes a header of its own, and a stage
-that lifts each pixel by its own amount is shaped as the Gain map section
-is, a histogram of the lift with how much of it is applied in its header.
+A stage added later is a `Section` variant placed between Display and Image
+at a height of its own: a 1D stage composes into the Display curve and
+takes a header of its own, and a stage that lifts each pixel by its own
+amount is shaped as the Gain map section is, a histogram of the lift with
+how much of it is applied in its header.
+
+The **Profile** section is the second kind: the rendering a raw's profile
+describes — a baseline exposure, a gain table and a tone curve — is worked
+out per pixel when the raw is developed, and kept as a gain map of ratios
+(see [formats](formats.md#camera-raw)), so its lift is plotted and traced
+exactly as the Gain map section's, by `gain_map::lift_plot`,
+`gain_map::bin_mark` and `gain_map::pixel_mark`. It is a variant of its own
+rather than the Gain map section retitled, since it is another shape, and
+the two never meet: `Section::applies` gives a profile's map to the one and
+every other map to the other. It stands nearest the file, below where the
+Gain map section would, because the profile is applied to the values the
+file stores before anything else is. Its square is not an eye but the
+profile's switch, lit while the rendering is applied, since showing the
+lift in the picture's place is `G`'s already and the switch has nowhere
+else to be on the screen; its header carries nothing else.
+Its mark is Lucide's `spline`, which the information panel's section about
+the profile wears too.
+
+Under the lift's plot are the rendering's stages, read upward in the
+order they are applied, as the column is: the tone curve, the gain table,
+the exposure's row, and at the foot the developed pixel in the profile's
+own space (`section::curve_part`, `section::table_part`,
+`section::exposure_row`, `section::prophoto_row`). The lift's histogram
+stays above them as the section's own plot, the net of the stages, as the
+Display section's plot stands above its rows.
+
+The pointer's pixel is followed up the stages a channel at a time
+(`profile::Pixel`), every number in stops below white and each channel in
+its own ink, as the Display section writes its planes: the three channels
+carried into linear ProPhoto on the ProPhoto row, which is where the
+profile's arithmetic begins and a matrix away from the Develop header's
+three; the three after the exposure on its row; the three after the
+table's gain in the table's caption; and the three the curve makes of them
+in the curve's. Each stage's numbers are the stage above's inputs, so the
+chain reads straight up to the *Total lift* row under the lift's plot
+(`section::total_row`): the three lifts, the curve's three outputs
+carried back into Rec. 2020 over the developed channels
+(`Tip::ProfileLift`), each a rule in its ink on the histogram and a cell
+in its ink on the row, as the rows under it write the channels, in place
+of the gain map's one line of words. The row is directly under the plot
+so that the numbers the plot counts are read off it, as the Display
+section's rows are read off its plot, and not in the header: there the
+three could not be seen to be what the plot is of, and a single number — the brightest
+channel — cannot be made to meet three rules on a colored pixel. The two
+places the chain is not three arrows are drawn as what they are, below.
+
+Each part's plot has a caption over it (`profile::caption`): its name, and
+on the right what the pixel comes out of the part as, a channel to the
+cell. What a part is is its tooltip (`Tip::ToneCurve`, `Tip::GainTable`),
+over the caption and the plot together; the exposure's row and the
+ProPhoto row have theirs (`Tip::Baseline`, `Tip::ProPhoto`). A part's
+ground is set in from the left (`section::SCALE_GUTTER`) for the stops its
+height is in, a few numbers up the side, so that the height has a scale as
+the row of stops under it gives the width one.
+
+The tone curve is drawn with both axes in stops below white down to ten.
+The curve is the one stage of the profile that is a function of one value,
+and so the one that can be drawn rather than counted; and in stops is where
+it can be read, since everything that tells one file's curve from another's
+is the toe, which a linear plot squeezes into its first hundredth while in
+stops the shoulder is the straight line every curve shares. The curve is
+applied as the DNG SDK's `RGBTone` applies it (`gain_map::rgb_tone`): to
+the brightest and dimmest channels, with the middle one placed between
+them where it stood, which is what keeps the hue. So the brightest and
+dimmest are filled dots on the curve, each with a tick on the axis where
+it went in and one on the scale where it came out, and the middle channel
+is a hollow dot off the curve between them (`gain_map::tone_order`).
+Nothing on the curve says how far the profile lifted the pixel: that is
+the *Total lift* row's, under the histogram, since a lift drawn on the
+curve — a bar from the ProPhoto row's level to the curve's output was
+tried — is a length on a plot whose axes are positions, with neither end
+on the plot, standing for a quantity read two plots up on a horizontal
+axis in other units. The exposure is written to a tenth, as every other
+number in the section is. The whole of the profile, whether or not the
+switch has it on screen, since the parts are the profile's and not the
+screen's.
+
+The gain table is drawn as the gain alone: across, the brightness the
+table reads, in stops below white; up, the table's gain in stops. The
+exposure is its own row under it, so the chain reads up through both
+rather than the table's height hiding the shift. The table is read once a
+pixel, at a blend of its channels by its own weights (`GainTable::input`),
+which on an iPhone is part a luminance-weighted sum and part the brightest
+channel; the weights sum to the exposure taken away again
+(`GainTable::scale`), so in exposed terms the blend is a weighted mean of
+the exposed channels, and the axis is in exposed terms, a column at `e`
+stops reading the table at `2^e` times that sum. The pointer's pixel is
+the blend's dot on its own curve with a guide across from the scale worded
+`gain`, and the three channels are ticks on the axis where they went in:
+all three get the one gain the dot reads. The table is a curve at each
+point of a grid over the picture — laid over the picture as the file holds
+it, so the pixel's place is found in that frame through the camera's
+orientation (`Sensor::turned`) — and their spread (`GainTable::spread_at`,
+a reading of every point at every device column, kept in egui's data for
+as long as the table is the same one) is a wash behind, while the pixel's
+own curve, the four points around it blended for where it is, is the line
+(`GainTable::gain_for`). Two faint rules across mark no gain and the gain
+that undoes the exposure, and the scale names both before anything else:
+on an iPhone the table comes down to the second at white, which is what
+takes the highlights back to where the file stored them. A profile with no
+table is no gain, a level line. The exposure itself, being one number, is a
+row of words with the pixel's three channels after it, as the Display
+section's settings are.
+
+The **Develop** section, with the Image section's change of meaning for a
+raw, is what makes the column honest about one. A raw's `DecodedImage` is
+the developed picture — demosaiced, balanced, carried into Rec. 2020, as
+[camera raw](formats.md#camera-raw) says — and before this section the
+Image section plotted it under a name that says the file stores it, which
+it does not: the counts a Canon file stores are one a photosite under the
+color filter, and the right edge of a developed red plot was as often the
+balance's doing as the sensor's. So the decoders hand the sensor's counts
+over beside the picture (`DecodedImage::sensor`, `image/sensor.rs`), the
+Image section plots those (`stored::Source::image`), and the developed
+picture moves up a section to where it stands in the flow: between the
+counts it was made from and the profile that is applied to it, under the
+name of the step that made it.
+
+The Develop section's plot is the developed channels, drawn by the same
+code as the Image section's (`stored::body`, from `stored::Source::developed`),
+with the developed pixel's values in its header as the Image section's
+header writes the counts: read one above the other, the two headers are
+one pixel before and after development. The developed picture is linear
+light with its white at full scale, and it is plotted in stops as every
+linear photograph is (`Axis::Stops`, below); its header writes each
+channel in stops below white too (`Source::white_stops`), so that the
+header, the axis, the Display section's readout above and the Profile's
+trace are one vocabulary, and the Profile's first number is visibly the
+largest of the three in the Develop header — the pixel's brightest channel
+in stops below white, which that row's tooltip (`Tip::ProfilePixel`) says,
+the row having no room to. The sensor's counts stay counts: they are the
+file's own numbers, and a black level at 2048 makes stops from white
+meaningless below it. Under the plots, rows of words (`develop::show`): the
+demosaic the mosaic went through, by its name, with what the name means
+under the pointer (`Tip::Demosaic`); the balance each plane was multiplied
+by, in stops in the plane's own ink — `applied in the file` for an
+iPhone's ProRAW, whose counts the camera balanced before writing; the
+light the balance is for, as a color temperature, where the file says
+enough to work one out — LibRaw's multipliers and matrix through McCamy's
+cubic for a mosaic (`Handle::kelvin`, the information panel's own
+number), the illuminant the color matrices are blended for
+(`Profile::kelvin`) for a Linear Raw — and the share of each developed
+channel standing at white, read off the stored tallies (`Plane::rank` at
+1, doubled, since the rank counts half of what sits at a value), with
+what the shares are of under the pointer (`Tip::Clipped`). The
+balance row is the answer to the question the two sets of plots raise
+together, which is how a channel short of the sensor's white in the Image
+plot came to stand against it in the Develop plot. For a mosaic the
+section ends with the
+photosites around the pointer (`develop::grid`): a 5-by-5 window of the
+counts the demosaic read to make the pixel, each cell washed with its
+plane's ink and the pointer's own outlined, read through the user's turn
+and the camera's as every pixel is (`Sensor::photosite`). It is the one
+thing on the panel that a histogram cannot show, which is why it is drawn
+rather than counted: a demosaiced pixel is a function of its neighbors,
+not of the one count under it, and the window is those neighbors.
+
+The gap the section leaves is on purpose. The counts and the developed
+pixel are not one quantity — a photosite holds one of them, a pixel three —
+so the Image section's header writes the one count in its plane's cell and
+leaves the other two cells empty, rather than interpolating two numbers the
+file does not hold. A raw stored three counts a pixel has no mosaic, so no
+window, and its counts are worked back from the developed pixel through
+the inverse of the development (`sensor::Recovery`) rather than kept, since
+a second copy of a 48-megapixel picture is too much to hold; where a
+developed channel sits at the clamp the inverse is a guess, and the header
+says so with a `~` before each count. The Image section's axis for a raw
+runs from nothing to the white level the file states, with the black level
+written on it (`Source::levels`), so that the room to the right of a plot
+is the sensor's own headroom; for a ProRAW, whose ten-bit codes go through
+a linearization table, the axis is the table's codes, which are what the
+file stores. The section is left out, with the Image section back to the
+decoded picture, while another of the file's images is shown in its place
+(`stored::sensor_of`), since the developed picture is then not on screen.
 
 The row of buttons — the marks on the picture, and at the far end the
 reset (`histogram::toolbar`) — acts on every plot in the column, or on the
@@ -113,20 +289,34 @@ into, and the side panel's width is worked out from it.
 **Image** is `Face::stored`, a `stats::Stored`: each of the file's channels
 as it stores them — no lift, the file's own primaries, and nothing the file
 does not hold, so no luminance, which is a weighting of the channels the
-display works out and, in the file's own primaries, not even that. It is a
-plot to the channel (`stored::plots`), one under the other in the order the
-file keeps them, each poured from the channel's tally (`stats::Plane::plot`):
-a bin to the code for integer samples, so the plot is exact, and a bin to a
-thousandth of an octave for floats. The tallies are made in the same pass as
-the scan the display starts from (`Stats::scan_both`), when the image
+display works out and, in the file's own primaries, not even that. For a
+raw it is the sensor's `Stored` instead (`Sensor::stored`, tallied by
+`Mosaic::tally` or in `Linear::tile` as the picture is developed, through
+`Stored::of_codes`, a bin to the count), and `Face::stored` — the developed
+picture — is what the Develop section plots; `stored::Source` is which of
+the two a pass is drawing from. It is one plot of every channel over the
+others (`plot::overlaid`), each in its own ink and each as tall as its own
+share of its pixels, so that the two greens of a mosaic, twice the pixels
+of the red, stand no taller for it, and the pointer's pixel is a rule to
+the channel with its percentile beside it, as the Display section draws
+its planes; only where the channels have ranges of their own — a file read
+as data — is it a plot to the channel, one under the other, each with its
+own row of values (`stored::Layout::plots`). A plot to the channel for
+every file was tried first and cost a raw's column two screens. Each
+plane is poured from the channel's tally (`stats::Plane::plot`): a bin to
+the code for integer samples, so the plot is exact, and a bin to a
+thousandth of an octave for floats. The tallies are made in the same pass
+as the scan the display starts from (`Stats::scan_both`), when the image
 arrives, on the loader's or the player's thread.
 
 Which range the plots span is the file's reading. A photograph's channels
 are compared against one another, so they share one axis: integer samples
-over the whole range they can hold, a raw's from black to the sensor's
-saturation, so that how far a picture stands short of clipping is the room
-to the right of it; light stored as floats in stops, read off every channel
-together as the Display's axis is read off the luminance. A file read as
+on a curve over the whole range they can hold, and a raw's sensor from
+nothing to its saturation, so that how far a picture stands short of
+clipping is the room to the right of it; linear light in stops, floats and
+a developed raw alike, read off every channel together as the Display's
+axis is read off the luminance, with white at the top at least for a
+picture that has one. A file read as
 data may hold channels that are different quantities, so each has its own
 range and its own row of values under it (`Stored::shared`): the channel's
 exact extremes, or, where the trim the display's own percentile window uses
@@ -190,9 +380,15 @@ drawn over it cannot be spaced two ways. A file on a curve is plotted on
 that curve, and a linear integer file — sensor counts, a measurement — on
 its linear values; the reasons are with `stats::Plot`.
 
-Light stored linear as floats — a Radiance picture, an EXR — is plotted in
-stops instead (`Axis::Stops`): a value stands at its base-2 logarithm. Such
-a file has no curve of its own and no top. A Radiance picture runs from
+Linear light — a Radiance picture, an EXR, and a raw developed to sixteen
+bits, which is the same light in integers — is plotted in stops instead
+(`Axis::Stops`): a value stands at its base-2 logarithm. Only a
+measurement keeps a linear axis for linear samples. Such a file has no
+curve of its own and, as a float, no top; a photograph's top is its white
+at least (`Stats::from_scan`, `Stored::from_scan`), so that a dark raw
+stands short of it instead of being stretched to its own brightest, and
+its readouts along the axis are stops below white (`histogram::axis_words`)
+rather than counts. A Radiance picture runs from
 nothing to a few hundred with almost all of it in the bottom hundredth,
 which a linear axis puts in its first bin and its first two *fine* bins:
 the Output plot, rebinned from those, came out as two flat steps, and the
@@ -335,8 +531,10 @@ in stops the ticks are evenly spaced and the row runs the plot's width.
 `histogram::marked` hands every section its `Mark`: the bin its rule stands
 on and the words its header writes. A pointer on a pixel of the picture
 marks every section at once, each with the pixel as its own stage has it —
-the Image section reads `Current::sample_as_stored`, the Gain map section
-reads `GainMap::stops_at`,
+the Image section reads `Current::sample_as_stored`, or for a raw the
+sensor under the pixel (`stored::sensor_mark`, through `Sensor::at`), the
+Develop section reads `Current::sample_as_stored` in its turn, the Gain map
+section reads `GainMap::stops_at`,
 the Display section reads `Current::sample` and writes the value and what
 the display makes of it, and the Output section writes that response held
 to the surface's room. The rules down the column are one pixel's path from

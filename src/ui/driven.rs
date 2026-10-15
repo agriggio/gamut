@@ -2660,7 +2660,7 @@ fn the_gain_map_toggle_is_there_only_for_a_picture_with_a_gain_map() {
         width: 2,
         height: 2,
         channels: 1,
-        data: vec![0, 85, 170, 255],
+        data: crate::image::gain_map::Data::Codes(vec![0, 85, 170, 255]),
         lift: Lift::Apple { headroom: 4.0 },
     }));
     current.image = Arc::new(image);
@@ -2710,7 +2710,7 @@ fn the_histogram_has_a_section_for_each_stage_the_picture_passes_through() {
         width: 2,
         height: 2,
         channels: 1,
-        data: vec![0, 85, 170, 255],
+        data: crate::image::gain_map::Data::Codes(vec![0, 85, 170, 255]),
         lift: Lift::Apple { headroom: 4.0 },
     }));
     current.image = Arc::new(image);
@@ -2728,6 +2728,80 @@ fn the_histogram_has_a_section_for_each_stage_the_picture_passes_through() {
     assert_eq!(
         click(&mut harness, "Show gain map"),
         [Command::Press(Control::ShowGainMap)]
+    );
+}
+
+/// A raw's profile has the Profile section in the Gain map's place, its
+/// square the profile's switch and its parts under its lift in the order
+/// they are applied, read upward; and the bottom bar's toggle shows the
+/// gain map it amounts to.
+#[test]
+fn a_raws_profile_has_a_section_and_a_switch_of_its_own() {
+    use crate::image::gain_map::{Data, GainMap, Lift, Profile};
+
+    let mut with_histogram = panels();
+    with_histogram.side = Some(super::side::Side::Histogram);
+    let mut harness = open(WINDOW, 1, with_histogram);
+    assert!(harness.query_by_label(&Control::Profile.label()).is_none());
+
+    let current = harness.state_mut().current.as_mut().expect("a picture");
+    let mut image = (*current.image).clone();
+    image.gain_map = Some(Arc::new(GainMap {
+        width: 2,
+        height: 2,
+        channels: 3,
+        data: Data::Ratios(
+            [0.5, 1.0, 2.0, 8.0]
+                .repeat(3)
+                .into_iter()
+                .map(half::f16::from_f32)
+                .collect(),
+        ),
+        lift: Lift::Profile(Profile {
+            baseline: 4.12,
+            table: None,
+            curve: None,
+            range: [-1.0, 3.0],
+            to_curve: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        }),
+    }));
+    current.image = Arc::new(image);
+    harness.state_mut().input.pointer = Some([0, 0]);
+    harness.run();
+    let display = painted_in_side(&harness, "Display").expect("Display");
+    let profile = painted_in_side(&harness, "Profile").expect("Profile");
+    // The pointer's lift a channel to the cell on the row under the plot,
+    // not the gain map's one line of words; the header carries nothing
+    // but the switch.
+    assert!(painted_in_side(&harness, "\u{2212}1.0").is_some());
+    assert!(painted_in_side(&harness, "\u{2212}1.0 / \u{2212}1.0 / \u{2212}1.0 stops").is_none());
+    let total = painted_in_side(&harness, super::histogram::TOTAL_LIFT).expect("the lift's row");
+    assert!(painted_in_side(&harness, "Not applied").is_none());
+    let file = painted_in_side(&harness, "Image").expect("Image");
+    assert!(display.min.y < profile.min.y && profile.min.y < file.min.y);
+    assert!(painted_in_side(&harness, "Gain map").is_none());
+    let curve = painted_in_side(&harness, super::histogram::TONE_CURVE).expect("the curve");
+    let table = painted_in_side(&harness, super::histogram::GAIN_TABLE).expect("the table");
+    // The exposure's row, by its value: the Display section has a row of
+    // its own called Exposure above.
+    let exposure = painted_in_side(&harness, "+4.1 EV").expect("the exposure's row");
+    assert!(
+        profile.min.y < total.min.y
+            && total.min.y < curve.min.y
+            && curve.min.y < table.min.y
+            && table.min.y < exposure.min.y,
+        "read upward in the order they are applied, under the lift's row"
+    );
+    let prophoto = painted_in_side(&harness, super::histogram::PROPHOTO).expect("the ProPhoto row");
+    assert!(exposure.min.y < prophoto.min.y && prophoto.min.y < file.min.y);
+    assert_eq!(
+        click(&mut harness, &Control::Profile.label()),
+        [Command::Press(Control::Profile)]
+    );
+    assert_eq!(
+        click(&mut harness, &Control::GainMap.label()),
+        [Command::Press(Control::GainMap)],
+        "the gain map's toggle in the bottom bar"
     );
 }
 

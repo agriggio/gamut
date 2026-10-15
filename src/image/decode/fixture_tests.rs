@@ -87,6 +87,13 @@ struct Fixture {
     /// The depth map the file carries, where it carries one. Every other
     /// fixture carries none, so none is made up.
     depth: Option<Depth>,
+    /// The size of the camera's JPEG the file carries beside its picture,
+    /// where it carries one. Every other fixture carries none.
+    camera_jpeg: Option<[u32; 2]>,
+    /// For a raw whose profile says how it should look, how far the
+    /// rendering lifts the white quadrant, in stops. Every other fixture
+    /// carries no profile.
+    profile: Option<f32>,
 }
 
 /// A depth map as the four probes read it: the code the map holds at each,
@@ -113,6 +120,8 @@ const PLAIN: Fixture = Fixture {
     sequence: None,
     first_frame: None,
     depth: None,
+    camera_jpeg: None,
+    profile: None,
 };
 
 /// Two frames or pages, playing for ever where it plays.
@@ -1738,6 +1747,64 @@ const FIXTURES: &[Fixture] = &[
         tolerance: DEVELOPED,
         ..PLAIN
     },
+    // An iPhone's ProRAW, in small: Linear Raw in JPEG XL tiles, ten-bit
+    // codes through a linearization table, the camera's JPEG beside it.
+    // LibRaw cannot unpack it, so `decode::raw::linear` develops it; the
+    // matrix makes the camera's space Rec. 2020, and the pattern comes back.
+    // Its profile renders white two stops down: -2 EV, a gain of 2 from the
+    // table, and a curve taking a half to a quarter.
+    Fixture {
+        file: "dng-jxl.dng",
+        covers: "DNG 1.7, Linear Raw in JPEG XL tiles developed without LibRaw",
+        channels: Channels::Rgb,
+        kind: Kind::U16,
+        color: LINEAR_2020,
+        alpha: AlphaMode::Opaque,
+        tone: Tone::Color,
+        coverage: Coverage::Opaque,
+        nodata: None,
+        tolerance: DEVELOPED,
+        camera_jpeg: Some([32, 24]),
+        profile: Some(-2.0),
+        ..PLAIN
+    },
+    // The same picture in lossless JPEG tiles, which an iPhone writes when
+    // asked for the older ProRAW: `decode::raw::ljpeg` decodes them, a
+    // thread to a tile, and the same development makes the same picture of
+    // them, with the same profile.
+    Fixture {
+        file: "dng-ljpeg.dng",
+        covers: "DNG, Linear Raw in lossless JPEG tiles decoded and developed without LibRaw",
+        channels: Channels::Rgb,
+        kind: Kind::U16,
+        color: LINEAR_2020,
+        alpha: AlphaMode::Opaque,
+        tone: Tone::Color,
+        coverage: Coverage::Opaque,
+        nodata: None,
+        tolerance: DEVELOPED,
+        camera_jpeg: Some([32, 24]),
+        profile: Some(-2.0),
+        ..PLAIN
+    },
+    // The JPEG XL one with its gain table cut short: the picture develops,
+    // and so does the rest of the profile, white at a quarter through the
+    // curve with no table to double it first.
+    Fixture {
+        file: "dng-jxl-profile-cut.dng",
+        covers: "a DNG profile's malformed gain table passed over",
+        channels: Channels::Rgb,
+        kind: Kind::U16,
+        color: LINEAR_2020,
+        alpha: AlphaMode::Opaque,
+        tone: Tone::Color,
+        coverage: Coverage::Opaque,
+        nodata: None,
+        tolerance: DEVELOPED,
+        camera_jpeg: Some([32, 24]),
+        profile: Some(-3.0),
+        ..PLAIN
+    },
     // A PNG under a TIFF name, decoded by sniffing rather than extension.
     Fixture {
         file: "mislabeled.tif",
@@ -1759,6 +1826,7 @@ const REJECTED: &[(&str, &str)] = &[
     ("unsupported.tga", "unsupported image format"),
     ("bad-truncated.png", "decoding"),
     ("bad-truncated.dng", "decoding"),
+    ("bad-dng-jxl.dng", "decoding"),
 ];
 
 /// Extensions the registry advertises that share a decode path with another
@@ -1965,24 +2033,32 @@ fn every_fixture_says_what_its_light_is_referred_to() {
     }
 }
 
-/// No fixture carries a picture of itself, and none offers the camera's
-/// JPEG: a preview is a courtesy, never a failure, so every fixture answers
-/// the question. What the one raw here says of its own — that it could
-/// carry one and does not — is `decode::raw`'s test.
+/// Only the fixtures that say so carry a picture of themselves, and offer
+/// it as the camera's JPEG at the size it decodes to: a preview is a
+/// courtesy, never a failure, so every fixture answers the question.
 #[test]
 fn every_fixture_answers_for_its_preview() {
     for fixture in FIXTURES {
         let path = directory().join(fixture.file);
         let preview = crate::image::decode::preview(&path, Overrides::default())
             .unwrap_or_else(|error| panic!("{}: {error:#}", fixture.file));
-        assert!(preview.is_none(), "{} carries a preview", fixture.file);
         let camera = crate::image::decode::camera_jpeg(&path)
             .unwrap_or_else(|error| panic!("{}: {error:#}", fixture.file));
-        assert!(
-            !matches!(camera, CameraJpeg::Present(_)),
-            "{} offers the camera's JPEG",
-            fixture.file
-        );
+        match fixture.camera_jpeg {
+            Some(size) => {
+                let preview = preview.unwrap_or_else(|| panic!("{} has no preview", fixture.file));
+                assert_eq!([preview.width, preview.height], size, "{}", fixture.file);
+                assert_eq!(camera, CameraJpeg::Present(size), "{}", fixture.file);
+            }
+            None => {
+                assert!(preview.is_none(), "{} carries a preview", fixture.file);
+                assert!(
+                    !matches!(camera, CameraJpeg::Present(_)),
+                    "{} offers the camera's JPEG",
+                    fixture.file
+                );
+            }
+        }
     }
 }
 
@@ -2032,6 +2108,29 @@ fn every_fixture_carries_the_depth_map_it_says_it_does() {
                 ),
                 None => assert_eq!(distance, None, "{}", fixture.file),
             }
+        }
+    }
+}
+
+/// A raw whose profile says how it should look carries the rendering as a
+/// gain map of its own kind, lifting white by what its entry says; no other
+/// fixture carries one.
+#[test]
+fn every_fixture_carries_the_profile_it_says_it_does() {
+    for (fixture, image) in fixtures() {
+        let map = image.gain_map.as_deref().filter(|map| map.is_profile());
+        let Some(want) = fixture.profile else {
+            assert!(map.is_none(), "{}: a profile", fixture.file);
+            continue;
+        };
+        let map = map.unwrap_or_else(|| panic!("{}: no profile", fixture.file));
+        let (x, y) = PROBES[3];
+        for stops in map.stops_at(x, y, image.width, image.height) {
+            assert!(
+                (stops - want).abs() < 0.01,
+                "{}: white lifted {stops} stops",
+                fixture.file
+            );
         }
     }
 }

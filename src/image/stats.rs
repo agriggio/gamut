@@ -60,14 +60,15 @@ pub enum Axis {
     /// which for a linear file is the value itself. See [`Plot`] for why.
     Curve(Transfer),
     /// Stops: a value stands at its base-2 logarithm, and a value with no
-    /// light in it — zero, or less — below every floor. For light stored
-    /// linear as floats, which has no curve of its own and no top: a
-    /// Radiance picture runs from nothing to a few hundred, and almost all
-    /// of it is in the bottom hundredth, where a linear axis would have it
-    /// in the first bin. Spaced in stops, the shadows get the room the eye
-    /// gives them, a stop of exposure moves every value the same distance,
-    /// and a window is a stretch of the axis rather than a sliver of it.
-    /// Not for a measurement, whose values are quantities rather than
+    /// light in it — zero, or less — below every floor. For linear light,
+    /// which has no curve of its own: a Radiance picture runs from nothing
+    /// to a few hundred, and almost all of it is in the bottom hundredth,
+    /// where a linear axis would have it in the first bin, and a raw
+    /// developed to sixteen bits is the same light in integers, a dark frame
+    /// of it in the first tenth. Spaced in stops, the shadows get the room
+    /// the eye gives them, a stop of exposure moves every value the same
+    /// distance, and a window is a stretch of the axis rather than a sliver
+    /// of it. Not for a measurement, whose values are quantities rather than
     /// light and may be negative, and whose stops no one counts.
     Stops,
 }
@@ -78,8 +79,7 @@ impl Axis {
     /// with no light in it — so what is read from is [`Stats::axis`].
     pub fn of(image: &DecodedImage) -> Self {
         let transfer = image.color.transfer;
-        let floats = matches!(image.samples, Samples::F32 { .. });
-        if floats && transfer.is_linear() && image.referred != Referred::Measured {
+        if transfer.is_linear() && image.referred != Referred::Measured {
             Axis::Stops
         } else {
             Axis::Curve(transfer)
@@ -1840,6 +1840,17 @@ impl Stats {
             max
         };
         let peak = if peak.is_finite() { peak } else { max };
+        // A photograph with a white — a developed raw, graded light — has
+        // the top of its stops axis at that white at least, so that a dark
+        // frame stands short of it rather than being stretched to its own
+        // brightest, which is the normalizing of each frame to itself that
+        // a photograph is not shown under. The peak itself stays the
+        // picture's.
+        let axis_top = if image.referred == Referred::Display {
+            peak.max(1.0)
+        } else {
+            peak
+        };
 
         let lit = Lit::of(luma, tallies.clear.as_ref(), decode);
         let key = lit.trimmed_log_mean().map(|log| log.exp2() as f32);
@@ -1882,7 +1893,7 @@ impl Stats {
                 }
             }
             match axis {
-                Axis::Stops => match stops_axis(peak, &lit) {
+                Axis::Stops => match stops_axis(axis_top, &lit) {
                     Some(range) => range,
                     None => {
                         axis = Axis::Curve(transfer);
@@ -2154,6 +2165,13 @@ impl Stored {
             .iter()
             .map(|(_, max)| *max)
             .fold(f32::NEG_INFINITY, f32::max);
+        // White at the top at least, for a photograph with one: see the
+        // same in `Stats::from_scan`.
+        let highest = if image.referred == Referred::Display {
+            highest.max(1.0)
+        } else {
+            highest
+        };
 
         // The ranges: light in stops shares an axis read off every channel
         // together; a photograph's integer channels share the whole range
@@ -2164,12 +2182,18 @@ impl Stored {
         // measurement's channels each their own, trimmed of strays.
         let shared: Option<[f32; 2]> = match axis {
             Axis::Stops => {
-                // Every channel's lit pixels together, for the floor.
-                let mut pooled = Tally::keys();
-                for tally in &scan.stored {
-                    pooled.add(tally);
-                }
-                match stops_axis(highest, &Lit::of(&pooled, None, |value| value)) {
+                // Every channel's lit pixels together, for the floor: the
+                // tallies pooled into one of their own kind, codes or keys.
+                let pooled = scan.stored.split_first().map(|(first, rest)| {
+                    let mut pooled = (**first).clone();
+                    for tally in rest {
+                        pooled.add(tally);
+                    }
+                    pooled
+                });
+                let range = pooled
+                    .and_then(|pooled| stops_axis(highest, &Lit::of(&pooled, None, |value| value)));
+                match range {
                     Some((floor, top)) => Some([floor, top]),
                     None => {
                         axis = Axis::Curve(transfer);
@@ -2257,6 +2281,33 @@ impl Stored {
         }
     }
 
+    /// `counts`, a plane to the channel and a bin to the code over
+    /// `0..=full`, as the planes of a picture whose codes they are: on a
+    /// linear axis, every plane over the whole of the range, so that how far
+    /// a channel stands short of `full` is the room to the right of it.
+    /// What a raw's sensor is tallied into — see [`crate::image::sensor`].
+    pub fn of_codes(counts: Vec<Vec<u32>>, full: f32) -> Self {
+        let planes = counts
+            .into_iter()
+            .map(|counts| {
+                let tally = Tally::Codes { counts, full };
+                let (min, max) = tally.extremes();
+                Plane {
+                    min,
+                    max,
+                    range: [0.0, 1.0],
+                    tally: Arc::new(tally),
+                    binned: None,
+                }
+            })
+            .collect();
+        Self {
+            axis: Axis::Curve(Transfer::Linear),
+            planes,
+            shared: true,
+        }
+    }
+
     /// The range every plane is plotted over where they share one.
     pub fn shared_range(&self) -> Option<[f32; 2]> {
         self.shared
@@ -2288,6 +2339,7 @@ mod tests {
             gain_map: None,
             depth: None,
             opens_on: None,
+            sensor: None,
         }
     }
 
@@ -2388,6 +2440,7 @@ mod tests {
             gain_map: None,
             depth: None,
             opens_on: None,
+            sensor: None,
         };
         let key = Stats::scan(&element).key.unwrap();
         assert!((key - 0.5).abs() < 1e-3, "{key}");
@@ -2427,6 +2480,7 @@ mod tests {
             gain_map: None,
             depth: None,
             opens_on: None,
+            sensor: None,
         }
     }
 
@@ -2509,6 +2563,7 @@ mod tests {
             gain_map: None,
             depth: None,
             opens_on: None,
+            sensor: None,
         }
     }
 
@@ -2618,13 +2673,16 @@ mod tests {
                                 gain_map: None,
                                 depth: None,
                                 opens_on: None,
+                                sensor: None,
                             };
                             let table = lifted.then(|| {
                                 let map = GainMap {
                                     width: 3,
                                     height: 2,
                                     channels: 1,
-                                    data: vec![0, 64, 128, 192, 255, 32],
+                                    data: crate::image::gain_map::Data::Codes(vec![
+                                        0, 64, 128, 192, 255, 32,
+                                    ]),
                                     lift: Lift::Apple { headroom: 4.0 },
                                 };
                                 let table = map.table(1.0);
@@ -2838,6 +2896,7 @@ mod tests {
             gain_map: None,
             depth: None,
             opens_on: None,
+            sensor: None,
         };
 
         let p3 = Stats::scan(&red(Primaries::DisplayP3));
@@ -2905,6 +2964,7 @@ mod tests {
             gain_map: None,
             depth: None,
             opens_on: None,
+            sensor: None,
         };
         let stats = Stats::scan(&image);
         let plot = &stats.plot;
@@ -2953,6 +3013,7 @@ mod tests {
             gain_map: None,
             depth: None,
             opens_on: None,
+            sensor: None,
         };
         // BT.709 luminance weights green at 0.7152.
         assert!((Stats::scan(&green).max - 0.7152).abs() < 1e-4);
@@ -2974,6 +3035,7 @@ mod tests {
             gain_map: None,
             depth: None,
             opens_on: None,
+            sensor: None,
         }
     }
 
@@ -3154,6 +3216,7 @@ mod tests {
             gain_map: None,
             depth: None,
             opens_on: None,
+            sensor: None,
         }
     }
 
@@ -3189,11 +3252,14 @@ mod tests {
         assert_eq!(plot.luma[BINS - 1], ONE);
     }
 
-    /// Linear samples have no curve to plot against, so the axis stays in
-    /// the units the file measured in.
+    /// Linear samples read as data have no curve to plot against, so the
+    /// axis stays in the units the file measured in; the same samples as
+    /// light are plotted in stops, as a float's are, however they are
+    /// stored.
     #[test]
-    fn scene_linear_images_keep_a_linear_axis() {
-        let stats = Stats::scan(&linear_gray(vec![0, 16384, 32768, 65535]));
+    fn linear_integers_are_data_on_a_linear_axis_and_light_in_stops() {
+        let stats = Stats::scan(&measured(linear_gray(vec![0, 16384, 32768, 65535])));
+        assert_eq!(stats.axis, Axis::Curve(Transfer::Linear));
         assert!(stats.plot.min.abs() < 1e-6);
         assert!((stats.plot.max - 1.0).abs() < 1e-6);
         // A quarter of full scale bins a quarter of the way along, which on
@@ -3201,6 +3267,15 @@ mod tests {
         // quarter of 255 bins is between two of them, and shared by both.
         let quarter = (0.25 * (BINS - 1) as f32).floor() as usize;
         assert_eq!(stats.plot.luma[quarter] + stats.plot.luma[quarter + 1], ONE);
+
+        // As light — a developed raw — the top is white and a quarter of
+        // full scale is two stops under it.
+        let light = Stats::scan(&linear_gray(vec![0, 16384, 32768, 65535]));
+        assert_eq!(light.axis, Axis::Stops);
+        assert_eq!(light.plot.max, 0.0, "white at the top");
+        assert!(light.plot.min <= -2.0);
+        let two_under = bin_in(light.plot.range(), -2.0).expect("on the axis");
+        assert!(light.plot.luma[two_under] > 0 || light.plot.luma[two_under + 1] > 0);
     }
 
     /// A bound sitting on a code clips that code and everything past it,
@@ -3393,6 +3468,7 @@ mod tests {
             gain_map: None,
             depth: None,
             opens_on: None,
+            sensor: None,
         };
         let stats = Stats::scan(&image);
         assert!((stats.min - 0.25).abs() < 1e-6);
@@ -3443,7 +3519,12 @@ mod tests {
         };
         let stored = Stored::scan(&raw);
         assert!(stored.shared);
-        assert_eq!(stored.shared_range(), Some([0.0, 1.0]));
+        // Linear light, in stops: the top at white, the floor under the
+        // darkest channel.
+        assert_eq!(stored.axis, Axis::Stops);
+        let [floor, top] = stored.shared_range().expect("one axis");
+        assert_eq!(top, 0.0);
+        assert!(floor <= (50.0f32 / f32::from(u16::MAX)).log2().floor());
         assert_eq!(stored.planes.len(), 3);
         let full = f32::from(u16::MAX);
         assert_eq!(stored.planes[0].min, 100.0 / full);

@@ -143,8 +143,26 @@ since it is what every other reader of the file will use; the map itself is
 the same image either way, decoded through `libheif` like any other in the
 file.
 
+A raw's profile is a third kind, `Lift::Profile`, made by the developer
+rather than read from the file (see **The profile's rendering** under
+[camera raw](#camera-raw)). It is the gain itself rather than a code
+through a table — `gain_map::Data::Ratios`, half floats a channel for every
+pixel of the picture — because its curve lifts each channel by its own
+amount. It goes up as a half-float texture (`upload::Plan::float16`) and
+the shader reads it raw, `shader_codes::lift` giving it a code of its own;
+its table is all ones and unread. Its weight is not the display's room,
+since it is the camera's rendering and the same on every surface:
+`GainMap::weight` answers one, and `App::refresh_lift` gives it all or none
+by `App::profile`, the switch kept in the state file as the camera JPEG's
+choice is. At no weight its code is zero and the shader skips the lift
+entirely. Its range in stops is found as it is made and kept on the
+`Profile`, since the panels ask for it every frame and a walk over a map the
+picture's size is too much for that; its histogram is plotted over all but
+a thousandth of its values, the pixels the curve's toe takes to black being
+lifted by nothing a ratio can say.
+
 `--no-gain-map` leaves the map unread, which shows the SDR base whatever
-the surface: what many other viewers show, and worth having when the two
+the surface, and leaves a raw's profile unmade: what many other viewers show, and worth having when the two
 need comparing. The JPEG's ICC profile is read on the same pass as its
 map, because a phone JPEG is Display P3 far more often than it is sRGB,
 and P3 numbers shown as sRGB come out visibly flat.
@@ -389,8 +407,8 @@ written beside them. Making a picture of that — demosaicing, balancing,
 converting out of the camera's own primaries, and the special case every
 camera model is — is what [LibRaw](https://www.libraw.org) does, and every
 raw developer on the desktop reads its files through it. So `decode::raw`
-binds the system library, the way HEIF does, and does not develop anything
-itself. The library's C interface is a handle and free functions, and the
+binds the system library, the way HEIF does, and develops nothing itself
+but a DNG stored demosaiced already (see **Linear Raw** below). The library's C interface is a handle and free functions, and the
 dozen this program calls are declared by hand in `decode::raw::ffi`: the two
 bindings on crates.io were last published in 2015 and 2021, against
 libraries whose structs have moved since. Two structs are transcribed, for
@@ -400,7 +418,13 @@ wide, and the color count. `build.rs` pins the library at 0.21 or newer,
 where those structs took their present shape, and `Handle::check_layout`
 compares the transcription against the accessors the library does have when
 a file is opened, so a layout that has moved is an error rather than a
-garbled size.
+garbled size. Two more fields sit too deep in the struct to transcribe —
+the mosaic as the sensor made it, and the black levels, behind the maker
+notes and the output parameters, whose layouts move between versions — so
+`raw/shim.c`, three accessors in C, is compiled against the installed
+library's own header by `build.rs` through the `cc` crate, which the
+Wayland crates already build with. The header says where the fields are,
+whatever the version.
 
 Every other decoder is pure Rust or, for HEIF, a crate's binding; this one
 is a binding of its own. It is also the second system library the package
@@ -425,6 +449,23 @@ which is dcraw's `-g 1 1`; sixteen bits; and Rec. 2020 as the output space,
 the widest this program names, so that a saturated flower the sensor
 recorded clips less than it would in sRGB. The result is linear light with
 1.0 at the sensor's saturation point.
+
+Beside it goes what the file actually stores (`DecodedImage::sensor`,
+`image/sensor.rs`): the mosaic, copied out of the library's frame inside
+its margins once the file is unpacked and before it is developed
+(`Handle::sensor`), since developing takes the black off every count and
+zeroes the levels it took; the pattern, dcraw's `filters` word or the
+X-Trans grid, with each color's plane read off `cdesc`; the black level and
+what each color adds to it, the white level from `libraw_get_color_maximum`,
+and the multipliers the development will apply. Each plane is tallied a bin
+to the count as it is copied (`Mosaic::tally`), which is what the
+[histogram](histogram.md#a-column-of-stages)'s Image section plots for a
+raw, and the mosaic itself is kept for the pointer's readout and the window
+of photosites around it: a third the size of the developed picture. A
+sensor that is not a mosaic under red, green and blue — Foveon's layers, a
+four-color filter, a frame the library describes in a way the copy cannot
+follow, or one whose turned size is not the developed picture's — is left
+out, and the Image section plots the developed picture as it did.
 
 The file's `linear_max`, which LibRaw reads for several makers, is not used
 as the white, though for Canon it is the level the maker calls the end of
@@ -476,6 +517,146 @@ this machine, LibRaw's OpenMP threads doing the demosaic; an X-Trans frame
 takes three times that, its interpolation being three passes rather than
 one.
 
+**Linear Raw.** An iPhone's ProRAW is Linear Raw — three values a pixel,
+demosaiced by the phone — in tiles of ten-bit codes with a linearization
+table of 1024 entries beside them, and `raw::linear` develops it rather
+than LibRaw, whichever of its two compressions the phone wrote. The one it
+writes by default is JPEG XL, which DNG 1.7 added: tiles of 2016 pixels,
+each a JPEG XL file of sixteen-bit samples. LibRaw parses such a file and
+hands over its preview, but unpacks JPEG XL only through Adobe's DNG SDK,
+which neither Homebrew's build nor Arch's is made with, and fails with
+"Unsupported file format". Building LibRaw against the SDK would mean
+carrying both, and libjxl, in the package; what is left to do once the
+tiles are decoded is small, since there is no demosaic, and `jxl-oxide` is
+in the tree already. The other, which the phone writes when set to the
+older ProRAW, is lossless JPEG in tiles of 504 or 1008 pixels at a
+precision of ten bits, which LibRaw unpacks as it unpacks any DNG — but
+tile after tile on one thread, which on a 48-megapixel picture is a second
+and a half of the two it took to open. It would develop that one too, but
+its development brings neither the profile's rendering nor the stored
+codes with it, and the file is the same picture under the other
+compression; so the one developer takes both, and only where the values
+come from differs (`linear::Source`, and the `Values` it is handed). The
+lossless JPEG tiles are decoded by `raw::ljpeg`, a decoder of T.81's
+lossless process written for the purpose — a frame of up to four
+components at one sampling, two to sixteen bits deep, the seven predictors,
+restart intervals of whole rows, and nothing a DNG cannot hold — a thread
+to a tile as the JPEG XL ones are, which brings the file level with the
+JPEG XL one. `Linear::read` is asked first in `Raw::decode`, on the bytes
+LibRaw's handle already holds: it takes a JPEG XL DNG whatever it holds,
+refusing by name one that is not Linear Raw, a mosaic among them, and a
+DNG of any other compression only where it is Linear Raw of three integer
+channels of at most sixteen bits — a float DNG, a monochrome one and every
+mosaic go on to LibRaw. For a JPEG XL or lossless JPEG file the tiles are
+decoded here; for any other compression `Raw::decode` has LibRaw unpack it
+and hands the library's buffer over (`Handle::unpacked`, through
+`gamut_libraw_color3_image` or the `color4_image` LibRaw 0.22 fills
+instead, four values a pixel), which holds each code put through the
+linearization table already, as LibRaw's `adobe_copy_pixel` does. The code
+each value was stored as, which the Image section tallies, is worked back
+through the table (`codes_of_values`, one lookup for every sixteen-bit
+value), the first code the table takes to the value or past it.
+
+The development is the specification's, chosen to be what LibRaw does to a
+Linear Raw it can read; on a lossless JPEG ProRAW, which both can develop,
+the two agree to within a percent, the camera calibration matrices aside.
+The tiles — or, for a picture LibRaw unpacked, bands of 256 rows
+(`BAND_ROWS`) — are decoded in parallel on rayon's pool, and each tile is
+then developed in bands of the same 256 rows, a thread to each, straight
+into its own rows of the picture and of the map of ratios, which
+`rows_of_tiles` hands out so that no thread writes where another does and
+no lock is needed: a tile at a time left the last tiles of a picture to as
+many threads as there were tiles while the rest of the pool waited, and on
+a processor of fast cores and slow ones a slow core's tile to itself. The
+memory held is the picture and a tile per thread rather than the picture
+twice; a picture LibRaw unpacked is held once more, in the library's
+buffer, until the handle is dropped. The profile's rendering, which costs
+more per pixel than the development does, reads the gain table through
+the `Tap`s of the pixel's row and column — where each falls on the grid,
+worked out once a row and once a column of the tile rather than at every
+pixel — and `tone_order` is three comparisons rather than a sort. A value
+goes through the linearization table, the black
+level with its per-row and per-column deltas, and the white, clipped to
+0..1; then through one matrix to linear Rec. 2020, which `raw::profile` works out: the
+color matrices blended for the light the as-shot neutral says the picture
+was taken in, found by iterating the light and the blend together as the
+specification does, McCamy's cubic placing a chromaticity on the
+temperature scale; the forward matrices instead where the file has a pair;
+the neutral, at its largest channel's saturation, made white at a luminance
+of 1; and Bradford's transform from that white to D65. The camera
+calibration matrices are taken as the identity, since they apply only under
+a signature match a phone's own profile does not make.
+
+Turning is LibRaw's reading of the orientation, as for the developed frame,
+and LibRaw's size for the file is the full picture with no crop, so the
+probe and the develop agree. A 48-megapixel ProRAW decodes and develops
+in about a quarter of a second on this machine from either compression:
+decoding the tiles is a fifth of the processor time, the development two
+fifths and the profile's rendering the rest.
+
+Its sensor (`Linear::sensor`) is the stored codes tallied a plane to the
+channel in the tile pass, before the table and the levels, over the
+linearization table's codes where the file has one — an iPhone's are
+ten-bit codes through a table of 1024 — and the white levels otherwise.
+The codes themselves are not kept: three counts a pixel at sixteen bits
+is the developed picture over again. The pointer's are worked back from the
+developed pixel instead (`sensor::Recovery`): the matrix undone through
+its inverse, then the levels and the table, which is exact wherever no
+developed channel was clamped and marked approximate where one was.
+
+**The profile's rendering.** The file also says how it should *look*, in
+three tags of its camera profile: `BaselineExposure`, `ProfileGainTableMap`
+— a grid over the picture with a table of gains by brightness at each
+point, which is Apple's local tone mapping — and `ProfileToneCurve`. None of
+them makes sense alone. On the iPhones sampled the baseline runs from
+−1.27 to +4.12 EV; the table's input weights sum to exactly 2^−baseline and
+its top gain is 2^−baseline too, so after the exposure the highlights are
+taken back down to where the file stored them while the shadows stay lifted,
+by twenty to thirty times on the brightest baseline; and the curve's toe,
+which differs file to file, then takes the deepest of those shadows to
+black. Applied together they put the picture where the camera's JPEG has it:
+the linear median of the developed picture lifted is within a few percent of
+the JPEG's on both files sampled.
+
+`Linear::develop` does not apply them to the picture, which stays the
+development LibRaw would make, as decoders here describe rather than
+normalize. It works out, beside it, what the profile renders each pixel as,
+and keeps the ratio each channel is lifted by: a `GainMap` of
+`Lift::Profile`, whose `Data::Ratios` are half floats a channel for every
+pixel, so that the curve's application, which is not a gain alike on every
+channel, is exact. That reuses everything a photograph's gain map already
+goes through — see [gain maps](#gain-maps-ultra-hdr-jpeg-and-an-iphones-heic)
+— and costs the picture's size
+again in half floats: 72 MB for 12 megapixels, 293 MB for 48, and on the
+device four channels of the same.
+
+The rendering is `Rendering::render`, worked out in the tile pass, which is
+where the balanced camera values are and where the developed value is
+quantized; the ratio is taken over that quantized value, so the shader's
+texel times ratio is the rendering itself. It follows the DNG SDK's order,
+in linear ProPhoto (`raw::profile::prophoto`): the baseline as a plain
+multiply — the SDK's exposure ramp adds a small quadratic toe at black from
+a shadows setting the file does not carry, and clips at white, which here
+would undo the table's work, so neither is done; the table's gain, the same
+on every channel; and the curve by `raw::profile::rgb_tone`, the SDK's
+`RGBTone`, which puts the curve through the largest and smallest channel
+and keeps the middle one where it stood between them, so that the hue
+holds. The table's input is its five weights against red, green, blue, the
+least of the three and the most; the index runs to the table's length and
+is clamped to its last entry; and the grid is read at the pixel's center as
+a share of the picture's height and width, edge-replicated. Those three
+come from the one open reading of the tag found rather than from the
+specification, and `GainTable::gain_at` holds all three so that they can
+move together. The tag has no byte order of its own; an iPhone writes it
+big-endian inside a little-endian file, and `GainTable::read` tries
+big-endian first and the file's order after, a wrong order failing the
+size check. A tag that is not what the specification says — a table cut
+short, a curve that does not run from black to white — is passed over on
+the terminal and the rest of the profile applied: it is cosmetic, and a
+refusal would send the reader to the JPEG for it. DNG 1.7's
+`ProfileGainTableMap2`, which adds sample types and a gamma, is not read
+yet. The bake adds about a fifth to the develop.
+
 **The preview.** Every raw carries the camera's own JPEG of the frame,
 which LibRaw copies out without decoding anything — `unpack_thumb` and
 `make_mem_thumb` — and `Raw::preview` hands it back through the JPEG
@@ -508,7 +689,10 @@ rather than threading a second answer out of `decode`. A read of the JPEG
 knows its size from the pixels and asks nothing more. The three states are
 kept apart because the window says different things about each: nothing for
 a file that is not a raw, and, for a raw with none while the JPEG is asked
-for, that the developed picture is standing in.
+for, that the developed picture is standing in. A fourth, `Only`, is not
+the decoder's answer but the loader's: a raw whose development failed and
+whose JPEG was shown in its place, for which there is nothing to switch to
+(see [interface](interface.md#the-cameras-jpeg)).
 
 **The metadata.** The panel reads a raw's EXIF where a TIFF-shaped one
 keeps it, at the front, and most formats are TIFF-shaped. Five are not, and
@@ -536,6 +720,33 @@ interpolation is exact on a flat field; the tolerance is for LibRaw's
 output matrices, which are written to four decimal places.
 `bad-truncated.dng` is the same file cut inside its directory, claimed by
 the entries that survive and then refused by the library.
+
+`dng-jxl.dng` is an iPhone's ProRAW in small, written by the same script:
+the camera's JPEG of the pattern in the first directory, and in a SubIFD
+the pattern as Linear Raw in four JPEG XL tiles — the bottom two padded
+past the picture — of ten-bit codes, through a linearization table that is
+a square, so that a code taken for a value comes out far too dark. Its
+matrix is `dng-cfa.dng`'s, and it develops to the pattern. LibRaw fails on
+it exactly as it does on the phone's file. Its profile is chosen so that
+white comes out at a number worked by hand: −2 EV, a two-by-two table of
+twos written big-endian, and a curve through (0.5, 0.25), which together
+take white to a quarter, two stops down; a primary's channels holding
+nothing are left alone, a ratio of one. `dng-jxl-profile-cut.dng` is the
+same with its table's last gain cut off: it develops, the table passed over
+and white three stops down through the exposure and the curve alone.
+`bad-dng-jxl.dng` is the same with each tile cut forty bytes in and no
+profile: it will not develop, and the loader shows its JPEG instead.
+`dng-ljpeg.dng` is `dng-jxl.dng` with its tiles as lossless JPEG, which
+the script encodes by hand since nothing on the desktop writes one — three
+components at a precision of ten, predicted as an iPhone's are, under one
+Huffman table — so that `raw::ljpeg` decodes it and the same development
+makes the same picture, profile and all, which `raw::linear`'s tests hold
+the two fixtures to sample for sample. There is no cut-short lossless JPEG
+beside it: zeros inside a lossless JPEG decode as samples of no
+difference, so a cut is a marker rather than a truncation, and the
+developer's test makes one from the fixture; the decoder's own tests
+encode frames of their own, every predictor, sixteen bits, a point
+transform and restart intervals among them, and cut one short.
 
 ## JPEG XL
 

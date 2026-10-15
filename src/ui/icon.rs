@@ -586,6 +586,36 @@ pub(super) const SUN: &[Mark] = &[
     Mark::Line([19.07, 4.93], [17.66, 6.34]),
 ];
 
+/// Lucide's `spline`: a curve between two control points — a raw's
+/// profile, the camera's rendering of it, at the head of the sections that
+/// describe it. The curve is the quarter circle Lucide draws, of radius 12
+/// about the corner the two points stand off from.
+pub(super) const SPLINE: &[Mark] = &[
+    Mark::circle([19.0, 5.0], 2.0),
+    Mark::circle([5.0, 19.0], 2.0),
+    Mark::arc([17.0, 17.0], 12.0, 180.0, 90.0),
+];
+
+/// Lucide's `flask-conical`: the vessel a raw is developed in, for the
+/// histogram's Develop section. The neck's two sides come down to the
+/// shoulders, which run out to the two rounded feet of the base; the
+/// liquid's line runs across between them, and the lip across the top.
+///
+/// Lucide rounds the base's corners with arcs of radius two, from the
+/// shoulder's slope to the vertical; they are kept, since at a dozen pixels
+/// a sharp corner there reads as a different vessel.
+pub(super) const FLASK_CONICAL: &[Mark] = &[
+    Mark::Line([8.5, 2.0], [15.5, 2.0]),
+    Mark::Line([10.0, 2.0], [10.0, 8.0]),
+    Mark::Line([14.0, 2.0], [14.0, 8.0]),
+    Mark::Line([14.0, 8.0], [19.755, 19.04]),
+    Mark::arc([18.0, 20.0], 2.0, -28.7, 118.7),
+    Mark::Line([18.0, 22.0], [6.0, 22.0]),
+    Mark::arc([6.0, 20.0], 2.0, 90.0, 118.7),
+    Mark::Line([4.245, 19.04], [10.0, 8.0]),
+    Mark::Line([6.453, 15.0], [17.547, 15.0]),
+];
+
 /// Lucide's `eye`: an almond with the pupil in it — what is on screen, for
 /// the pill that says the depth map is shown in the picture's place.
 ///
@@ -1267,7 +1297,7 @@ mod tests {
 
     /// Every icon in the table, so that a new one is held to the same
     /// promises as the rest.
-    const ICONS: [&[Mark]; 45] = [
+    const ICONS: [&[Mark]; 46] = [
         CHART_AREA,
         INFO,
         CIRCLE_QUESTION_MARK,
@@ -1310,6 +1340,7 @@ mod tests {
         ARROW_RIGHT,
         AXIS_3D,
         SUN,
+        SPLINE,
         EYE,
         MONITOR,
         SLIDERS_HORIZONTAL,

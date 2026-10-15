@@ -114,7 +114,7 @@ impl<'a> Container<'a> {
             width: map_width,
             height: map_height,
             channels,
-            data,
+            data: crate::image::gain_map::Data::Codes(data),
             lift: Lift::Iso(metadata.clone()),
         }));
         Ok(Some(image))
@@ -461,7 +461,7 @@ mod tests {
             width: map_width,
             height: map_height,
             channels: 3,
-            data,
+            data: crate::image::gain_map::Data::Codes(data),
             lift: Lift::Iso(metadata.clone()),
         }));
         assert_agrees(&lifted(&ours), &reference(&base, &map, &metadata));

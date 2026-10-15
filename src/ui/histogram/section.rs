@@ -27,16 +27,28 @@ pub enum Section {
     Display,
     /// How far the gain map lifts the picture, where it has one.
     GainMap,
-    /// The picture as the file stores it.
+    /// How a raw's profile renders it, where it says: how far each pixel
+    /// is lifted, and under it the profile's parts read upward in the order
+    /// they are applied — the exposure, the gain table, the tone curve.
+    /// Applied to the developed picture before anything else is.
+    Profile,
+    /// How a raw was developed from the sensor's counts: the developed
+    /// channels, what the development did to them, and the photosites
+    /// under the pointer. Between the profile, which is applied to the
+    /// developed picture, and the counts it was developed from.
+    Develop,
+    /// The picture as the file stores it: the sensor's counts for a raw.
     Image,
 }
 
 impl Section {
     /// Every section there can be, in the order the column lays them out.
-    pub const ALL: [Section; 4] = [
+    pub const ALL: [Section; 6] = [
         Section::Output,
         Section::Display,
         Section::GainMap,
+        Section::Profile,
+        Section::Develop,
         Section::Image,
     ];
 
@@ -46,6 +58,8 @@ impl Section {
             Section::Output => "Output",
             Section::Display => "Display",
             Section::GainMap => "Gain map",
+            Section::Profile => "Profile",
+            Section::Develop => "Develop",
             Section::Image => "Image",
         }
     }
@@ -53,21 +67,24 @@ impl Section {
     /// The mark beside its name, in the accent, as the information panel's
     /// sections wear theirs: a screen for what goes out, the sliders the
     /// display is set by, the sun the gain map is known by elsewhere in the
-    /// window, and a picture for the image, as the information panel's
-    /// Image section wears.
+    /// window, the flask the development is done in, and a picture for the
+    /// image, as the information panel's Image section wears.
     pub(in crate::ui) fn mark(self) -> &'static [icon::Mark] {
         match self {
             Section::Output => icon::MONITOR,
             Section::Display => icon::SLIDERS_HORIZONTAL,
             Section::GainMap => icon::SUN,
+            Section::Profile => icon::SPLINE,
+            Section::Develop => icon::FLASK_CONICAL,
             Section::Image => icon::IMAGE,
         }
     }
 
     /// Whether the section has a button of its own at the end of its
-    /// header: the Gain map section's, which shows the map.
+    /// header: the Gain map section's, which shows the map, and the
+    /// Profile section's, which is the profile's switch.
     pub fn has_button(self) -> bool {
-        matches!(self, Section::GainMap)
+        matches!(self, Section::GainMap | Section::Profile)
     }
 
     /// Whether `current` passes through this stage. The Gain map section is
@@ -77,15 +94,29 @@ impl Section {
     /// place: what the display starts from is then the map in stops, which
     /// is the Gain map section's plot already, and the file stores neither
     /// it nor the picture under it.
+    ///
+    /// A raw's profile is a gain map of its own kind, and has the Profile
+    /// section instead of the Gain map one; the two never meet. The Develop
+    /// section is a raw's, while the picture itself is on screen: its plots
+    /// are of the developed picture, which another of the file's images
+    /// shown in its place is not.
     pub fn applies(self, current: &Current) -> bool {
+        let lifted = |profile: bool| {
+            current
+                .picture_face()
+                .image
+                .gain_map
+                .as_deref()
+                .is_some_and(|map| map.is_profile() == profile)
+                && matches!(
+                    current.showing,
+                    Showing::Picture | Showing::Auxiliary(Auxiliary::GainMap)
+                )
+        };
         match self {
-            Section::GainMap => {
-                current.picture_face().image.gain_map.is_some()
-                    && matches!(
-                        current.showing,
-                        Showing::Picture | Showing::Auxiliary(Auxiliary::GainMap)
-                    )
-            }
+            Section::GainMap => lifted(false),
+            Section::Profile => lifted(true),
+            Section::Develop => stored::sensor_of(current).is_some(),
             Section::Image => current.showing != Showing::Auxiliary(Auxiliary::GainMap),
             Section::Output | Section::Display => true,
         }
@@ -94,11 +125,18 @@ impl Section {
     /// How tall the section stands: its header, its plot, and what hangs
     /// under the plot. Fixed but for the Display section's row of false
     /// colors, which only a `gray` image has, and its row of windows, which
-    /// only an image read as `data` has, and the Image section's plots,
-    /// one to the stored channel, laid out as `image` says — so that one
+    /// only an image read as `data` has, the Image section's plots,
+    /// one to the stored channel, laid out as `image` says, and the Develop
+    /// section's, as `develop` says — so that one
     /// file's column is laid out where the last one's was, and a section is
     /// never shrunk to fit a short window — the column scrolls instead.
-    pub const fn height(self, gray: bool, data: bool, image: stored::Layout) -> f32 {
+    pub const fn height(
+        self,
+        gray: bool,
+        data: bool,
+        image: stored::Layout,
+        develop: develop::Shape,
+    ) -> f32 {
         let head = LABEL_HEIGHT + HEAD_GAP + PLOT_INSET;
         let band = PLOT_INSET + RAMP_GAP + RAMP_HEIGHT;
         match self {
@@ -121,6 +159,22 @@ impl Section {
             // A shorter plot and the row of stops under it: how much of the
             // lift is applied is the header's to say.
             Section::GainMap => head + SHORT_PLOT_HEIGHT + PLOT_INSET + EV_ROW,
+            // The lift's plot and its row of stops, as the Gain map's, and
+            // the row of the lift's three numbers under them; under that
+            // the curve's and the gain table's, on the same footing; and
+            // the exposure's row.
+            Section::Profile => {
+                head + SHORT_PLOT_HEIGHT
+                    + PLOT_INSET
+                    + EV_ROW
+                    + TOTAL_ROW
+                    + 2.0 * PART_HEIGHT
+                    + 2.0 * (display::ROW_GAP + display::ROW_HEIGHT)
+            }
+            // The developed channels' plots as the Image section's, the
+            // rows of what the development did, and the photosites: see
+            // `develop::Shape`.
+            Section::Develop => head + develop.height(),
             // A plot to the stored channel, and the rows of values under
             // them: see `stored::Layout`.
             Section::Image => head + image.body_height(),
@@ -139,11 +193,99 @@ impl Section {
         match self {
             Section::Output => Rect::new(x, y, width, PLOT_HEIGHT),
             Section::Display => display::plot_area(rect),
-            Section::GainMap => Rect::new(x, y, width, SHORT_PLOT_HEIGHT),
-            Section::Image => stored::first_plot(rect, stored::Layout::ONE),
+            Section::GainMap | Section::Profile => Rect::new(x, y, width, SHORT_PLOT_HEIGHT),
+            Section::Develop | Section::Image => stored::first_plot(rect, stored::Layout::ONE),
         }
     }
 }
+
+/// The row under the Profile section's lift and its row of stops: how far
+/// the profile lifted each channel of the pointer's pixel, which is what
+/// the plot above it counts.
+pub fn total_row(rect: Rect) -> Rect {
+    let lift = Section::Profile.plot(rect);
+    let y = lift.bottom() + PLOT_INSET + EV_ROW + display::ROW_GAP;
+    Rect::new(rect.x, y, rect.width, display::ROW_HEIGHT)
+}
+
+/// One of the Profile section's parts under its lift's row, `index` down
+/// from it: the caption that names the part and says what the pointer's
+/// pixel reads on it, laid out as the section's rows are, the width of the
+/// section; and the ground the part is drawn on, set in from the left for
+/// the stops its height is in.
+fn part(rect: Rect, index: usize) -> (Rect, Rect) {
+    let lift = Section::Profile.plot(rect);
+    let top = total_row(rect).bottom() + index as f32 * PART_HEIGHT + PART_GAP;
+    let caption = Rect::new(rect.x, top, rect.width, PART_CAPTION_HEIGHT);
+    let ground = Rect::new(
+        lift.x + SCALE_GUTTER,
+        caption.bottom() + PLOT_INSET,
+        lift.width - SCALE_GUTTER,
+        PART_PLOT_HEIGHT,
+    );
+    (caption, ground)
+}
+
+/// The Profile section's tone curve, in the section laid out at `rect`:
+/// its caption and its ground, under the lift's row.
+pub fn curve_part(rect: Rect) -> (Rect, Rect) {
+    part(rect, 0)
+}
+
+/// The Profile section's gain table, with the exposure in it: its caption
+/// and its ground, under the curve's, being applied before it.
+pub fn table_part(rect: Rect) -> (Rect, Rect) {
+    part(rect, 1)
+}
+
+/// The Profile section's exposure row, which is applied first: under the
+/// gain table's row of stops, as the Display section's rows are under its
+/// band.
+pub fn exposure_row(rect: Rect) -> Rect {
+    let (_, table) = table_part(rect);
+    let y = table.bottom() + PLOT_INSET + EV_ROW + display::ROW_GAP;
+    Rect::new(rect.x, y, rect.width, display::ROW_HEIGHT)
+}
+
+/// The Profile section's last row, the first of its stages read upward:
+/// the developed pixel in the profile's own space, which the exposure's
+/// row above takes from.
+pub fn prophoto_row(rect: Rect) -> Rect {
+    let exposure = exposure_row(rect);
+    Rect::new(
+        rect.x,
+        exposure.bottom() + display::ROW_GAP,
+        rect.width,
+        display::ROW_HEIGHT,
+    )
+}
+
+/// Above each of the Profile section's parts, and the Develop section's
+/// photosites: the gap from the row above.
+pub const PART_GAP: f32 = 8.0;
+
+/// A part's caption — a Profile part's, or the Develop section's
+/// photosites' — the one line its name takes, in the face the rows' names
+/// are in, the plot under it saying the rest.
+pub const PART_CAPTION_HEIGHT: f32 = ROW_TEXT + 4.0;
+
+/// What the lift's row takes under the row of stops: its gap and its
+/// height, as the rows at the foot of the section have.
+const TOTAL_ROW: f32 = display::ROW_GAP + display::ROW_HEIGHT;
+
+/// How tall a part's plot is drawn: as tall as the lift's plot, the two
+/// being read one above the other.
+const PART_PLOT_HEIGHT: f32 = SHORT_PLOT_HEIGHT;
+
+/// What a part takes of the section, from what is above it to its own
+/// row of stops.
+const PART_HEIGHT: f32 =
+    PART_GAP + PART_CAPTION_HEIGHT + PLOT_INSET + PART_PLOT_HEIGHT + PLOT_INSET + EV_ROW;
+
+/// What a part's ground is set in from the left by, for the stops its
+/// height is in: room for a signed stop and a tenth, clear of the ground's
+/// own inset.
+pub const SCALE_GUTTER: f32 = 28.0;
 
 /// How tall the column is for `current`: every section it passes through,
 /// and the gaps between them.
@@ -154,9 +296,10 @@ pub fn height(current: &Current) -> f32 {
         .collect();
     let (gray, data) = (current.image.is_gray(), is_data(current));
     let image = stored::Layout::of(current);
+    let develop = develop::Shape::of(current);
     sections
         .iter()
-        .map(|section| section.height(gray, data, image))
+        .map(|section| section.height(gray, data, image, develop))
         .sum::<f32>()
         + (sections.len().saturating_sub(1)) as f32 * SECTION_GAP
 }
@@ -168,11 +311,17 @@ pub fn layout(column: Rect, current: &Current) -> Vec<(Section, Rect)> {
     let mut y = column.y;
     let (gray, data) = (current.image.is_gray(), is_data(current));
     let image = stored::Layout::of(current);
+    let develop = develop::Shape::of(current);
     Section::ALL
         .into_iter()
         .filter(|section| section.applies(current))
         .map(|section| {
-            let rect = Rect::new(column.x, y, column.width, section.height(gray, data, image));
+            let rect = Rect::new(
+                column.x,
+                y,
+                column.width,
+                section.height(gray, data, image, develop),
+            );
             y += rect.height + SECTION_GAP;
             (section, rect)
         })

@@ -413,6 +413,7 @@ fn image(b: &mut Builder) -> Vec<Node> {
         b.button("Camera JPEG", Control::CameraJpeg),
         b.button("Depth Map", Control::Depth),
         b.button("Gain Map", Control::GainMap),
+        b.button("Profile", Control::Profile),
     ]
 }
 
@@ -705,6 +706,7 @@ impl App {
                 Control::CameraJpeg => {
                     current.is_some_and(|current| current.rendering == Rendering::CameraJpeg)
                 }
+                Control::Profile => self.profile,
                 Control::Format(format) => panels.pixel_format == format,
                 Control::Coordinates(format) => panels.coordinate_format == format,
                 Control::Geographic(format) => panels.geographic_format == format,

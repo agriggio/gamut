@@ -473,6 +473,18 @@ Caveats:
   wide-gamut file.
 - **Lens corrections are not applied,** and neither is noise reduction: the
   frame is the sensor's, distortion and vignetting included.
+- **An iPhone's ProRAW opens as the iPhone rendered it.** A recent
+  iPhone's ProRAW is developed the same way as any other raw, in under a
+  second for 48 megapixels, and then shown as the file says it should look:
+  its exposure, the brightening of the shadows the iPhone stores for each
+  part of the picture, and its tone curve, which put it close to the camera's
+  JPEG (`v`) and to Photos. `P` shows the picture as developed without them,
+  several stops darker in the shadows, as `--no-gain-map` opens it. A file
+  whose rendering is damaged is shown with as much of it as is whole.
+- **A raw that cannot be developed opens as the camera's JPEG,** with no
+  button to switch, and says so as it opens. A file that is damaged, or
+  that holds its picture in a form `gamut` does not read, still shows what
+  the camera made of it.
 - **The information panel reads every format's metadata,** including the
   ones that keep it somewhere other than where a TIFF would, and adds the
   color temperature the camera's white balance was set for, which the

@@ -62,6 +62,7 @@ pub fn downscale(image: &DecodedImage, side: u32) -> Cow<'_, DecodedImage> {
         samples: image.samples.rebuilt(&shrink),
         gain_map: None,
         depth: None,
+        sensor: None,
         ..*image
     })
 }

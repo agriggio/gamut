@@ -993,6 +993,7 @@ dependencies = [
  "anyhow",
  "block2 0.6.2",
  "bytemuck",
+ "cc",
  "egui",
  "egui-wgpu",
  "egui-winit",

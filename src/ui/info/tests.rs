@@ -392,6 +392,67 @@ fn the_time_taken_is_said_as_how_long_ago() {
     assert_eq!(short(&fact(exif::LENS, "2001-01-01 12:00:00 +00:00")), None);
 }
 
+/// A raw's profile is described in a section of its own, in the Gain map
+/// section's place: the baseline exposure signed, the gain table's grid
+/// and steps, the curve's points, and whether the rendering is on screen.
+#[test]
+fn a_profile_is_described_after_the_image() {
+    use crate::image::gain_map::{Data, GainMap, GainTable, Lift, Profile};
+    let mut current = current();
+    assert!(!written(&current).iter().any(|row| row == PROFILE));
+    let map = GainMap {
+        width: 1,
+        height: 1,
+        channels: 3,
+        data: Data::Ratios(vec![half::f16::ONE; 3]),
+        lift: Lift::Profile(Profile {
+            baseline: -1.27,
+            table: Some(std::sync::Arc::new(GainTable {
+                points: [48, 64],
+                spacing: [1.0 / 48.0, 1.0 / 64.0],
+                origin: [0.0, 0.0],
+                steps: 257,
+                weights: [0.0; 5],
+                gains: vec![1.0; 48 * 64 * 257],
+            })),
+            curve: Some(std::sync::Arc::new(vec![[0.0, 0.0], [1.0, 1.0]])),
+            range: [0.0, 0.0],
+            to_curve: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        }),
+    };
+    let mut image = (*current.image).clone();
+    image.gain_map = Some(std::sync::Arc::new(map.clone()));
+    current.image = std::sync::Arc::new(image);
+    current.lift = Some(std::sync::Arc::new(map.table(1.0)));
+    let rows = written(&current);
+    assert!(!rows.iter().any(|row| row == GAIN_MAP), "not a gain map's");
+    let at = rows
+        .iter()
+        .position(|row| row == PROFILE)
+        .expect("a section");
+    assert!(rows.iter().position(|row| row == "Image") < Some(at));
+    let end = rows.iter().position(|row| row == "Camera").unwrap();
+    assert_eq!(
+        rows[at + 1..end],
+        [
+            "Baseline exposure",
+            "\u{2212}1.27 EV",
+            "Gain table",
+            "64 \u{00d7} 48 points, 257 steps",
+            "Tone curve",
+            "2 points",
+            "Applied",
+            "yes",
+        ]
+    );
+    current.lift = Some(std::sync::Arc::new(map.table(0.0)));
+    let rows = written(&current);
+    assert_eq!(
+        rows[rows.iter().position(|row| row == "Applied").unwrap() + 1],
+        "no"
+    );
+}
+
 /// A picture with a gain map has it described in a section of its own
 /// after the picture's, in stops: how far the picture can go above white,
 /// how far the map raises it, and how much of that is on screen. One
@@ -405,7 +466,7 @@ fn a_gain_map_is_described_after_the_image() {
         width: 2,
         height: 3,
         channels: 1,
-        data: vec![0, 0, 0, 0, 0, 255],
+        data: crate::image::gain_map::Data::Codes(vec![0, 0, 0, 0, 0, 255]),
         lift: Lift::Apple { headroom: 8.0 },
     };
     let mut image = (*current.image).clone();

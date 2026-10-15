@@ -1,23 +1,28 @@
 //! The histogram, down the side panel: the picture as a pipeline, one
 //! section to a stage, in the order the data flows read from the screen
 //! back — what goes out to the screen at the top, the display that makes it
-//! under that, the gain map that lifts the picture where it has one, and
-//! the file as it stores it at the foot. Each section is a plot of the
-//! picture at its stage and a header naming the stage, and the pixel under
-//! the pointer is traced down the column, a rule on each plot and its value
-//! at that stage in each header.
+//! under that, the gain map that lifts the picture where it has one, a
+//! raw's profile and its development where it is one, and the file as it
+//! stores it at the foot. Each section is a plot of the picture at its
+//! stage and a header naming the stage, and the pixel under the pointer is
+//! traced down the column, a rule on each plot and its value at that stage
+//! in each header.
 //!
 //! This file is the panel: the row of buttons at its head that act on every
 //! plot, and under it the column of sections in their order, and the trace.
 //! `section` is a section's height and header, `plot` the plot every
-//! section draws, `output`, `display`, `gain_map` and `file` the four
-//! stages, the band and its handles `track` and the exposure's slider
-//! `slider`, each a file beside this one.
+//! section draws, `output`, `display`, `gain_map`, `profile`, `develop` and
+//! `stored` the six stages, the band and its handles `track` and the
+//! exposure's slider `slider`, each a file beside this one.
 
+mod develop;
 mod display;
 mod gain_map;
 mod output;
 mod plot;
+mod profile;
+#[cfg(test)]
+pub(in crate::ui) use profile::{GAIN_TABLE, PROPHOTO, TONE_CURVE, TOTAL_LIFT};
 mod section;
 mod slider;
 mod stored;
@@ -64,7 +69,7 @@ const TOOLBAR_HEIGHT: f32 = CHIP_HEIGHT;
 pub const MIN_HEIGHT: f32 = 2.0 * PANEL_INSET
     + TOOLBAR_HEIGHT
     + HEADER_GAP
-    + Section::Output.height(false, false, stored::Layout::ONE);
+    + Section::Output.height(false, false, stored::Layout::ONE, develop::Shape::NONE);
 
 /// The line a section opens with: its mark and name, what the pointer is
 /// reading at its stage, and the section's own button where it has one. As
@@ -439,6 +444,8 @@ struct Traced {
     pub output: Option<Mark>,
     pub display: Option<Mark>,
     pub gain_map: Option<Mark>,
+    pub profile: Option<Mark>,
+    pub develop: Option<Mark>,
     pub image: Option<Mark>,
 }
 
@@ -449,6 +456,8 @@ impl Traced {
             Section::Output => self.output.as_ref(),
             Section::Display => self.display.as_ref(),
             Section::GainMap => self.gain_map.as_ref(),
+            Section::Profile => self.profile.as_ref(),
+            Section::Develop => self.develop.as_ref(),
             Section::Image => self.image.as_ref(),
         }
     }
@@ -458,6 +467,8 @@ impl Traced {
             Section::Output => &mut self.output,
             Section::Display => &mut self.display,
             Section::GainMap => &mut self.gain_map,
+            Section::Profile => &mut self.profile,
+            Section::Develop => &mut self.develop,
             Section::Image => &mut self.image,
         }
     }
@@ -469,8 +480,10 @@ struct Plots<'a> {
     pub output: &'a output::Binned,
     pub lift: Option<&'a Plot>,
     /// The Image's: a plot to the stored channel, and the count axis they
-    /// share — see [`stored::plotted`].
+    /// share — see [`stored::plotted`] — and the Develop's of the developed
+    /// channels, for a raw.
     pub image: &'a stored::Plotted,
+    pub develop: Option<&'a stored::Plotted>,
     /// The count axes the Display's, the Output's and the gain map's plots
     /// each stand on alone.
     pub counts: plot::Counts,
@@ -502,11 +515,16 @@ fn marked(
 ) -> Traced {
     let mut traced = Traced::default();
     for &(section, rect) in layout {
-        // The Image section has a plot to the stored channel, and says
-        // which plane's bin the pointer is on itself.
-        if section == Section::Image {
-            if let Some((plane, bin)) = stored::hovered(rect, stored::Layout::of(current), cursor) {
-                traced.image = Some(stored::bin_mark(current, plane, bin));
+        // The Image and Develop sections have a plot to the stored channel,
+        // and say which plane's bin the pointer is on themselves.
+        if let Section::Image | Section::Develop = section {
+            let source = match section {
+                Section::Develop => stored::Source::developed(current),
+                _ => stored::Source::image(current),
+            };
+            let layout = stored::Layout::of_source(&source);
+            if let Some((plane, bin)) = stored::hovered(rect, layout, cursor) {
+                *traced.slot(section) = Some(stored::bin_mark(&source, plane, bin));
                 return traced;
             }
             continue;
@@ -516,8 +534,9 @@ fn marked(
             let mark = match section {
                 Section::Output => output::bin_mark(current, headroom, plots.output, bin),
                 Section::Display => display::bin_mark(current, headroom, bin),
-                Section::GainMap => gain_map::bin_mark(plots.lift, bin),
-                Section::Image => unreachable!("answered above"),
+                // A profile's lift is plotted and read as a gain map's.
+                Section::GainMap | Section::Profile => gain_map::bin_mark(plots.lift, bin),
+                Section::Image | Section::Develop => unreachable!("answered above"),
             };
             *traced.slot(section) = Some(mark);
             return traced;
@@ -530,8 +549,9 @@ fn marked(
         *traced.slot(section) = match section {
             Section::Output => output::pixel_mark(current, headroom, plots.output, x, y),
             Section::Display => display::pixel_mark(current, headroom, x, y),
-            Section::GainMap => gain_map::pixel_mark(current, plots.lift, x, y),
-            Section::Image => stored::pixel_mark(current, x, y),
+            Section::GainMap | Section::Profile => gain_map::pixel_mark(current, plots.lift, x, y),
+            Section::Develop => stored::developed_mark(current, x, y),
+            Section::Image => stored::image_mark(current, x, y),
         };
     }
     traced
@@ -552,6 +572,14 @@ fn width_of(ui: &egui::Ui, text: &str, size: f32) -> f32 {
 /// four decimals of nothing.
 fn axis_words(current: &Current, place: f32) -> String {
     let transfer = current.image.color.transfer;
+    let floats = matches!(current.image.samples, crate::image::Samples::F32 { .. });
+    // A photo of linear light in integers — a developed raw — is on an axis
+    // in stops, and its full scale is white, so a value reads in stops
+    // below white, as the Develop section's and the Profile's do; a float's
+    // 1 need not be white, and it keeps its number.
+    if current.stats.axis == stats::Axis::Stops && !floats {
+        return white_stops_words(place);
+    }
     let scale = if transfer.is_linear() {
         current.image.samples.full_scale()
     } else {
@@ -562,6 +590,17 @@ fn axis_words(current: &Current, place: f32) -> String {
         return format!("{value:.0}");
     }
     trimmed(format!("{value:.3}"))
+}
+
+/// `stops` below white as the Develop section and the Display's readouts
+/// write a linear integer photo's value: signed, to a tenth, with a true
+/// minus; and `0` for no light at all, which is what the value is.
+fn white_stops_words(stops: f32) -> String {
+    if !stops.is_finite() {
+        return "0".to_string();
+    }
+    // Adding zero makes a negative zero positive.
+    format!("{:+.1}", stops + 0.0).replace('-', "\u{2212}")
 }
 
 /// A decimal with the zeros it does not need taken off the end: `0.500` is
@@ -660,12 +699,15 @@ fn column(pass: &mut Pass, ui: &mut egui::Ui, current: &Current) {
         .filter(|&[x, y]| visible.contains(pos2(x, y)));
     let binned = output::binned(ui, current, pass.input);
     let lift = gain_map::lift_plot(ui, current);
-    let image = stored::plotted(ui, current);
+    let image = stored::plotted(ui, &stored::Source::image(current));
+    let develop = stored::sensor_of(current)
+        .map(|_| stored::plotted(ui, &stored::Source::developed(current)));
     let counts = input_counts(current);
     let plots = Plots {
         output: &binned,
         lift: lift.as_deref(),
         image: &image,
+        develop: develop.as_deref(),
         counts,
         output_counts: plot::Counts::of(&binned.plot),
         lift_counts: lift.as_deref().map_or(counts, plot::Counts::of),
@@ -696,6 +738,12 @@ fn column(pass: &mut Pass, ui: &mut egui::Ui, current: &Current) {
             Section::Output => output::show(pass, ui, current, rect, &plots, mark),
             Section::Display => display::show(pass, ui, current, rect, plots.counts, mark),
             Section::GainMap => gain_map::show(pass, ui, current, rect, &plots, mark),
+            Section::Profile => profile::show(pass, ui, current, rect, &plots, mark),
+            Section::Develop => {
+                if let Some(plotted) = plots.develop {
+                    develop::show(pass, ui, current, rect, plotted, mark);
+                }
+            }
             Section::Image => stored::show(pass, ui, current, rect, plots.image, mark),
         }
     }

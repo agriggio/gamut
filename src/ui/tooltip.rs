@@ -18,6 +18,7 @@ use super::histogram::WINDOWS;
 use super::info::Copyable;
 use super::menu::{self, Copies};
 use super::tags::{Fold, Tab, Table};
+use crate::image::sensor::Demosaic;
 
 /// Something in the interface that names itself when the pointer rests on it.
 ///
@@ -49,6 +50,20 @@ pub enum Tip {
     /// things in force; the tooltip is the whole of it in sentences, the
     /// window's own bounds included — see `App::tooltip`.
     State,
+    /// The Profile section's ProPhoto row, the developed pixel in the
+    /// profile's own space; and its header, what the profile lifted each
+    /// channel by.
+    ProPhoto,
+    ProfileLift,
+    /// The Develop section's demosaic row: what the name on it means.
+    Demosaic(Demosaic),
+    /// The Develop section's clipped row: what the shares on it are of.
+    Clipped,
+    /// The Profile section's exposure row, its gain table and its tone
+    /// curve: what each part of the rendering is.
+    Baseline,
+    GainTable,
+    ToneCurve,
 }
 
 /// What a tooltip says: the thing itself first, and under it the keys that do
@@ -171,6 +186,16 @@ pub const NO_DEPTH_MAP: &str = "This image has no depth map.";
 /// map, which is as seldom heard as [`NO_DEPTH_MAP`] for the same reason.
 pub const NO_GAIN_MAP: &str = "This image has no gain map.";
 
+/// What the gain map's toggle says under its name on a raw whose profile
+/// says how it should look: where the map it shows comes from, there being
+/// none in the file.
+pub const GAIN_MAP_FROM_PROFILE: &str = "The gain map is calculated from the camera's profile.";
+
+/// What the profile's switch says, for the key, on a file whose profile
+/// says nothing of how it should look. The switch is a square of the
+/// histogram's Profile section, which is not drawn for such a file.
+pub const NO_PROFILE: &str = "This file carries no camera profile.";
+
 /// What the Raw Data tab's copy button says while there are no tags to
 /// copy: exiftool is not there, is reading the file, or could not.
 pub const NO_TAGS: &str = "No tags to copy.";
@@ -255,8 +280,9 @@ pub struct Conditions {
     pub room: Room,
     /// Whether the surface switch has anything to switch, and why not.
     pub hdr: Hdr,
-    /// Whether the file on screen is a raw with the camera's JPEG in it,
-    /// which is what the switch between the two needs.
+    /// Whether the file on screen is a raw with the camera's JPEG in it and
+    /// a developed picture beside it, which is what the switch between the
+    /// two needs.
     pub camera_jpeg: bool,
     /// Whether the picture on screen carries a depth map, which is what
     /// the depth toggle needs.
@@ -264,6 +290,9 @@ pub struct Conditions {
     /// Whether the picture on screen carries a gain map, which is what the
     /// gain map's toggle needs.
     pub gain_map: bool,
+    /// Whether the picture on screen is a raw whose profile says how it
+    /// should look, which is what the profile's switch needs.
+    pub profile: bool,
     /// Whether anything out there offers to open the file on screen.
     pub openable: bool,
     /// Whether a false color is on the picture.
@@ -313,6 +342,7 @@ impl Default for Conditions {
             camera_jpeg: false,
             depth: false,
             gain_map: false,
+            profile: false,
             openable: false,
             false_colored: false,
             data: false,
@@ -356,6 +386,7 @@ impl Conditions {
         camera_jpeg: true,
         depth: true,
         gain_map: true,
+        profile: true,
         openable: true,
         false_colored: false,
         data: true,
@@ -410,6 +441,7 @@ pub fn disabled(tip: Tip, conditions: Conditions) -> Option<Refused> {
         camera_jpeg,
         depth,
         gain_map,
+        profile,
         ..
     } = conditions;
     let said = |said| Some(Refused { said, hint: None });
@@ -434,6 +466,9 @@ pub fn disabled(tip: Tip, conditions: Conditions) -> Option<Refused> {
     }
     if matches!(tip, Tip::Control(Control::GainMap | Control::ShowGainMap)) && !gain_map {
         return said(NO_GAIN_MAP);
+    }
+    if tip == Tip::Control(Control::Profile) && !profile {
+        return said(NO_PROFILE);
     }
     if tip == Tip::Control(Control::Paste) && !clipboard {
         return said(NOTHING_TO_PASTE);
@@ -486,6 +521,7 @@ pub fn disabled(tip: Tip, conditions: Conditions) -> Option<Refused> {
                 | Control::Depth
                 | Control::GainMap
                 | Control::ShowGainMap
+                | Control::Profile
                 | Control::Play
                 | Control::StepBack
                 | Control::StepForward
@@ -677,6 +713,29 @@ pub fn words(tip: Tip) -> Option<String> {
         },
         // The timeline: no key scrubs, so it names itself.
         Tip::Timeline => "Frame timeline",
+        // The Profile section's trace and the Develop section's demosaic:
+        // rows of numbers and a name, with what they are said under the
+        // pointer, since the rows have no room to say it themselves.
+        Tip::ProPhoto => "Result of conversion from developed values to linear ProPhoto",
+        Tip::ProfileLift => "Total lift from every step of applying the profile",
+        Tip::Demosaic(Demosaic::Ahd) => "Adaptive homogeneity-directed interpolation",
+        Tip::Demosaic(Demosaic::None) => "The file is not mosaiced.",
+        Tip::Clipped => "Percentage of pixels at white after development",
+        Tip::Baseline => {
+            "Profile's baseline exposure before applying gain table and tone curve"
+        }
+        Tip::GainTable => {
+            "Profile gain table. The camera has a distinct gain curve for each square in \
+             a grid atop the picture. The thick band shows the extent across all of the \
+             grid squares, the highlighted curve applies to the grid square for the \
+             active pixel. Two horizontal rules: at 0 and the inverse of the baseline \
+             adjustment."
+        }
+        Tip::ToneCurve => {
+            "Profile tone curve. Applied to brightest and dimmest channels (solid dots), \
+             middle channel (hollow) keeps its place between. The diagonal line is where \
+             there is no effect (out equals in)."
+        }
         // No words of its own: an item of the open menu wears the name of
         // the program it hands the file to, and there is nothing an
         // interface that has never heard of that program could add to it.
@@ -710,7 +769,8 @@ pub fn words(tip: Tip) -> Option<String> {
             | Control::CameraJpeg
             // Named by its key's row, like the other toggles.
             | Control::Depth
-            | Control::GainMap,
+            | Control::GainMap
+            | Control::Profile,
         )
         | Tip::Name
         | Tip::Counter

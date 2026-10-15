@@ -396,6 +396,10 @@ pub struct App {
     /// the camera's JPEG. One preference for every raw, kept between runs;
     /// a raw with no JPEG in it shows its developed picture whatever it is.
     rendering: Rendering,
+    /// Whether a raw whose profile says how it should look is shown as the
+    /// profile renders it. One preference for every raw, kept between runs,
+    /// for the reason [`App::rendering`] is.
+    pub(super) profile: bool,
     /// Where the view is going: the pan and zoom every key and press act
     /// on. What is on screen is `App::shown_view`, which is this once it
     /// has arrived.
@@ -710,6 +714,7 @@ impl App {
                 true => Rendering::CameraJpeg,
                 false => Rendering::Developed,
             },
+            profile: kept_state.profile,
             view,
             motion: None,
             kept: Kept::default(),
@@ -1412,16 +1417,21 @@ impl App {
     /// room. The picture follows at once; the numbers follow once
     /// [`measuring`] has them, which for a weight met before is at once
     /// too. Nothing happens for a picture with no map, or a lift already at
-    /// the weight.
+    /// the weight. A raw's profile is not room above white, and is the
+    /// switch's to weigh: all of it or none.
     fn refresh_lift(&mut self) {
         let headroom = self.display_headroom();
+        let profile = self.profile;
         let Some(current) = &mut self.current else {
             return;
         };
         let Some(map) = &current.image.gain_map else {
             return;
         };
-        let weight = map.weight(headroom);
+        let weight = match map.is_profile() {
+            true => f32::from(u8::from(profile)),
+            false => map.weight(headroom),
+        };
         if current
             .lift
             .as_ref()
@@ -1497,6 +1507,15 @@ impl App {
             let _ = self.send(request);
         }
         Effect::Nothing
+    }
+
+    /// Shows a raw as its profile renders it, or as developed, for this raw
+    /// and every one after it. The rendering is the gain map the raw was
+    /// read with, so nothing is read again: its weight is all that moves.
+    pub(super) fn toggle_profile(&mut self) -> Effect {
+        self.profile = !self.profile;
+        self.refresh_lift();
+        Effect::Redraw
     }
 
     /// Shows the image of `kind` the picture carries in its place, or the
@@ -1651,6 +1670,7 @@ impl App {
             ui_scale: self.ui_scale,
             order: self.filmstrip.order(),
             camera_jpeg: self.rendering == Rendering::CameraJpeg,
+            profile: self.profile,
             pixel_format: self.panels.pixel_format,
             coordinate_format: self.panels.coordinate_format,
             geographic_format: self.panels.geographic_format,
@@ -2904,11 +2924,18 @@ impl App {
         // The camera's JPEG was asked for and the file has none: said, since
         // the button that would say it is not drawn for such a file. Not for
         // a file rewritten on disk, which said it when it arrived.
-        if self.rendering == Rendering::CameraJpeg
-            && camera_jpeg == CameraJpeg::Missing
-            && matches!(file.mode, Reload::Fresh | Reload::Rendering)
-        {
-            self.toast(NO_CAMERA_JPEG_SHOWN, Level::Message);
+        // So is the other way round: the developed picture asked for, and
+        // the file's own data would not develop.
+        if matches!(file.mode, Reload::Fresh | Reload::Rendering) {
+            match (self.rendering, camera_jpeg) {
+                (Rendering::CameraJpeg, CameraJpeg::Missing) => {
+                    self.toast(NO_CAMERA_JPEG_SHOWN, Level::Message);
+                }
+                (Rendering::Developed, CameraJpeg::Only(_)) => {
+                    self.toast(ONLY_CAMERA_JPEG_SHOWN, Level::Message);
+                }
+                _ => {}
+            }
         }
         // The loader measured the base; a surface with room above white
         // shows the lift, and the numbers follow it.
@@ -3370,6 +3397,10 @@ const RECONFIGURED: &str = "Configuration reloaded.";
 
 /// Said when a raw arrives with the camera's JPEG asked for and none in it.
 const NO_CAMERA_JPEG_SHOWN: &str = "No camera JPEG in this file; showing the developed picture.";
+
+/// Said when a raw arrives with the developed picture asked for, and its
+/// own data would not develop.
+const ONLY_CAMERA_JPEG_SHOWN: &str = "Could not develop this raw; showing the camera JPEG.";
 
 /// How a file arriving stands to the picture on screen, which is what
 /// decides what carries over to it and what starts afresh.

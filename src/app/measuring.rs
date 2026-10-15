@@ -238,11 +238,12 @@ mod tests {
                 width: 2,
                 height: 1,
                 channels: 1,
-                data: vec![0, 255],
+                data: crate::image::gain_map::Data::Codes(vec![0, 255]),
                 lift: Lift::Apple { headroom: 4.0 },
             })),
             depth: None,
             opens_on: None,
+            sensor: None,
         })
     }
 

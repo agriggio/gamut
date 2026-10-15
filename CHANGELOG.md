@@ -21,15 +21,55 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
   line edged in black, so it shows on light and dark pictures alike. The
   glass now centers on the middle of the pixel the readout reads and moves
   a pixel at a time.
+- The histogram panel's *Image* section plots what a camera raw actually
+  stores: the sensor's counts, a line to the color under the filter, from
+  nothing to the white level with the black level on the axis, and the
+  pointer's one photosite in its color — or, for a raw stored three counts
+  a pixel, the three worked back from the developed pixel. The developed
+  picture's plot moves up to a new *Develop* section, in stops below white
+  with its readout in the same stops, with the demosaic, the balance in
+  stops per color, the light it is for in kelvin, the share of each channel
+  clipped at white, and for a mosaic the photosites around the pointer.
+  Resting on the demosaic's name says what it does, on the clipped row what
+  its shares are of, and on the *Profile* section's *Pixel* row what its
+  numbers are. A HEIC or a JPEG has no Develop section, since nothing was
+  developed.
+- A developed raw is plotted in stops, as a file of linear floats is: its
+  Display plot spreads a dark frame across the panel instead of piling it
+  against the left edge, white stays at the top however dark the frame,
+  and the Display's readout of a value is stops below white.
+- An iPhone's ProRAW — compressed with JPEG XL, or with lossless JPEG
+  where the phone was set to the older form — is developed like any other
+  raw — the camera's balance and color, in Rec. 2020 — and shown as its
+  camera profile renders it, and opens in a fraction of the time it took
+  LibRaw to unpack, since its tiles are decoded in parallel under either
+  compression: the baseline
+  exposure, Apple's local tone map and the profile's tone curve, which put
+  it close to the camera's JPEG. `P` switches the rendering off and on for
+  every raw, and the choice is kept between runs. The histogram panel's
+  *Profile* section plots how far the rendering lifts each pixel, and under
+  it its parts in the order they are applied: the file's tone curve, the
+  gain table, the exposure, and the pixel in ProPhoto, where the profile
+  works. Pointing at the picture follows it up the stages a color at a
+  time, in stops below white, each stage's three numbers the next one's
+  inputs and, on the *Total lift* row under the plot, in their colors, the
+  profile's lift of each color, which is what the plot counts; the
+  table shows the blend it is read at and the one gain all three get, the
+  curve the two colors it is applied to and the one placed between them,
+  and each stage is explained under the pointer. `G` and the
+  sun beside `HDR` show the profile's lift in the picture's place as a
+  gain map, and the information panel describes the profile. `--no-gain-map` leaves the rendering behind too.
 
 ### Changed
 
-- The histogram's Image section plots each channel as the file stores it on
-  a plot of its own, one under the other, and no longer plots a luminance
+- The histogram's Image section plots each channel as the file stores it,
+  the channels over one another on one plot, each in its own ink and as
+  tall as its own share of its pixels, and no longer plots a luminance
   line: the file stores none, and the one it drew weighted a wide-gamut
   file's channels as though they were BT.709's. A photograph's channels
-  share one axis, as before; a file read as data has each channel on its
-  own range, trimmed of strays, with its own row of values under it.
+  share one axis, as before; a file read as data has each channel on a
+  plot of its own, over its own range, trimmed of strays, with its own row
+  of values under it.
 - Every statistic is now counted from every pixel rather than from a sample
   of about two million: the extremes, the percentiles the *Full range* and
   *Trimmed* windows read, the key the exposure is metered from, and every
@@ -205,6 +245,9 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
   discrete card — or whose compositor renders on the discrete card with a
   second monitor on the integrated one — showed a black window.
   `WGPU_ADAPTER_NAME` and `WGPU_POWER_PREF` override the choice. Closes #5.
+- A raw that cannot be developed but carries the camera's JPEG — a damaged
+  file, or one holding its picture in a form not read here — opens as that
+  JPEG, saying so, rather than failing.
 
 ## 0.10.0 - 2026-10-01
 

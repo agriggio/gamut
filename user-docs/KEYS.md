@@ -547,6 +547,7 @@ that is not a paste; open it as an argument instead.
 | `v` | Show a raw as the camera's JPEG of it, or as the picture developed from the sensor | `display.camera-jpeg` |
 | `Shift+D` | Show a picture's depth map in its place, or the picture again | `display.depth` |
 | `Shift+G` | Show a picture's gain map in its place, or the picture again | `display.gain-map` |
+| `Shift+P` | Show a raw as its camera profile renders it, or as developed | `display.profile` |
 | `r` | Cycle false color: gray → viridis → magma → turbo | `display.colormap` |
 | `z` | Reset every display setting | `display.reset` |
 | `;` | Turn the picture a quarter counterclockwise | `display.turn.left` |
@@ -575,7 +576,9 @@ file that looks as the camera showed it.
 Some cameras write a JPEG the full size of the frame; others write a smaller
 one, around two megapixels, and the top bar says how large the picture on
 screen is. A raw with no JPEG in it has no button, and shows its developed
-picture while the camera's JPEG is chosen, saying so as it opens.
+picture while the camera's JPEG is chosen, saying so as it opens. A raw that
+cannot be developed has no button either, and shows its JPEG while the
+developed picture is chosen, saying so as it opens.
 
 A picture that carries a depth map — a phone's portrait, say — has a
 button with three axes on it, the third dashed, between that one and `HDR`.
@@ -608,6 +611,37 @@ much of it is being applied. A map with a channel for each color is drawn in
 color. The gain map's button and the depth map's take each other's place:
 with both on a picture, one map is up at a time.
 
+Some raws say how they should look: an iPhone's ProRAW carries an exposure,
+a brightening of the shadows that varies across the picture, and a tone
+curve, which together are how the iPhone rendered it. `gamut` shows such a
+raw that way, and `P`, or the camera button at the end of the *Profile*
+heading in the histogram panel, shows the picture as developed instead,
+without them: much darker for most iPhone pictures. The choice holds for
+every raw, and for the next time `gamut` starts. Nothing is read again, so
+the switch is immediate, and the view and the display settings stay as they
+are. `G` shows how far the profile brightens each pixel in the picture's
+place, in stops, as it shows a gain map, and its button, just before `HDR`,
+says the map is calculated from the camera's profile.
+
+Under the *Profile* plot are the rendering's stages, read upward in the
+order they are applied: the tone curve; the gain table, how far it lifts
+a pixel by how bright it is, with the spread across the picture as a band
+and the pixel under the pointer as a line; the exposure on its own row;
+and at the foot the pixel in *ProPhoto*, the space the profile works in,
+which a matrix carries it into from the developed picture. Pointing at the
+picture follows the pixel up the stages a color at a time, every number
+in stops below white and each in its color: the three in ProPhoto, the
+three after the exposure, the three after the gain in the table's caption,
+and the three the curve makes of them in the curve's. Each stage's numbers
+are the next one's inputs, and the *Total lift* row under the plot at the
+top of the section is how far the profile lifted each color of the pixel,
+which is what that plot counts. The table is read once a
+pixel, at a blend of its colors — the dot on its curve, with the gain it
+reads there — and the one gain multiplies all three, shown as ticks on the
+axis. The curve is applied to the brightest and dimmest colors, the dots
+on it, and the middle one keeps its place between them, the hollow dot.
+Resting on a stage says what it is.
+
 The window is the one place the case of a key matters: `a` and `s` move
 the value that comes out black, `A` and `S` the value that comes out white.
 Each press moves its end by a twentieth of the window's width as the
@@ -636,6 +670,36 @@ or a *Window* rule is pressed, and the exposure survives that. A row of stops un
 the Output and Display plots counts from white — 0 is what comes out white,
 `-2` is two stops under it, and on an HDR screen `+1` is a stop over — and
 the one under the gain map's plot counts how far the map lifts the picture.
+A raw that says how it should look has a *Profile* section instead, whose
+plot counts how far that rendering lifts each pixel. The rows of stops
+under the tone curve and the gain table count the brightness going in,
+from white: the curve's toe, where it takes the deepest shadows to black,
+differs from one picture to the next.
+
+For a camera raw, the *Image* section at the foot is the sensor's own
+counts: one plot with a line for each color under the filter, from nothing
+to the sensor's white level, with the black level marked on the axis, so
+the room to the right of a line is how far the sensor was from saturating.
+Pointing at the picture writes the one count under the pointer in its
+color, since a photosite holds one color; a raw that stores three counts
+a pixel writes all three, with a `~` before them where the development
+clipped a channel and they can only be worked back approximately. Above
+it, the *Develop* section is the picture as it was developed from those
+counts, plotted in stops below white with its readout in the same stops,
+with the demosaic, the balance each color was multiplied by in
+stops — *applied in the file* where the camera balanced the counts before
+writing them — the light that balance is for as a color temperature, and
+the share of each channel standing at white: a channel against the right
+edge there and short of it in the *Image* plot below was put there by the
+balance, not by the sensor. Resting the pointer on the demosaic's name
+says what it does, on the clipped row what its shares are of, and on the
+*Profile* section's *Pixel* row what its numbers are. Under the rows, for
+a mosaic, are the photosites around the pointer, a window of five by five
+counts in their colors, which is what the demosaic read to make the pixel.
+A raw's *Display* plot is spaced in stops too, as a file of linear floats
+is, since both are linear light, and its readout is stops below white: a
+dark frame spreads across the plot instead of piling against its left
+edge.
 Pointing at a plot names the value under
 the pointer at that stage; pointing at the picture marks the pixel on every
 plot and writes its value at each stage, from the file at the foot of the

@@ -14,6 +14,13 @@
 //! The link lines are printed here rather than by `pkg-config` itself, for
 //! one word in them: Homebrew's `libraw_r.pc` names the GNU C++ library,
 //! `stdc++`, which a Mac does not have — its C++ library is `c++`.
+//!
+//! Beside the link, one C file is compiled against the library's own
+//! header: `decode/raw/shim.c`, three accessors for the fields of
+//! `libraw_data_t` that the C interface has none for and that sit too deep
+//! in the struct to transcribe — the mosaic, and the black levels. Built
+//! with the header the link found, so the offsets are the installed
+//! version's whatever it is.
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
@@ -30,4 +37,10 @@ fn main() {
         let name = if mac && name == "stdc++" { "c++" } else { name };
         println!("cargo:rustc-link-lib={name}");
     }
+    println!("cargo:rerun-if-changed=src/image/decode/raw/shim.c");
+    cc::Build::new()
+        .file("src/image/decode/raw/shim.c")
+        .includes(&library.include_paths)
+        .warnings(true)
+        .compile("gamut_libraw_shim");
 }

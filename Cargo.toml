@@ -204,6 +204,10 @@ block2 = "0.6.2"
 # Finds the system LibRaw for `decode::raw`, and refuses one older than the
 # struct layouts `raw/ffi.rs` transcribes — see `build.rs`.
 pkg-config = "0.3"
+# Compiles `raw/shim.c`, the three accessors into LibRaw's data that its C
+# interface lacks, against the header `pkg-config` found. Already in the
+# tree as a build dependency of the Wayland crates, so it adds nothing.
+cc = "1"
 
 [dev-dependencies]
 # Drives the interface without a window, through the accessibility tree egui

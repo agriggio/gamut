@@ -805,7 +805,9 @@ impl Pass<'_> {
     /// The toggle that shows the picture's gain map in its place, between
     /// the depth map's and the headroom switch, the one whose room the map
     /// is about: a square with the mark alone, lit while the map is up, and
-    /// left out as the depth map's is. Says whether it was drawn.
+    /// left out as the depth map's is. Says whether it was drawn. A raw's
+    /// profile is a gain map too, the one its rendering amounts to, and
+    /// wears the same sun: the tooltip says where the map comes from.
     fn gain_map_toggle(&mut self, ui: &mut Ui, current: &Current) -> bool {
         if !current.picture().0.carries(Auxiliary::GainMap) || self.input.arriving.is_some() {
             return false;

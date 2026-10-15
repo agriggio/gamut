@@ -88,10 +88,26 @@ pub(super) fn pixel_mark(current: &Current, lift: Option<&Plot>, x: u32, y: u32)
     } else {
         format!("{} stops", stops.map(lift_words).join(" / "),)
     };
+    // A map with a channel to the color marks each channel's lift in its
+    // own ink, the one rule being the mean otherwise.
+    let channels = if map.channels == 1 {
+        Vec::new()
+    } else {
+        stops
+            .iter()
+            .zip(Plane::COLOR)
+            .map(|(&lifted, plane)| Channel {
+                plane,
+                bin: lift.and_then(|lift| lift.bin_at(lifted)),
+                words: lift_words(lifted),
+                rank: None,
+            })
+            .collect()
+    };
     Some(Mark {
         bin: lift.and_then(|lift| lift.bin_at(mean)),
         words,
-        ..Mark::default()
+        channels,
     })
 }
 

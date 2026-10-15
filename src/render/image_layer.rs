@@ -16,7 +16,7 @@ use super::reduce::{self, Level, Reducer};
 use super::shader_codes;
 use super::upload::{self, Capabilities, Layout, Reduced};
 use crate::image::auxiliary::Showing;
-use crate::image::gain_map::{GainMap, Table};
+use crate::image::gain_map::{Data, GainMap, Table};
 use crate::image::orient::Turn;
 use crate::image::{
     AlphaMode, Channels, DecodedImage,
@@ -89,7 +89,7 @@ struct Lift {
 #[derive(Clone, Copy)]
 pub struct Lifted<'a> {
     pub group: &'a wgpu::BindGroup,
-    /// 0 for no lift, else the map's channel count.
+    /// How the map is read, [`shader_codes::lift`]'s code: 0 for no lift.
     pub code: u32,
     pub map_size: [f32; 2],
     pub base_offset: [f32; 4],
@@ -101,7 +101,7 @@ impl<'a> Lifted<'a> {
         match lift {
             Some(lift) => Self {
                 group: &lift.group,
-                code: u32::from(lift.map.channels),
+                code: shader_codes::lift(&lift.map, lift.weight),
                 map_size: [lift.map.width as f32, lift.map.height as f32],
                 base_offset: padded(lift.base_offset),
                 alternate_offset: padded(lift.alternate_offset),
@@ -747,8 +747,12 @@ impl Lift {
             _ => Channels::Rgb,
         };
         // A byte a component, as the map holds it: the shader reads each
-        // through the table, so no curve comes off on the way in.
-        let plan = upload::Plan::unorm8(&map.data, channels, map.width);
+        // through the table, so no curve comes off on the way in. A map of
+        // ratios is the gains themselves, in half floats.
+        let plan = match &map.data {
+            Data::Codes(codes) => upload::Plan::unorm8(codes, channels, map.width),
+            Data::Ratios(ratios) => upload::Plan::float16(ratios, channels, map.width),
+        };
         let map_texture = gpu::texture_2d(
             &upload.device,
             "gain map",

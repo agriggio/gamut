@@ -22,9 +22,13 @@ fn premultiplied(texel: vec4<f32>) -> vec4<f32> {
 
 // The gains the table gives one value of the map, per channel: for a
 // one-channel map the three gains of its one value; for a three-channel
-// map each channel's gain of its own value.
+// map each channel's gain of its own value; and for a map of ratios, a
+// raw's profile, the gains themselves, read without the table.
 fn gains(coord: vec2<i32>) -> vec3<f32> {
     let value = textureLoad(gain_map, coord, 0);
+    if params.lift == 4u {
+        return value.rgb;
+    }
     let at = vec3<i32>(round(value.rgb * 255.0));
     if params.lift == 1u {
         return textureLoad(gain_table, vec2<i32>(at.r, 0), 0).rgb;
