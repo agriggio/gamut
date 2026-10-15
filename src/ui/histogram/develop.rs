@@ -98,15 +98,16 @@ pub(super) fn row(rect: Rect, shape: Shape, index: usize) -> Rect {
 }
 
 /// The photosites' caption and ground, under the last row, in the section
-/// laid out at `rect`.
+/// laid out at `rect`: the caption the width of the rows above it, the
+/// ground set in as the plots are.
 pub(super) fn grid_part(rect: Rect, shape: Shape) -> (Rect, Rect) {
     let last = row(rect, shape, shape.rows.saturating_sub(1));
     let x = rect.x + PLOT_INSET;
     let width = rect.width - 2.0 * PLOT_INSET;
     let caption = Rect::new(
-        x,
+        rect.x,
         last.bottom() + section::PART_GAP,
-        width,
+        rect.width,
         section::CAPTION_HEIGHT,
     );
     let ground = Rect::new(x, caption.bottom() + PLOT_INSET, width, GRID_HEIGHT);

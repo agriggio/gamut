@@ -159,13 +159,15 @@ impl Section {
             // A shorter plot and the row of stops under it: how much of the
             // lift is applied is the header's to say.
             Section::GainMap => head + SHORT_PLOT_HEIGHT + PLOT_INSET + EV_ROW,
-            // The lift's plot and its row of stops, as the Gain map's; under
-            // them the curve's and the gain table's, on the same footing;
-            // and the exposure's row.
+            // The lift's plot and its row of stops, as the Gain map's, and
+            // the row of the lift's three numbers under them; under that
+            // the curve's and the gain table's, on the same footing; and
+            // the exposure's row.
             Section::Profile => {
                 head + SHORT_PLOT_HEIGHT
                     + PLOT_INSET
                     + EV_ROW
+                    + TOTAL_ROW
                     + 2.0 * PART_HEIGHT
                     + 2.0 * (display::ROW_GAP + display::ROW_HEIGHT)
             }
@@ -197,14 +199,24 @@ impl Section {
     }
 }
 
-/// One of the Profile section's parts under its lift's plot, `index` down
+/// The row under the Profile section's lift and its row of stops: how far
+/// the profile lifted each channel of the pointer's pixel, which is what
+/// the plot above it counts.
+pub fn total_row(rect: Rect) -> Rect {
+    let lift = Section::Profile.plot(rect);
+    let y = lift.bottom() + PLOT_INSET + EV_ROW + display::ROW_GAP;
+    Rect::new(rect.x, y, rect.width, display::ROW_HEIGHT)
+}
+
+/// One of the Profile section's parts under its lift's row, `index` down
 /// from it: the caption that names the part and says what the pointer's
-/// pixel reads on it, and the ground the part is drawn on, set in from the
-/// left for the stops its height is in.
+/// pixel reads on it, laid out as the section's rows are, the width of the
+/// section; and the ground the part is drawn on, set in from the left for
+/// the stops its height is in.
 fn part(rect: Rect, index: usize) -> (Rect, Rect) {
     let lift = Section::Profile.plot(rect);
-    let top = lift.bottom() + PLOT_INSET + EV_ROW + index as f32 * PART_HEIGHT + PART_GAP;
-    let caption = Rect::new(lift.x, top, lift.width, PART_CAPTION_HEIGHT);
+    let top = total_row(rect).bottom() + index as f32 * PART_HEIGHT + PART_GAP;
+    let caption = Rect::new(rect.x, top, rect.width, PART_CAPTION_HEIGHT);
     let ground = Rect::new(
         lift.x + SCALE_GUTTER,
         caption.bottom() + PLOT_INSET,
@@ -215,7 +227,7 @@ fn part(rect: Rect, index: usize) -> (Rect, Rect) {
 }
 
 /// The Profile section's tone curve, in the section laid out at `rect`:
-/// its caption and its ground, under the lift's plot and its row of stops.
+/// its caption and its ground, under the lift's row.
 pub fn curve_part(rect: Rect) -> (Rect, Rect) {
     part(rect, 0)
 }
@@ -252,20 +264,26 @@ pub fn prophoto_row(rect: Rect) -> Rect {
 /// photosites: the gap from the row above.
 pub const PART_GAP: f32 = 8.0;
 
-/// A caption of two lines of the plot's small words: a name over what the
-/// plot under it is — the Develop section's photosites.
-pub const CAPTION_HEIGHT: f32 = 2.0 * CLIP_TEXT + 6.0;
+/// A caption of two lines: a name, in the face the rows' names are in,
+/// over what the plot under it is, in the plot's small words — the
+/// Develop section's photosites.
+pub const CAPTION_HEIGHT: f32 = PART_CAPTION_HEIGHT + CLIP_TEXT + 2.0;
 
-/// A Profile part's caption: the one line its name takes, the plot under it
-/// saying the rest with the guides to the pointer's pixel.
-pub const PART_CAPTION_HEIGHT: f32 = CLIP_TEXT + 4.0;
+/// A Profile part's caption: the one line its name takes, in the face the
+/// rows' names are in, the plot under it saying the rest with the guides
+/// to the pointer's pixel.
+pub const PART_CAPTION_HEIGHT: f32 = ROW_TEXT + 4.0;
+
+/// What the lift's row takes under the row of stops: its gap and its
+/// height, as the rows at the foot of the section have.
+const TOTAL_ROW: f32 = display::ROW_GAP + display::ROW_HEIGHT;
 
 /// How tall a part's plot is drawn: as tall as the lift's plot, the two
 /// being read one above the other.
 const PART_PLOT_HEIGHT: f32 = SHORT_PLOT_HEIGHT;
 
-/// What a part takes of the section, from the row of stops above it to its
-/// own.
+/// What a part takes of the section, from what is above it to its own
+/// row of stops.
 const PART_HEIGHT: f32 =
     PART_GAP + PART_CAPTION_HEIGHT + PLOT_INSET + PART_PLOT_HEIGHT + PLOT_INSET + EV_ROW;
 

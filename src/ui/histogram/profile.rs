@@ -19,7 +19,8 @@
 //! the curve is applied to the brightest and dimmest channels with the
 //! middle one placed between them, so its plot has two dots on the curve
 //! and a hollow one between. What the lift at the top makes of the three,
-//! back in Rec. 2020, is the header's.
+//! back in Rec. 2020, is the row under the lift's plot: the three numbers
+//! the plot counts, read straight off it.
 
 use std::sync::Arc;
 
@@ -42,10 +43,6 @@ const TICK: f32 = 4.0;
 /// How far a guide's words stand off the guide and off the plot's edge.
 const GUIDE_GAP: f32 = 3.0;
 
-/// The room between the tone curve's scale and the first of the channels'
-/// lift bars, and between one bar and the next.
-const LIFT_BAR_GAP: f32 = 2.0;
-
 /// How strongly the spread of the gain table's points is laid on its
 /// ground: a wash of the accent, behind the line it is the range of.
 const SPREAD_ALPHA: f32 = 0.35;
@@ -67,7 +64,7 @@ fn applied(current: &Current) -> bool {
         .is_some_and(|lift| lift.weight() > 0.0)
 }
 
-/// What the header says with nothing under the pointer: whether the
+/// What the header says: whether the
 /// rendering is on screen.
 fn summary(applied: bool) -> &'static str {
     if applied { APPLIED } else { NOT_APPLIED }
@@ -83,9 +80,10 @@ fn stops_words(stops: f32, places: usize) -> String {
     format!("{:+.*}", places, stops + 0.0).replace('-', "\u{2212}")
 }
 
-/// An exposure, as the exposure's row writes it.
+/// An exposure, as the exposure's row writes it: to the tenth the other
+/// shares of the lift are written to, so the three can be summed by eye.
 fn exposure_words(stops: f32) -> String {
-    format!("{} EV", stops_words(stops, 2))
+    format!("{} EV", stops_words(stops, 1))
 }
 
 /// Linear light as stops below white.
@@ -211,53 +209,27 @@ pub(super) fn show(
         applied,
         icon::CAMERA,
     );
-    // The header's readout: the pixel's lift a channel to the cell in its
-    // own ink, as every row under it writes the channels, where the pointer
-    // is on the picture; its words otherwise.
-    match mark {
-        Some(mark) if !mark.channels.is_empty() => {
-            section::header(pass, ui, Section::Profile, rect, None);
-            let line = section::header_line(rect);
-            // The gain map's words, which the mark is, with the true minus
-            // the rows under the header write their stops with.
-            let cells: [String; 3] = std::array::from_fn(|c| {
-                mark.channels.get(c).map_or_else(String::new, |channel| {
-                    channel.words.replace('-', "\u{2212}")
-                })
-            });
-            channel_cells(
-                pass,
-                ui,
-                section::readout_end(Section::Profile, line),
-                line.y + line.height / 2.0,
-                &cells,
-                &FontId::proportional(ROW_TEXT),
-            );
-        }
-        _ => {
-            let readout = mark
-                .map(|mark| mark.words.clone())
-                .unwrap_or_else(|| summary(applied).to_string());
-            section::header(pass, ui, Section::Profile, rect, Some(&readout));
-        }
-    }
-    // What the header's three numbers are, under the pointer: the line
-    // short of the switch, which has a tooltip of its own.
-    let line = section::header_line(rect);
-    tip_on(
-        pass,
-        ui,
-        Rect::new(
-            line.x,
-            line.y,
-            section::readout_end(Section::Profile, line) - line.x,
-            line.height,
-        ),
-        "profile lift",
-        Tip::ProfileLift,
-    );
+    // The header says whether the rendering is on screen; the pixel's
+    // numbers are the row under the plot, where the plot counts them.
+    section::header(pass, ui, Section::Profile, rect, Some(summary(applied)));
 
     lift(pass, ui, Section::Profile.plot(rect), plots, mark);
+
+    let font = FontId::proportional(ROW_TEXT);
+    // The row under the plot: the pixel's lift a channel to the cell in
+    // its own ink, as every row under it writes the channels, where the
+    // pointer is on the picture — the gain map's words, which the mark
+    // is, with the true minus the rows write their stops with.
+    let total_row = section::total_row(rect);
+    let cells = mark.filter(|mark| !mark.channels.is_empty()).map(|mark| {
+        std::array::from_fn(|c| {
+            mark.channels.get(c).map_or_else(String::new, |channel| {
+                channel.words.replace('-', "\u{2212}")
+            })
+        })
+    });
+    row(pass, ui, total_row, TOTAL_LIFT, "", cells, &font);
+    tip_on(pass, ui, total_row, "profile lift", Tip::ProfileLift);
 
     let pixel = pass
         .input
@@ -265,7 +237,6 @@ pub(super) fn show(
         .and_then(|[x, y]| Pixel::at(current, profile, x, y));
     curve(pass, ui, profile, section::curve_part(rect), pixel.as_ref());
     gain_table(pass, ui, profile, section::table_part(rect), pixel.as_ref());
-    let font = FontId::proportional(ROW_TEXT);
     // The exposure's row: the shift, and each channel after it.
     let exposure_row = section::exposure_row(rect);
     row(
@@ -400,11 +371,13 @@ fn tick_up(ui: &egui::Ui, bars: Rect, y: f32, ink: Color32) {
     );
 }
 
-/// A part's caption at `caption`: its name, in the plot's small words; on
-/// the right of it what the pointer's pixel comes out of the part as, a
-/// channel to the cell in its own ink; and under both what its axes are
-/// where `axes` says anything — a second line the caption is then laid out
-/// with room for.
+/// A part's caption at `caption`, laid out as the section's rows are: its
+/// name, in the face and the dim ink the rows' names are in, with on the
+/// right of it what the pointer's pixel comes out of the part as, a
+/// channel to the cell in its own ink, the line taking
+/// `section::PART_CAPTION_HEIGHT`; and under both what its axes are, in
+/// the plot's small words, where `axes` says anything — a second line the
+/// caption is then laid out with room for.
 pub(super) fn caption(
     pass: &Pass,
     ui: &egui::Ui,
@@ -414,26 +387,25 @@ pub(super) fn caption(
     cells: Option<[String; 3]>,
 ) {
     let painter = ui.painter();
-    let font = FontId::proportional(CLIP_TEXT);
-    let lines = if axes.is_empty() { 1.0 } else { 2.0 };
-    let line = caption.height / lines;
-    let first = caption.y + line / 2.0;
+    let font = FontId::proportional(ROW_TEXT);
+    let first = caption.y + section::PART_CAPTION_HEIGHT / 2.0;
     painter.text(
         pos2(pass.grid.snap(caption.x), first),
         egui::Align2::LEFT_CENTER,
         name,
         font.clone(),
-        pass.theme.text_primary.into(),
+        pass.theme.text_dim.into(),
     );
     if let Some(cells) = cells {
         channel_cells(pass, ui, caption.right(), first, &cells, &font);
     }
     if !axes.is_empty() {
+        let second = (caption.y + section::PART_CAPTION_HEIGHT + caption.bottom()) / 2.0;
         painter.text(
-            pos2(pass.grid.snap(caption.x), first + line),
+            pos2(pass.grid.snap(caption.x), second),
             egui::Align2::LEFT_CENTER,
             axes,
-            font,
+            FontId::proportional(CLIP_TEXT),
             pass.theme.text_dim.into(),
         );
     }
@@ -556,36 +528,6 @@ fn curve(
     line(pass, ui, points);
     if let Some(pixel) = pixel {
         let [high, middle, low] = tone_order(pixel.into_curve);
-        // Each channel's lift, up the left beside the scale: from where it
-        // came into the profile, the ProPhoto row's level, to where it
-        // comes out, the tick. Its length in the stops of the scale is
-        // where the channel's rule stands on the lift's histogram above,
-        // which is in stops of lift rather than of light. The word is on
-        // the brightest channel's.
-        let mut guide_at = None;
-        for (c, plane) in Plane::COLOR.into_iter().enumerate() {
-            let (from, to) = (pixel.prophoto[c], pixel.out[c]);
-            if from > 0.0 && to > 0.0 {
-                let x = bars.x + TICK + LIFT_BAR_GAP + c as f32 * (CURVE_WIDTH + LIFT_BAR_GAP);
-                let (top, bottom) = (up(clamped(to)), up(clamped(from)));
-                ui.painter().line_segment(
-                    [pos2(x, top), pos2(x, bottom)],
-                    Stroke::new(CURVE_WIDTH, plane.ink()),
-                );
-                if c == high {
-                    guide_at = Some((x, (top + bottom) / 2.0));
-                }
-            }
-        }
-        if let Some((x, y)) = guide_at {
-            ui.painter().text(
-                pos2(x + CURVE_WIDTH + 3.0 * GUIDE_GAP, y),
-                egui::Align2::LEFT_CENTER,
-                LIFT,
-                FontId::proportional(CLIP_TEXT),
-                Color32::from(pass.theme.text_primary),
-            );
-        }
         for (c, plane) in Plane::COLOR.into_iter().enumerate() {
             let (input, output) = (pixel.into_curve[c], pixel.out[c]);
             if input > 0.0 {
@@ -860,9 +802,9 @@ pub(in crate::ui) const GAIN_TABLE: &str = "Gain table";
 /// table gave there.
 const GAIN: &str = "gain";
 
-/// The word beside the channels' bars up the tone curve: each channel's
-/// lift, from where it came into the profile to where it comes out.
-pub(in crate::ui) const LIFT: &str = "lift";
+/// The name of the row under the lift's plot: how far the profile lifted
+/// each channel of the pointer's pixel, which is what the plot counts.
+pub(in crate::ui) const TOTAL_LIFT: &str = "Total lift";
 
 /// The names of the section's two rows: the exposure, and the developed
 /// pixel in the profile's own space.
@@ -887,9 +829,9 @@ mod tests {
     fn the_words_say_the_switch_and_the_stops() {
         assert_eq!(summary(true), "Applied");
         assert_eq!(summary(false), "Not applied");
-        assert_eq!(exposure_words(4.123), "+4.12 EV");
-        assert_eq!(exposure_words(-1.27), "\u{2212}1.27 EV");
-        assert_eq!(exposure_words(-0.0), "+0.00 EV");
+        assert_eq!(exposure_words(4.123), "+4.1 EV");
+        assert_eq!(exposure_words(-1.27), "\u{2212}1.3 EV");
+        assert_eq!(exposure_words(-0.0), "+0.0 EV");
         assert_eq!(stops_words(f32::NEG_INFINITY, 1), "black");
         assert_eq!(
             channel_words([1.0, 0.5, 0.0]),

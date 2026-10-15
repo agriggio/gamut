@@ -559,11 +559,13 @@ fn the_profile_section_takes_the_gain_maps_place_for_a_raw() {
     assert!(Section::Profile.has_button());
     assert_eq!(section::button(rect).right(), rect.right());
     let lift = Section::Profile.plot(rect);
-    let (caption, curve) = section::curve_part(rect);
+    let total = section::total_row(rect);
     assert!(
-        caption.y > lift.bottom() + PLOT_INSET + EV_ROW,
-        "clear of the lift's row"
+        total.y > lift.bottom() + PLOT_INSET + EV_ROW,
+        "clear of the lift's row of stops"
     );
+    let (caption, curve) = section::curve_part(rect);
+    assert!(caption.y > total.bottom(), "clear of the lift's row");
     assert!(
         curve.y - PLOT_INSET >= caption.bottom(),
         "the caption over the ground"
