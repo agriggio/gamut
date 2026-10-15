@@ -388,7 +388,7 @@ pub(super) fn action_of(tip: Tip) -> Option<Action> {
         Tip::Control(Control::CameraJpeg) => ToggleCameraJpeg,
         Tip::Control(Control::Depth) => ToggleDepth,
         Tip::Control(Control::GainMap | Control::ShowGainMap) => ToggleGainMap,
-        Tip::Control(Control::Mosaic) => ToggleMosaic,
+        Tip::Control(Control::Mosaic | Control::ShowMosaic) => ToggleMosaic,
         Tip::Control(Control::Profile) => ToggleProfile,
         Tip::Control(Control::Paste) => Action::Paste,
         Tip::Control(Control::Region) => ToggleRegion,
@@ -3478,7 +3478,7 @@ impl App {
             // The file read the other way, which is a read like a step.
             Control::Reading(reading) => self.read_as(reading),
             Control::GainMap | Control::ShowGainMap => self.toggle_beside(Auxiliary::GainMap),
-            Control::Mosaic => self.toggle_beside(Auxiliary::Mosaic),
+            Control::Mosaic | Control::ShowMosaic => self.toggle_beside(Auxiliary::Mosaic),
             Control::Profile => self.toggle_profile(),
             // The cross on the message at the foot of the window. The frame
             // after re-tests the pointer, which is what takes the highlight

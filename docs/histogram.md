@@ -61,7 +61,8 @@ counts rather than plotting the mosaic's samples (`counts_of` in
 `stored.rs`): the mosaic is those counts laid out, a photosite to a pixel
 with the other two channels at nothing, and a plot of its samples would be
 the same counts rescaled under three spikes at zero. The Develop section is
-left out, its plots being of the developed picture, which is not up.
+left out, its plots being of the developed picture, which is not up; the
+photosites at the Image section's foot stay where they are.
 
 Every section is a fixed height (`Section::height`), and the column is as
 tall as its sections, whatever the window. The two exceptions are both the
@@ -254,15 +255,22 @@ channel standing at white, read off the stored tallies (`Plane::rank` at
 what the shares are of under the pointer (`Tip::Clipped`). The
 balance row is the answer to the question the two sets of plots raise
 together, which is how a channel short of the sensor's white in the Image
-plot came to stand against it in the Develop plot. For a mosaic the
-section ends with the
-photosites around the pointer (`develop::grid`): a 5-by-5 window of the
-counts the demosaic read to make the pixel, each cell washed with its
-plane's ink and the pointer's own outlined, read through the user's turn
-and the camera's as every pixel is (`Sensor::photosite`). It is the one
-thing on the panel that a histogram cannot show, which is why it is drawn
-rather than counted: a demosaiced pixel is a function of its neighbors,
-not of the one count under it, and the window is those neighbors.
+plot came to stand against it in the Develop plot.
+
+For a mosaic the Image section ends with the photosites around the
+pointer (`photosites::show`, laid out by `stored::Layout::photosites`): a
+5-by-5 window of the counts the demosaic read to make the pixel, each cell
+washed with its plane's ink and the pointer's own outlined, read through
+the user's turn and the camera's as every pixel is (`Sensor::photosite`).
+It is the one thing on the panel that a histogram cannot show, which is
+why it is drawn rather than counted: a demosaiced pixel is a function of
+its neighbors, not of the one count under it, and the window is those
+neighbors. It stands under the counts' plots rather than the developed
+picture's because it is counts, and so it is there whether the developed
+picture or the mosaic is up, the Develop section being left out with the
+mosaic. Its caption is as tall as a section's header so that it can carry
+the button that shows the mosaic (`Control::ShowMosaic`), as the Gain map
+section's header carries the gain map's.
 
 The gap the section leaves is on purpose. The counts and the developed
 pixel are not one quantity — a photosite holds one of them, a pixel three —

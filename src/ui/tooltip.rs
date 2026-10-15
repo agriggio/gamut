@@ -478,7 +478,7 @@ pub fn disabled(tip: Tip, conditions: Conditions) -> Option<Refused> {
     if matches!(tip, Tip::Control(Control::GainMap | Control::ShowGainMap)) && !gain_map {
         return said(NO_GAIN_MAP);
     }
-    if tip == Tip::Control(Control::Mosaic) && !mosaic {
+    if matches!(tip, Tip::Control(Control::Mosaic | Control::ShowMosaic)) && !mosaic {
         return said(NO_MOSAIC);
     }
     if tip == Tip::Control(Control::Profile) && !profile {
@@ -536,6 +536,7 @@ pub fn disabled(tip: Tip, conditions: Conditions) -> Option<Refused> {
                 | Control::GainMap
                 | Control::ShowGainMap
                 | Control::Mosaic
+                | Control::ShowMosaic
                 | Control::Profile
                 | Control::Play
                 | Control::StepBack
@@ -688,6 +689,7 @@ pub fn words(tip: Tip) -> Option<String> {
         Tip::Control(Control::Marks) => "Mark clipped pixels",
         Tip::Control(Control::Reset) => "Reset the display",
         Tip::Control(Control::ShowGainMap) => "Show the gain map in the picture's place",
+        Tip::Control(Control::ShowMosaic) => "Show the mosaic in the picture's place",
         // Named rather than merely shown: a swatch of viridis is a green
         // rectangle that could be anything, and the map has a name people
         // ask for it by — the same one `--colormap` takes.

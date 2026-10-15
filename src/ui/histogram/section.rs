@@ -33,11 +33,12 @@ pub enum Section {
     /// Applied to the developed picture before anything else is.
     Profile,
     /// How a raw was developed from the sensor's counts: the developed
-    /// channels, what the development did to them, and the photosites
-    /// under the pointer. Between the profile, which is applied to the
-    /// developed picture, and the counts it was developed from.
+    /// channels and what the development did to them. Between the
+    /// profile, which is applied to the developed picture, and the counts
+    /// it was developed from.
     Develop,
-    /// The picture as the file stores it: the sensor's counts for a raw.
+    /// The picture as the file stores it: the sensor's counts for a raw,
+    /// and for a mosaic the photosites under the pointer.
     Image,
 }
 
@@ -171,13 +172,20 @@ impl Section {
                     + 2.0 * PART_HEIGHT
                     + 2.0 * (display::ROW_GAP + display::ROW_HEIGHT)
             }
-            // The developed channels' plots as the Image section's, the
-            // rows of what the development did, and the photosites: see
-            // `develop::Shape`.
+            // The developed channels' plots as the Image section's, and the
+            // rows of what the development did: see `develop::Shape`.
             Section::Develop => head + develop.height(),
             // A plot to the stored channel, and the rows of values under
-            // them: see `stored::Layout`.
-            Section::Image => head + image.body_height(),
+            // them: see `stored::Layout`. For a raw that keeps its
+            // mosaic, the photosites under them.
+            Section::Image => {
+                let photosites = if image.photosites {
+                    photosites::HEIGHT
+                } else {
+                    0.0
+                };
+                head + image.body_height() + photosites
+            }
         }
     }
 
@@ -260,11 +268,11 @@ pub fn prophoto_row(rect: Rect) -> Rect {
     )
 }
 
-/// Above each of the Profile section's parts, and the Develop section's
+/// Above each of the Profile section's parts, and the Image section's
 /// photosites: the gap from the row above.
 pub const PART_GAP: f32 = 8.0;
 
-/// A part's caption — a Profile part's, or the Develop section's
+/// A part's caption — a Profile part's, or the Image section's
 /// photosites' — the one line its name takes, in the face the rows' names
 /// are in, the plot under it saying the rest.
 pub const PART_CAPTION_HEIGHT: f32 = ROW_TEXT + 4.0;

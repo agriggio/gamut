@@ -621,8 +621,9 @@ the filter's repeating pattern shows as single red, green and blue pixels;
 zoomed out, the picture looks green, since a filter pattern has
 twice as many green photosites as red or blue and nothing has been balanced
 or brightened. Each photosite runs from the sensor's black to its white, and
-the display keys, the pixel readout and the histogram's *Image* section work
-on it as on the picture. Another click shows the developed picture again,
+the display keys and the pixel readout work on it as on the picture. The
+histogram's *Image* section still plots the sensor's counts, with the
+photosites around the pointer at its foot. Another click shows the developed picture again,
 and the toggle stays on as you step through other raws. An iPhone's ProRAW
 has no button, since it holds full-color pixels rather than a mosaic.
 
@@ -708,9 +709,12 @@ the share of each channel standing at white: a channel against the right
 edge there and short of it in the *Image* plot below was put there by the
 balance, not by the sensor. Resting the pointer on the demosaic's name
 says what it does, on the clipped row what its shares are of, and on the
-*Profile* section's *Pixel* row what its numbers are. Under the rows, for
-a mosaic, are the photosites around the pointer, a window of five by five
-counts in their colors, which is what the demosaic read to make the pixel.
+*Profile* section's *Pixel* row what its numbers are. At the foot of the
+*Image* section, for a mosaic, are the photosites around the pointer, a
+window of five by five counts in their colors, which is what the demosaic
+read to make the pixel. The eye at the end of their caption shows the
+mosaic in the picture's place, as `M` does; while it is up, the *Develop*
+section is left out.
 A raw's *Display* plot is spaced in stops too, as a file of linear floats
 is, since both are linear light, and its readout is stops below white: a
 dark frame spreads across the plot instead of piling against its left

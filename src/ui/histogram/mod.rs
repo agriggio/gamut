@@ -19,6 +19,7 @@ mod develop;
 mod display;
 mod gain_map;
 mod output;
+mod photosites;
 mod plot;
 mod profile;
 #[cfg(test)]

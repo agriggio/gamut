@@ -238,7 +238,8 @@ fn every_section_is_laid_out_at_its_own_height_whatever_the_room() {
         image,
         stored::Layout {
             planes: 3,
-            shared: true
+            shared: true,
+            photosites: false
         }
     );
     for (section, rect) in &layout {
@@ -287,7 +288,14 @@ fn the_image_section_has_a_plot_to_the_channel() {
         (measured(false), 3, false),
     ] {
         let layout = stored::Layout::of(&current);
-        assert_eq!(layout, stored::Layout { planes, shared });
+        assert_eq!(
+            layout,
+            stored::Layout {
+                planes,
+                shared,
+                photosites: false
+            }
+        );
         let rect = rect_of(&laid_out(&current, 600.0), Section::Image);
         let plots = stored::plots(rect, layout);
         assert_eq!(plots.len(), layout.plots());
@@ -1405,13 +1413,14 @@ fn a_raw_has_a_develop_section_over_the_sensors_counts() {
     assert!(!Section::Develop.has_button());
 
     // The Image section is the sensor's: three planes, one axis, the
-    // levels along it.
+    // levels along it, and the photosites at its foot.
     let image = stored::Layout::of(&current);
     assert_eq!(
         image,
         stored::Layout {
             planes: 3,
-            shared: true
+            shared: true,
+            photosites: true
         }
     );
     let source = stored::Source::image(&current);
@@ -1427,17 +1436,17 @@ fn a_raw_has_a_develop_section_over_the_sensors_counts() {
     assert_eq!(developed_source.full, 255.0);
 
     // The Develop section: the developed channels' plots at the Image
-    // section's heights, three rows, and the photosites.
+    // section's heights, and the rows of what the development did.
     let shape = develop::Shape::of(&current);
     assert_eq!(
         shape,
         develop::Shape {
             layout: stored::Layout {
                 planes: 3,
-                shared: true
+                shared: true,
+                photosites: false
             },
             rows: 4,
-            grid: true
         }
     );
     assert!(stored::Source::developed(&current).white_stops);
@@ -1451,16 +1460,68 @@ fn a_raw_has_a_develop_section_over_the_sensors_counts() {
     assert_eq!(plots.len(), 1, "the channels over one another");
     let first_row = develop::row(rect, shape, 0);
     assert!(first_row.y > plots[0].bottom());
-    let (caption, ground) = develop::grid_part(rect, shape);
-    assert!(caption.y > develop::row(rect, shape, 3).bottom());
+    assert_eq!(develop::row(rect, shape, 3).bottom(), rect.bottom());
+    // The photosites under the Image section's plots.
+    let rect = rect_of(&layout, Section::Image);
+    assert_eq!(
+        rect.height,
+        Section::Image.height(false, false, image, shape)
+    );
+    let top = rect.y + LABEL_HEIGHT + HEAD_GAP + PLOT_INSET + image.body_height();
+    assert!(top > stored::plots(rect, image)[0].bottom());
+    let (caption, ground) = photosites::part(rect, top);
     assert!(ground.y > caption.bottom());
     assert_eq!(ground.bottom() + PLOT_INSET, rect.bottom());
     // Without the mosaic, no photosites.
+    assert!(!stored::Layout::of(&recovered()).photosites);
     let plain = develop::Shape::of(&recovered());
-    assert!(!plain.grid);
     assert_eq!(plain.rows, 3, "no light where the file says nothing of it");
     assert!(plain.height() < shape.height());
     assert_eq!(develop::Shape::of(&picture(false)), develop::Shape::NONE);
+}
+
+/// While a raw's mosaic is up, the Develop section gives way, its plots
+/// being the developed picture's, and the Image section is still the
+/// sensor's counts, not the mosaic's samples, with the photosites at its
+/// foot as before.
+#[test]
+fn a_shown_mosaic_keeps_the_image_section_on_the_counts() {
+    let mut current = developed();
+    assert!(
+        current.show(Showing::Auxiliary(Auxiliary::Mosaic), |picture| {
+            picture.auxiliary(Auxiliary::Mosaic).map(Face::new)
+        })
+    );
+    let layout = laid_out(&current, 600.0);
+    let sections: Vec<Section> = layout.iter().map(|(section, _)| *section).collect();
+    assert_eq!(
+        sections,
+        [Section::Output, Section::Display, Section::Image]
+    );
+    let image = stored::Layout::of(&current);
+    assert_eq!(
+        image,
+        stored::Layout {
+            planes: 3,
+            shared: true,
+            photosites: true
+        }
+    );
+    assert_eq!(stored::Source::image(&current).full, 4095.0);
+    let rect = rect_of(&layout, Section::Image);
+    assert_eq!(
+        rect.height,
+        Section::Image.height(false, false, image, develop::Shape::NONE)
+    );
+    let plots = stored::plots(rect, image);
+    let top = rect.y + LABEL_HEIGHT + HEAD_GAP + PLOT_INSET + image.body_height();
+    assert!(top > plots[0].bottom());
+    let (caption, ground) = photosites::part(rect, top);
+    assert!(ground.y > caption.bottom());
+    assert_eq!(ground.bottom() + PLOT_INSET, rect.bottom());
+    // Back to the picture, the Image section is laid out the same.
+    assert!(current.show(Showing::Picture, |_| None));
+    assert_eq!(stored::Layout::of(&current), image);
 }
 
 /// The pointer's pixel is traced through the development: the Image

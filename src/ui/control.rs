@@ -145,6 +145,10 @@ controls! {
     /// its own rather than the same one, so that each of the two names
     /// itself once to whatever reads the interface by name.
     ShowGainMap,
+    /// The button at the end of the histogram's Photosites caption that
+    /// does what [`Control::Mosaic`] does: lit while the mosaic is on
+    /// screen. A kind of its own, as [`Control::ShowGainMap`] is.
+    ShowMosaic,
     /// The square at the end of the histogram's Profile section's header,
     /// which shows a raw as its profile renders it or as developed, for
     /// every raw: lit while the profile is applied, and there only for a
@@ -313,6 +317,7 @@ impl Control {
             Control::GainMap => "Gain map".to_string(),
             Control::Mosaic => "Mosaic".to_string(),
             Control::ShowGainMap => "Show gain map".to_string(),
+            Control::ShowMosaic => "Show mosaic".to_string(),
             Control::Profile => "Profile".to_string(),
             Control::Help => "Help".to_string(),
             Control::PixelFormat => "Pixel format".to_string(),

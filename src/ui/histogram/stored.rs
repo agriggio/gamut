@@ -45,7 +45,7 @@ use super::plot::{self, Counts, plane_bars};
 use super::*;
 use crate::image::Samples;
 use crate::image::auxiliary::Auxiliary;
-use crate::image::sensor::Sensor;
+use crate::image::sensor::{self, Sensor};
 use crate::image::stats::{self, Axis, Stored};
 use crate::ui::pixel::component;
 
@@ -121,7 +121,7 @@ pub(super) fn sensor_of(current: &Current) -> Option<&Sensor> {
 /// The sensor whose counts the Image section plots: the one behind the
 /// picture, while the picture or its mosaic — which is those counts laid
 /// out — is up.
-fn counts_of(current: &Current) -> Option<&Sensor> {
+pub(super) fn counts_of(current: &Current) -> Option<&Sensor> {
     matches!(
         current.showing,
         Showing::Picture | Showing::Auxiliary(Auxiliary::Mosaic)
@@ -205,11 +205,14 @@ impl<'a> Source<'a> {
 /// How the section is laid out for a file: how many channels it plots, and
 /// whether they share one axis — one plot, the channels over one another,
 /// with one row of values under it — or each has its own range, and so a
-/// plot of its own with its own row.
+/// plot of its own with its own row; and whether the photosites around the
+/// pointer hang under the plots, which the Image section's do for a raw
+/// that keeps its mosaic.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Layout {
     pub planes: usize,
     pub shared: bool,
+    pub photosites: bool,
 }
 
 impl Layout {
@@ -217,11 +220,16 @@ impl Layout {
     pub const ONE: Layout = Layout {
         planes: 1,
         shared: true,
+        photosites: false,
     };
 
     /// The Image section's layout for `current`.
     pub fn of(current: &Current) -> Self {
-        Self::of_source(&Source::image(current))
+        Self {
+            photosites: counts_of(current)
+                .is_some_and(|sensor| matches!(sensor.layout, sensor::Layout::Mosaic(_))),
+            ..Self::of_source(&Source::image(current))
+        }
     }
 
     /// The layout of `source`'s plots.
@@ -229,6 +237,7 @@ impl Layout {
         Self {
             planes: source.stored.planes.len().max(1),
             shared: source.stored.shared,
+            photosites: false,
         }
     }
 
@@ -572,6 +581,11 @@ pub(super) fn show(
     let source = Source::image(current);
     body(pass, ui, &source, rect, plotted, mark);
     header(pass, ui, &source, rect, mark);
+    let layout = Layout::of(current);
+    if layout.photosites {
+        let top = rect.y + LABEL_HEIGHT + HEAD_GAP + PLOT_INSET + layout.body_height();
+        photosites::show(pass, ui, current, rect, top);
+    }
 }
 
 /// The section's header, with the pixel's values in it where the mark is
