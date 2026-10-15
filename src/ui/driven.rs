@@ -2771,12 +2771,12 @@ fn a_raws_profile_has_a_section_and_a_switch_of_its_own() {
     let display = painted_in_side(&harness, "Display").expect("Display");
     let profile = painted_in_side(&harness, "Profile").expect("Profile");
     // The pointer's lift a channel to the cell on the row under the plot,
-    // not the gain map's one line of words; the header says whether the
-    // rendering is applied.
+    // not the gain map's one line of words; the header carries nothing
+    // but the switch.
     assert!(painted_in_side(&harness, "\u{2212}1.0").is_some());
     assert!(painted_in_side(&harness, "\u{2212}1.0 / \u{2212}1.0 / \u{2212}1.0 stops").is_none());
     let total = painted_in_side(&harness, super::histogram::TOTAL_LIFT).expect("the lift's row");
-    assert!(painted_in_side(&harness, "Not applied").is_some());
+    assert!(painted_in_side(&harness, "Not applied").is_none());
     let file = painted_in_side(&harness, "Image").expect("Image");
     assert!(display.min.y < profile.min.y && profile.min.y < file.min.y);
     assert!(painted_in_side(&harness, "Gain map").is_none());
@@ -2801,7 +2801,7 @@ fn a_raws_profile_has_a_section_and_a_switch_of_its_own() {
     assert_eq!(
         click(&mut harness, &Control::GainMap.label()),
         [Command::Press(Control::GainMap)],
-        "the effective gain map's toggle in the bottom bar"
+        "the gain map's toggle in the bottom bar"
     );
 }
 

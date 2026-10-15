@@ -5,7 +5,7 @@
 //! the column is: the tone curve, the gain table, the exposure's row, and
 //! at the foot the developed pixel in the profile's own space, which is
 //! where the chain starts. The square at the end of the header is the
-//! profile's switch, and the header says whether it is on.
+//! profile's switch, lit while it is on.
 //!
 //! The pointer's pixel is followed up the chain a channel at a time, each
 //! in its own ink and every number in stops below white: the three channels
@@ -62,12 +62,6 @@ fn applied(current: &Current) -> bool {
         .lift
         .as_ref()
         .is_some_and(|lift| lift.weight() > 0.0)
-}
-
-/// What the header says: whether the
-/// rendering is on screen.
-fn summary(applied: bool) -> &'static str {
-    if applied { APPLIED } else { NOT_APPLIED }
 }
 
 /// A number of stops as the section writes it: signed, with a true minus,
@@ -209,9 +203,9 @@ pub(super) fn show(
         applied,
         icon::CAMERA,
     );
-    // The header says whether the rendering is on screen; the pixel's
-    // numbers are the row under the plot, where the plot counts them.
-    section::header(pass, ui, Section::Profile, rect, Some(summary(applied)));
+    // The header carries nothing but the switch: the pixel's numbers are
+    // the row under the plot, where the plot counts them.
+    section::header(pass, ui, Section::Profile, rect, None);
 
     lift(pass, ui, Section::Profile.plot(rect), plots, mark);
 
@@ -374,40 +368,27 @@ fn tick_up(ui: &egui::Ui, bars: Rect, y: f32, ink: Color32) {
 /// A part's caption at `caption`, laid out as the section's rows are: its
 /// name, in the face and the dim ink the rows' names are in, with on the
 /// right of it what the pointer's pixel comes out of the part as, a
-/// channel to the cell in its own ink, the line taking
-/// `section::PART_CAPTION_HEIGHT`; and under both what its axes are, in
-/// the plot's small words, where `axes` says anything — a second line the
-/// caption is then laid out with room for.
+/// channel to the cell in its own ink, the one line taking
+/// `section::PART_CAPTION_HEIGHT`.
 pub(super) fn caption(
     pass: &Pass,
     ui: &egui::Ui,
     caption: Rect,
     name: &str,
-    axes: &str,
     cells: Option<[String; 3]>,
 ) {
     let painter = ui.painter();
     let font = FontId::proportional(ROW_TEXT);
-    let first = caption.y + section::PART_CAPTION_HEIGHT / 2.0;
+    let middle = caption.y + section::PART_CAPTION_HEIGHT / 2.0;
     painter.text(
-        pos2(pass.grid.snap(caption.x), first),
+        pos2(pass.grid.snap(caption.x), middle),
         egui::Align2::LEFT_CENTER,
         name,
         font.clone(),
         pass.theme.text_dim.into(),
     );
     if let Some(cells) = cells {
-        channel_cells(pass, ui, caption.right(), first, &cells, &font);
-    }
-    if !axes.is_empty() {
-        let second = (caption.y + section::PART_CAPTION_HEIGHT + caption.bottom()) / 2.0;
-        painter.text(
-            pos2(pass.grid.snap(caption.x), second),
-            egui::Align2::LEFT_CENTER,
-            axes,
-            FontId::proportional(CLIP_TEXT),
-            pass.theme.text_dim.into(),
-        );
+        channel_cells(pass, ui, caption.right(), middle, &cells, &font);
     }
 }
 
@@ -555,7 +536,6 @@ fn curve(
         ui,
         head,
         TONE_CURVE,
-        "",
         pixel.map(|pixel| channel_words(pixel.out)),
     );
     tip_on(
@@ -736,7 +716,6 @@ fn gain_table(
         ui,
         head,
         GAIN_TABLE,
-        "",
         pixel.map(|pixel| channel_words(pixel.into_curve)),
     );
     tip_on(
@@ -814,21 +793,15 @@ pub(in crate::ui) const PROPHOTO: &str = "ProPhoto";
 /// A stage at which a channel is black, which no number of stops is.
 const BLACK: &str = "black";
 
-/// What the header says with nothing under the pointer.
-const APPLIED: &str = "Applied";
-const NOT_APPLIED: &str = "Not applied";
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::image::gain_map::{Data, GainMap, Lift};
 
-    /// The header says whether the rendering is on screen; stops are
-    /// written signed, with a true minus, and none at all as black.
+    /// Stops are written signed, with a true minus, and none at all as
+    /// black.
     #[test]
-    fn the_words_say_the_switch_and_the_stops() {
-        assert_eq!(summary(true), "Applied");
-        assert_eq!(summary(false), "Not applied");
+    fn the_words_say_the_stops() {
         assert_eq!(exposure_words(4.123), "+4.1 EV");
         assert_eq!(exposure_words(-1.27), "\u{2212}1.3 EV");
         assert_eq!(exposure_words(-0.0), "+0.0 EV");

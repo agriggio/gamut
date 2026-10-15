@@ -57,8 +57,8 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
   table shows the blend it is read at and the one gain all three get, the
   curve the two colors it is applied to and the one placed between them,
   and each stage is explained under the pointer. `G` and the
-  dimmed sun beside `HDR` show the profile's effective gain map in the
-  picture's place, and the information panel describes the profile. `--no-gain-map` leaves the rendering behind too.
+  sun beside `HDR` show the profile's lift in the picture's place as a
+  gain map, and the information panel describes the profile. `--no-gain-map` leaves the rendering behind too.
 
 ### Changed
 

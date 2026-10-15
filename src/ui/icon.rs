@@ -586,21 +586,6 @@ pub(super) const SUN: &[Mark] = &[
     Mark::Line([19.07, 4.93], [17.66, 6.34]),
 ];
 
-/// Lucide's `sun-dim`: the sun's disc with a dot where each ray was — a
-/// raw's profile lift, which is a gain map of a kind but no light above
-/// white, for the toggle that shows it in the picture's place.
-pub(super) const SUN_DIM: &[Mark] = &[
-    Mark::circle([12.0, 12.0], 4.0),
-    Mark::Dot([12.0, 4.0]),
-    Mark::Dot([20.0, 12.0]),
-    Mark::Dot([12.0, 20.0]),
-    Mark::Dot([4.0, 12.0]),
-    Mark::Dot([17.657, 6.343]),
-    Mark::Dot([17.657, 17.657]),
-    Mark::Dot([6.343, 17.657]),
-    Mark::Dot([6.343, 6.343]),
-];
-
 /// Lucide's `spline`: a curve between two control points — a raw's
 /// profile, the camera's rendering of it, at the head of the sections that
 /// describe it. The curve is the quarter circle Lucide draws, of radius 12
@@ -1312,7 +1297,7 @@ mod tests {
 
     /// Every icon in the table, so that a new one is held to the same
     /// promises as the rest.
-    const ICONS: [&[Mark]; 47] = [
+    const ICONS: [&[Mark]; 46] = [
         CHART_AREA,
         INFO,
         CIRCLE_QUESTION_MARK,
@@ -1355,7 +1340,6 @@ mod tests {
         ARROW_RIGHT,
         AXIS_3D,
         SUN,
-        SUN_DIM,
         SPLINE,
         EYE,
         MONITOR,

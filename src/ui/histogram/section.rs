@@ -264,14 +264,9 @@ pub fn prophoto_row(rect: Rect) -> Rect {
 /// photosites: the gap from the row above.
 pub const PART_GAP: f32 = 8.0;
 
-/// A caption of two lines: a name, in the face the rows' names are in,
-/// over what the plot under it is, in the plot's small words — the
-/// Develop section's photosites.
-pub const CAPTION_HEIGHT: f32 = PART_CAPTION_HEIGHT + CLIP_TEXT + 2.0;
-
-/// A Profile part's caption: the one line its name takes, in the face the
-/// rows' names are in, the plot under it saying the rest with the guides
-/// to the pointer's pixel.
+/// A part's caption — a Profile part's, or the Develop section's
+/// photosites' — the one line its name takes, in the face the rows' names
+/// are in, the plot under it saying the rest.
 pub const PART_CAPTION_HEIGHT: f32 = ROW_TEXT + 4.0;
 
 /// What the lift's row takes under the row of stops: its gap and its

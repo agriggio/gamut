@@ -186,10 +186,10 @@ pub const NO_DEPTH_MAP: &str = "This image has no depth map.";
 /// map, which is as seldom heard as [`NO_DEPTH_MAP`] for the same reason.
 pub const NO_GAIN_MAP: &str = "This image has no gain map.";
 
-/// What the gain map's toggle says on a raw whose profile says how it
-/// should look: what it shows is the gain map the rendering amounts to.
-pub const SHOW_EFFECTIVE_GAIN_MAP: &str =
-    "Show the profile's effective gain map in the picture's place, in stops";
+/// What the gain map's toggle says under its name on a raw whose profile
+/// says how it should look: where the map it shows comes from, there being
+/// none in the file.
+pub const GAIN_MAP_FROM_PROFILE: &str = "The gain map is calculated from the camera's profile.";
 
 /// What the profile's switch says, for the key, on a file whose profile
 /// says nothing of how it should look. The switch is a square of the
@@ -716,46 +716,25 @@ pub fn words(tip: Tip) -> Option<String> {
         // The Profile section's trace and the Develop section's demosaic:
         // rows of numbers and a name, with what they are said under the
         // pointer, since the rows have no room to say it themselves.
-        Tip::ProPhoto => {
-            "The developed pixel carried into linear ProPhoto, the space the profile's \
-             curve is applied in, each channel in stops below white: a matrix mixes the \
-             channels, so these are not the Develop header's three, and a color past \
-             ProPhoto's reach is held at black"
-        }
-        Tip::ProfileLift => {
-            "What the profile lifted each channel by: the tone curve's three outputs \
-             carried back into Rec. 2020, over the developed channels. They stand off \
-             the chain above where a colored pixel's dimmer channels went through the \
-             curve's toe"
-        }
-        Tip::Demosaic(Demosaic::Ahd) => {
-            "Adaptive homogeneity-directed interpolation: each missing color is taken \
-             along the direction its neighborhood is most uniform in"
-        }
-        Tip::Demosaic(Demosaic::None) => {
-            "The file stores three counts a pixel, so nothing was interpolated"
-        }
-        Tip::Clipped => {
-            "The share of each channel's pixels at white after development, whether the \
-             sensor saturated or the balance and the color matrix carried them past white"
-        }
+        Tip::ProPhoto => "Result of conversion from developed values to linear ProPhoto",
+        Tip::ProfileLift => "Total lift from every step of applying the profile",
+        Tip::Demosaic(Demosaic::Ahd) => "Adaptive homogeneity-directed interpolation",
+        Tip::Demosaic(Demosaic::None) => "The file is not mosaiced.",
+        Tip::Clipped => "Percentage of pixels at white after development",
         Tip::Baseline => {
-            "The profile's baseline exposure: how many stops the developed picture is \
-             pushed before the gain table and the tone curve"
+            "Profile's baseline exposure before applying gain table and tone curve"
         }
         Tip::GainTable => {
-            "The profile's gain table: a table of gains by brightness at each point of a \
-             grid over the picture, the camera's local tone map. The band is the spread \
-             of every point's; the line is the pointer's pixel's own. The table is read \
-             once a pixel, at a blend of its exposed channels, the dot; the one gain then \
-             multiplies all three, the ticks. The rule at the exposure's own number is \
-             the gain that undoes it"
+            "Profile gain table. The camera has a distinct gain curve for each square in \
+             a grid atop the picture. The thick band shows the extent across all of the \
+             grid squares, the highlighted curve applies to the grid square for the \
+             active pixel. Two horizontal rules: at 0 and the inverse of the baseline \
+             adjustment."
         }
         Tip::ToneCurve => {
-            "The profile's tone curve, applied last to a pixel's brightest and dimmest \
-             channels, the two dots on it; the middle channel keeps its place between \
-             them, the hollow dot. In and out are stops below white, and the faint \
-             diagonal is a curve doing nothing"
+            "Profile tone curve. Applied to brightest and dimmest channels (solid dots), \
+             middle channel (hollow) keeps its place between. The diagonal line is where \
+             there is no effect (out equals in)."
         }
         // No words of its own: an item of the open menu wears the name of
         // the program it hands the file to, and there is nothing an

@@ -115,7 +115,7 @@ Gain map section would, because the profile is applied to the values the
 file stores before anything else is. Its square is not an eye but the
 profile's switch, lit while the rendering is applied, since showing the
 lift in the picture's place is `G`'s already and the switch has nowhere
-else to be on the screen; its header says whether the rendering is applied.
+else to be on the screen; its header carries nothing else.
 Its mark is Lucide's `spline`, which the information panel's section about
 the profile wears too.
 
@@ -142,9 +142,8 @@ carried back into Rec. 2020 over the developed channels
 in its ink on the row, as the rows under it write the channels, in place
 of the gain map's one line of words. The row is directly under the plot
 so that the numbers the plot counts are read off it, as the Display
-section's rows are read off its plot, and the header is left to say
-whether the rendering is applied: in the header the three could not be
-seen to be what the plot is of, and a single number — the brightest
+section's rows are read off its plot, and not in the header: there the
+three could not be seen to be what the plot is of, and a single number — the brightest
 channel — cannot be made to meet three rules on a colored pixel. The two
 places the chain is not three arrows are drawn as what they are, below.
 

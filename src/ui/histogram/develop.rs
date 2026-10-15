@@ -61,7 +61,7 @@ impl Shape {
     /// any.
     pub const fn height(self) -> f32 {
         let grid = if self.grid {
-            section::PART_GAP + section::CAPTION_HEIGHT + PLOT_INSET + GRID_HEIGHT + PLOT_INSET
+            section::PART_GAP + section::PART_CAPTION_HEIGHT + PLOT_INSET + GRID_HEIGHT + PLOT_INSET
         } else {
             0.0
         };
@@ -108,7 +108,7 @@ pub(super) fn grid_part(rect: Rect, shape: Shape) -> (Rect, Rect) {
         rect.x,
         last.bottom() + section::PART_GAP,
         rect.width,
-        section::CAPTION_HEIGHT,
+        section::PART_CAPTION_HEIGHT,
     );
     let ground = Rect::new(x, caption.bottom() + PLOT_INSET, width, GRID_HEIGHT);
     (caption, ground)
@@ -297,7 +297,7 @@ fn share_words(share: f32) -> String {
 /// picture, the ground alone.
 fn grid(pass: &Pass, ui: &egui::Ui, current: &Current, rect: Rect, shape: Shape) {
     let (caption, ground) = grid_part(rect, shape);
-    profile::caption(pass, ui, caption, PHOTOSITES, PHOTOSITES_AXES, None);
+    profile::caption(pass, ui, caption, PHOTOSITES, None);
     let painter = ui.painter();
     painter.rect_filled(
         egui::Rect::from(ground.inset(-PLOT_INSET, -PLOT_INSET)),
@@ -384,9 +384,8 @@ pub(in crate::ui) const CLIPPED: &str = "Clipped";
 /// writing them, and the development multiplied nothing.
 const APPLIED_IN_FILE: &str = "applied in the file";
 
-/// The photosites' caption: its name, and what the window is.
+/// The photosites' caption: its name.
 pub(in crate::ui) const PHOTOSITES: &str = "Photosites";
-const PHOTOSITES_AXES: &str = "Counts around the pointer";
 
 #[cfg(test)]
 mod tests {

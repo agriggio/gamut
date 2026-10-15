@@ -1390,7 +1390,7 @@ pub static ROWS: &[Row] = &[
     Row {
         section: Section::Display,
         when: Some(When::Profile),
-        help: "Toggle the camera profile's rendering of a raw: baseline exposure, gain table and tone curve",
+        help: "Toggle camera RAW profile rendering",
         keys: one!("display.profile", ToggleProfile, [key('P')]),
     },
     Row {
@@ -1688,14 +1688,14 @@ impl Naming for Namer {
                 }
                 None => (vec![names(keys, at)?], Vec::new()),
             },
-            // The gain map's toggle on a raw's profile, which is the gain
-            // map the profile's rendering amounts to rather than one the
-            // file carries: said as that, with the key.
+            // The gain map's toggle on a raw's profile: named by its key's
+            // row as on any picture with a map, and under that where the
+            // map comes from, since the file carries none.
             Tip::Control(Control::GainMap) if self.conditions.profile => (
-                vec![with_key(
-                    ui::tooltip::SHOW_EFFECTIVE_GAIN_MAP,
-                    key_of(keys, ToggleGainMap),
-                )],
+                vec![
+                    names(keys, at)?,
+                    ui::tooltip::GAIN_MAP_FROM_PROFILE.to_string(),
+                ],
                 Vec::new(),
             ),
             // The button that hides the interface: what a plain press does,

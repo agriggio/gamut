@@ -620,8 +620,8 @@ without them: much darker for most iPhone pictures. The choice holds for
 every raw, and for the next time `gamut` starts. Nothing is read again, so
 the switch is immediate, and the view and the display settings stay as they
 are. `G` shows how far the profile brightens each pixel in the picture's
-place, in stops, as it shows a gain map — the profile's effective gain map
-— and its button, just before `HDR`, wears a dimmed sun.
+place, in stops, as it shows a gain map, and its button, just before `HDR`,
+says the map is calculated from the camera's profile.
 
 Under the *Profile* plot are the rendering's stages, read upward in the
 order they are applied: the tone curve; the gain table, how far it lifts

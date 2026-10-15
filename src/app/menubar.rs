@@ -740,8 +740,7 @@ impl App {
 
     /// What `does` is called now, where that is not its own title: what
     /// undo would put back, the copy of a region, the pause of an animation
-    /// playing, the pages of a file that holds several, and the gain map of
-    /// a raw, which is its profile's lift.
+    /// playing, and the pages of a file that holds several.
     fn retitled(&self, does: Does, conditions: &Conditions) -> Option<String> {
         let pages = conditions.pages && !conditions.animation;
         let title = match does {
@@ -765,7 +764,6 @@ impl App {
             }
             Does::Control(Control::StepForward) if pages => "Next Page",
             Does::Control(Control::StepBack) if pages => "Previous Page",
-            Does::Control(Control::GainMap) if conditions.profile => "Effective Gain Map",
             _ => return None,
         };
         Some(title.to_string())
