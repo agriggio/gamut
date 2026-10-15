@@ -626,6 +626,9 @@ impl Pass<'_> {
                 if self.depth_toggle(ui, current) {
                     ui.add_space(PADDING);
                 }
+                if self.mosaic_toggle(ui, current) {
+                    ui.add_space(PADDING);
+                }
                 if self.camera_switch(ui, current) {
                     ui.add_space(PADDING);
                 }
@@ -799,6 +802,19 @@ impl Pass<'_> {
         }
         let on = current.showing == Showing::Auxiliary(Auxiliary::Depth);
         self.toggle(ui, icon::AXIS_3D, Control::Depth, on, true, Corners::All);
+        true
+    }
+
+    /// The toggle that shows a raw's mosaic in its place, between the depth
+    /// map's and the camera's switch: a square with the mark alone, lit
+    /// while the mosaic is up, and left out as the depth map's is — on
+    /// anything but a raw that keeps one. Says whether it was drawn.
+    fn mosaic_toggle(&mut self, ui: &mut Ui, current: &Current) -> bool {
+        if !current.picture().0.carries(Auxiliary::Mosaic) || self.input.arriving.is_some() {
+            return false;
+        }
+        let on = current.showing == Showing::Auxiliary(Auxiliary::Mosaic);
+        self.toggle(ui, icon::GRID_2X2, Control::Mosaic, on, true, Corners::All);
         true
     }
 

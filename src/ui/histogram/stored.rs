@@ -44,7 +44,8 @@ use egui::FontId;
 use super::plot::{self, Counts, plane_bars};
 use super::*;
 use crate::image::Samples;
-use crate::image::sensor::Sensor;
+use crate::image::auxiliary::Auxiliary;
+use crate::image::sensor::{self, Sensor};
 use crate::image::stats::{self, Axis, Stored};
 use crate::ui::pixel::component;
 
@@ -117,11 +118,23 @@ pub(super) fn sensor_of(current: &Current) -> Option<&Sensor> {
         .flatten()
 }
 
+/// The sensor whose counts the Image section plots: the one behind the
+/// picture, while the picture or its mosaic — which is those counts laid
+/// out — is up.
+pub(super) fn counts_of(current: &Current) -> Option<&Sensor> {
+    matches!(
+        current.showing,
+        Showing::Picture | Showing::Auxiliary(Auxiliary::Mosaic)
+    )
+    .then(|| current.picture_face().image.sensor.as_deref())
+    .flatten()
+}
+
 impl<'a> Source<'a> {
     /// The Image section's: the sensor's counts for a raw, and the decoded
     /// picture otherwise.
     pub fn image(current: &'a Current) -> Self {
-        match sensor_of(current) {
+        match counts_of(current) {
             Some(sensor) => {
                 // The levels on the axis: nothing, each distinct black, and
                 // white.
@@ -192,11 +205,14 @@ impl<'a> Source<'a> {
 /// How the section is laid out for a file: how many channels it plots, and
 /// whether they share one axis — one plot, the channels over one another,
 /// with one row of values under it — or each has its own range, and so a
-/// plot of its own with its own row.
+/// plot of its own with its own row; and whether the photosites around the
+/// pointer hang under the plots, which the Image section's do for a raw
+/// that keeps its mosaic.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Layout {
     pub planes: usize,
     pub shared: bool,
+    pub photosites: bool,
 }
 
 impl Layout {
@@ -204,11 +220,16 @@ impl Layout {
     pub const ONE: Layout = Layout {
         planes: 1,
         shared: true,
+        photosites: false,
     };
 
     /// The Image section's layout for `current`.
     pub fn of(current: &Current) -> Self {
-        Self::of_source(&Source::image(current))
+        Self {
+            photosites: counts_of(current)
+                .is_some_and(|sensor| matches!(sensor.layout, sensor::Layout::Mosaic(_))),
+            ..Self::of_source(&Source::image(current))
+        }
     }
 
     /// The layout of `source`'s plots.
@@ -216,6 +237,7 @@ impl Layout {
         Self {
             planes: source.stored.planes.len().max(1),
             shared: source.stored.shared,
+            photosites: false,
         }
     }
 
@@ -467,7 +489,7 @@ pub(super) fn developed_mark(current: &Current, x: u32, y: u32) -> Option<Mark> 
 /// `(x, y)`: the sensor's counts there for a raw, and the pixel as the
 /// decoded picture holds it otherwise.
 pub(super) fn image_mark(current: &Current, x: u32, y: u32) -> Option<Mark> {
-    match sensor_of(current) {
+    match counts_of(current) {
         Some(sensor) => sensor_mark(current, sensor, x, y),
         None => pixel_mark(current, x, y),
     }
@@ -559,6 +581,11 @@ pub(super) fn show(
     let source = Source::image(current);
     body(pass, ui, &source, rect, plotted, mark);
     header(pass, ui, &source, rect, mark);
+    let layout = Layout::of(current);
+    if layout.photosites {
+        let top = rect.y + LABEL_HEIGHT + HEAD_GAP + PLOT_INSET + layout.body_height();
+        photosites::show(pass, ui, current, rect, top);
+    }
 }
 
 /// The section's header, with the pixel's values in it where the mark is

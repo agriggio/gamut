@@ -1226,6 +1226,11 @@ mod tests {
         assert_eq!(sensor.white, 4095.0);
         assert_eq!(sensor.black, vec![0.0; 3]);
         assert_eq!(sensor.stored.planes.len(), 3);
+        // Shown in the picture's place, the mosaic covers it exactly.
+        use crate::image::auxiliary::Auxiliary;
+        assert!(image.carries(Auxiliary::Mosaic));
+        let shown = image.auxiliary(Auxiliary::Mosaic).expect("the mosaic");
+        assert_eq!((shown.width, shown.height), (image.width, image.height));
         assert_eq!(
             sensor.development.demosaic,
             crate::image::sensor::Demosaic::Ahd

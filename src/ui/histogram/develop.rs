@@ -13,27 +13,19 @@
 //! which is why a channel against the right edge of a developed plot may
 //! stand well short of it in the sensor's plot below; and the share of each
 //! developed channel standing at white, which is the clipping the two plots
-//! together say the sensor's or the balance's. For a mosaic, the photosites
-//! around the pointer's pixel last: a window of the counts the demosaic
-//! read to make the pixel, each in its plane's color, which no number worked
-//! out of them could show.
+//! together say the sensor's or the balance's.
 
-use egui::Stroke;
-
-use super::plot::PLOT_BACKGROUND;
 use super::stored::{self, Layout, Source};
 use super::*;
-use crate::image::sensor::{Development, Layout as Counts};
+use crate::image::sensor::Development;
 
 /// How the section is laid out for a file: how its developed channels are
-/// plotted, how many rows of words it has — the light's only where the
-/// file says what it was — and whether it ends with the photosites around
-/// the pointer, which only a mosaic has.
+/// plotted, and how many rows of words it has — the light's only where the
+/// file says what it was.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Shape {
     pub layout: Layout,
     pub rows: usize,
-    pub grid: bool,
 }
 
 impl Shape {
@@ -42,7 +34,6 @@ impl Shape {
     pub const NONE: Shape = Shape {
         layout: Layout::ONE,
         rows: 0,
-        grid: false,
     };
 
     pub fn of(current: &Current) -> Self {
@@ -50,24 +41,15 @@ impl Shape {
             Some(sensor) => Self {
                 layout: Layout::of_source(&Source::developed(current)),
                 rows: ROWS + usize::from(sensor.development.kelvin.is_some()),
-                grid: matches!(sensor.layout, Counts::Mosaic(_)),
             },
             None => Self::NONE,
         }
     }
 
     /// What the section holds under its header: the plots and their rows
-    /// of values, the rows of words, and the photosites where there are
-    /// any.
+    /// of values, and the rows of words.
     pub const fn height(self) -> f32 {
-        let grid = if self.grid {
-            section::PART_GAP + section::PART_CAPTION_HEIGHT + PLOT_INSET + GRID_HEIGHT + PLOT_INSET
-        } else {
-            0.0
-        };
-        self.layout.body_height()
-            + self.rows as f32 * (display::ROW_GAP + display::ROW_HEIGHT)
-            + grid
+        self.layout.body_height() + self.rows as f32 * (display::ROW_GAP + display::ROW_HEIGHT)
     }
 }
 
@@ -77,18 +59,6 @@ impl Shape {
 /// goes after the balance's where there is one.
 const ROWS: usize = 3;
 
-/// How many photosites each way of the pointer's the window shows: two,
-/// which is every photosite a demosaic reads for the pixel, and a 5 by 5
-/// window whose counts still fit their cells.
-pub(super) const GRID_REACH: u32 = 2;
-/// How tall each row of the window is: a line of the plot's small words.
-const CELL_HEIGHT: f32 = 14.0;
-/// The window's height.
-const GRID_HEIGHT: f32 = (2 * GRID_REACH + 1) as f32 * CELL_HEIGHT;
-
-/// How strongly a cell is washed with its plane's color under its count.
-const CELL_WASH: f32 = 0.22;
-
 /// The `index`th row of words in the section laid out at `rect`, under
 /// the plots and their rows of values.
 pub(super) fn row(rect: Rect, shape: Shape, index: usize) -> Rect {
@@ -97,26 +67,9 @@ pub(super) fn row(rect: Rect, shape: Shape, index: usize) -> Rect {
     Rect::new(rect.x, y, rect.width, display::ROW_HEIGHT)
 }
 
-/// The photosites' caption and ground, under the last row, in the section
-/// laid out at `rect`: the caption the width of the rows above it, the
-/// ground set in as the plots are.
-pub(super) fn grid_part(rect: Rect, shape: Shape) -> (Rect, Rect) {
-    let last = row(rect, shape, shape.rows.saturating_sub(1));
-    let x = rect.x + PLOT_INSET;
-    let width = rect.width - 2.0 * PLOT_INSET;
-    let caption = Rect::new(
-        rect.x,
-        last.bottom() + section::PART_GAP,
-        rect.width,
-        section::PART_CAPTION_HEIGHT,
-    );
-    let ground = Rect::new(x, caption.bottom() + PLOT_INSET, width, GRID_HEIGHT);
-    (caption, ground)
-}
-
 /// The Develop section, laid out at `rect`: the header with the developed
-/// pixel's values, the developed channels' plots, the rows of what the
-/// development did, and the photosites around the pointer.
+/// pixel's values, the developed channels' plots, and the rows of what
+/// the development did.
 pub(super) fn show(
     pass: &mut Pass,
     ui: &mut egui::Ui,
@@ -188,10 +141,6 @@ pub(super) fn show(
         Sense::hover(),
     );
     pass.tooltip(response, Tip::Clipped);
-
-    if shape.grid {
-        grid(pass, ui, current, rect, shape);
-    }
 }
 
 /// A row of one value: its name down the left, and the value at the right.
@@ -291,89 +240,6 @@ fn share_words(share: f32) -> String {
     }
 }
 
-/// The photosites around the pointer's pixel: the caption, and under it
-/// the window of counts, a cell to the photosite, each washed with its
-/// plane's color with the count in it, the pointer's own outlined. Off the
-/// picture, the ground alone.
-fn grid(pass: &Pass, ui: &egui::Ui, current: &Current, rect: Rect, shape: Shape) {
-    let (caption, ground) = grid_part(rect, shape);
-    profile::caption(pass, ui, caption, PHOTOSITES, None);
-    let painter = ui.painter();
-    painter.rect_filled(
-        egui::Rect::from(ground.inset(-PLOT_INSET, -PLOT_INSET)),
-        PLOT_RADIUS,
-        PLOT_BACKGROUND,
-    );
-    let Some(sensor) = stored::sensor_of(current) else {
-        return;
-    };
-    let Some([x, y]) = pass.input.pointer else {
-        return;
-    };
-    let image = &current.image;
-    let size = [image.width, image.height];
-    let [width, height] = current.pixels();
-    if x >= width || y >= height {
-        return;
-    }
-    let side = 2 * GRID_REACH + 1;
-    let cell = egui::vec2(ground.width / side as f32, CELL_HEIGHT);
-    let font = FontId::proportional(CLIP_TEXT);
-    let gray = sensor.planes() == 1;
-    // The window is read as the picture is shown, a cell to the pixel
-    // around the pointer's, each found on the sensor through the turn the
-    // user asked for and the camera's.
-    for row in 0..side {
-        for column in 0..side {
-            let min = pos2(
-                ground.x + column as f32 * cell.x,
-                ground.y + row as f32 * cell.y,
-            );
-            let square = egui::Rect::from_min_size(min, cell);
-            let (Some(tx), Some(ty)) = (
-                (x + column).checked_sub(GRID_REACH),
-                (y + row).checked_sub(GRID_REACH),
-            ) else {
-                continue;
-            };
-            if tx >= width || ty >= height {
-                continue;
-            }
-            let at = current.turn.stored([tx, ty], size);
-            let Some((plane, count)) = sensor.photosite(at, size) else {
-                continue;
-            };
-            let plane = if gray {
-                Plane::Luma
-            } else {
-                Plane::COLOR[plane.min(Plane::COLOR.len() - 1)]
-            };
-            painter.rect_filled(square, 0.0, plane.ink().gamma_multiply(CELL_WASH));
-            painter.text(
-                square.center(),
-                egui::Align2::CENTER_CENTER,
-                count.to_string(),
-                font.clone(),
-                plane.ink(),
-            );
-        }
-    }
-    let center = GRID_REACH as f32;
-    let own = egui::Rect::from_min_size(
-        pos2(ground.x + center * cell.x, ground.y + center * cell.y),
-        cell,
-    );
-    painter.rect_stroke(
-        own,
-        0.0,
-        Stroke::new(
-            pass.grid.line_width(RULE_WIDTH),
-            Color32::from(pass.theme.text_primary),
-        ),
-        egui::StrokeKind::Inside,
-    );
-}
-
 /// The names of the section's rows.
 pub(in crate::ui) const DEMOSAIC: &str = "Demosaic";
 pub(in crate::ui) const BALANCE: &str = "Balance";
@@ -383,9 +249,6 @@ pub(in crate::ui) const CLIPPED: &str = "Clipped";
 /// What the balance row says where the camera balanced the counts before
 /// writing them, and the development multiplied nothing.
 const APPLIED_IN_FILE: &str = "applied in the file";
-
-/// The photosites' caption: its name.
-pub(in crate::ui) const PHOTOSITES: &str = "Photosites";
 
 #[cfg(test)]
 mod tests {

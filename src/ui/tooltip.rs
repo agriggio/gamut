@@ -186,6 +186,11 @@ pub const NO_DEPTH_MAP: &str = "This image has no depth map.";
 /// map, which is as seldom heard as [`NO_DEPTH_MAP`] for the same reason.
 pub const NO_GAIN_MAP: &str = "This image has no gain map.";
 
+/// What the mosaic's toggle says, for the key, on anything but a raw that
+/// keeps its mosaic, which is as seldom heard as [`NO_DEPTH_MAP`] for the
+/// same reason.
+pub const NO_MOSAIC: &str = "This image has no raw mosaic.";
+
 /// What the gain map's toggle says under its name on a raw whose profile
 /// says how it should look: where the map it shows comes from, there being
 /// none in the file.
@@ -290,6 +295,9 @@ pub struct Conditions {
     /// Whether the picture on screen carries a gain map, which is what the
     /// gain map's toggle needs.
     pub gain_map: bool,
+    /// Whether the picture on screen is a raw that keeps its mosaic, which
+    /// is what the mosaic's toggle needs.
+    pub mosaic: bool,
     /// Whether the picture on screen is a raw whose profile says how it
     /// should look, which is what the profile's switch needs.
     pub profile: bool,
@@ -342,6 +350,7 @@ impl Default for Conditions {
             camera_jpeg: false,
             depth: false,
             gain_map: false,
+            mosaic: false,
             profile: false,
             openable: false,
             false_colored: false,
@@ -386,6 +395,7 @@ impl Conditions {
         camera_jpeg: true,
         depth: true,
         gain_map: true,
+        mosaic: true,
         profile: true,
         openable: true,
         false_colored: false,
@@ -441,6 +451,7 @@ pub fn disabled(tip: Tip, conditions: Conditions) -> Option<Refused> {
         camera_jpeg,
         depth,
         gain_map,
+        mosaic,
         profile,
         ..
     } = conditions;
@@ -466,6 +477,9 @@ pub fn disabled(tip: Tip, conditions: Conditions) -> Option<Refused> {
     }
     if matches!(tip, Tip::Control(Control::GainMap | Control::ShowGainMap)) && !gain_map {
         return said(NO_GAIN_MAP);
+    }
+    if matches!(tip, Tip::Control(Control::Mosaic | Control::ShowMosaic)) && !mosaic {
+        return said(NO_MOSAIC);
     }
     if tip == Tip::Control(Control::Profile) && !profile {
         return said(NO_PROFILE);
@@ -521,6 +535,8 @@ pub fn disabled(tip: Tip, conditions: Conditions) -> Option<Refused> {
                 | Control::Depth
                 | Control::GainMap
                 | Control::ShowGainMap
+                | Control::Mosaic
+                | Control::ShowMosaic
                 | Control::Profile
                 | Control::Play
                 | Control::StepBack
@@ -673,6 +689,7 @@ pub fn words(tip: Tip) -> Option<String> {
         Tip::Control(Control::Marks) => "Mark clipped pixels",
         Tip::Control(Control::Reset) => "Reset the display",
         Tip::Control(Control::ShowGainMap) => "Show the gain map in the picture's place",
+        Tip::Control(Control::ShowMosaic) => "Show the mosaic in the picture's place",
         // Named rather than merely shown: a swatch of viridis is a green
         // rectangle that could be anything, and the map has a name people
         // ask for it by — the same one `--colormap` takes.
@@ -770,6 +787,7 @@ pub fn words(tip: Tip) -> Option<String> {
             // Named by its key's row, like the other toggles.
             | Control::Depth
             | Control::GainMap
+            | Control::Mosaic
             | Control::Profile,
         )
         | Tip::Name

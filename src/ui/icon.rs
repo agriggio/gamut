@@ -560,6 +560,14 @@ pub(super) const GRID_3X3: &[Mark] = &[
     Mark::Line([15.0, 3.0], [15.0, 21.0]),
 ];
 
+/// Lucide's `grid-2x2`: a frame cut once each way into four squares — a
+/// color filter's repeating cell, for the toggle that shows a raw's mosaic.
+pub(super) const GRID_2X2: &[Mark] = &[
+    Mark::rect([3.0, 3.0], [18.0, 18.0], 2.0),
+    Mark::Line([3.0, 12.0], [21.0, 12.0]),
+    Mark::Line([12.0, 3.0], [12.0, 21.0]),
+];
+
 /// Lucide's `axis-3d`: two axes meeting at a rounded corner, and the third
 /// running back from it in dashes — depth, for the toggle that shows the
 /// depth map.
@@ -1297,7 +1305,7 @@ mod tests {
 
     /// Every icon in the table, so that a new one is held to the same
     /// promises as the rest.
-    const ICONS: [&[Mark]; 46] = [
+    const ICONS: [&[Mark]; 47] = [
         CHART_AREA,
         INFO,
         CIRCLE_QUESTION_MARK,
@@ -1323,6 +1331,7 @@ mod tests {
         ROTATE_CCW,
         TRIANGLE_ALERT,
         GRID_3X3,
+        GRID_2X2,
         MAXIMIZE_2,
         CIRCLE_DOT,
         COPY,

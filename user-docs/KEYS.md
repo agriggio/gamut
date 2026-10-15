@@ -547,6 +547,7 @@ that is not a paste; open it as an argument instead.
 | `v` | Show a raw as the camera's JPEG of it, or as the picture developed from the sensor | `display.camera-jpeg` |
 | `Shift+D` | Show a picture's depth map in its place, or the picture again | `display.depth` |
 | `Shift+G` | Show a picture's gain map in its place, or the picture again | `display.gain-map` |
+| `Shift+M` | Show a raw's mosaic in its place, or the developed picture again | `display.mosaic` |
 | `Shift+P` | Show a raw as its camera profile renders it, or as developed | `display.profile` |
 | `r` | Cycle false color: gray → viridis → magma → turbo | `display.colormap` |
 | `z` | Reset every display setting | `display.reset` |
@@ -610,6 +611,21 @@ whatever your display's room, since it is the map the file holds and not how
 much of it is being applied. A map with a channel for each color is drawn in
 color. The gain map's button and the depth map's take each other's place:
 with both on a picture, one map is up at a time.
+
+A raw from a camera with a color filter over its sensor — nearly every
+camera — has a button with a four-square grid on it, before the depth map's.
+A click on it or `M` shows the mosaic in the picture's place: what the sensor
+counted, one value to a photosite, each in the color of the filter over it,
+before any of it was blended into full-color pixels or balanced. Zoomed in,
+the filter's repeating pattern shows as single red, green and blue pixels;
+zoomed out, the picture looks green, since a filter pattern has
+twice as many green photosites as red or blue and nothing has been balanced
+or brightened. Each photosite runs from the sensor's black to its white, and
+the display keys and the pixel readout work on it as on the picture. The
+histogram's *Image* section still plots the sensor's counts, with the
+photosites around the pointer at its foot. Another click shows the developed picture again,
+and the toggle stays on as you step through other raws. An iPhone's ProRAW
+has no button, since it holds full-color pixels rather than a mosaic.
 
 Some raws say how they should look: an iPhone's ProRAW carries an exposure,
 a brightening of the shadows that varies across the picture, and a tone
@@ -693,9 +709,12 @@ the share of each channel standing at white: a channel against the right
 edge there and short of it in the *Image* plot below was put there by the
 balance, not by the sensor. Resting the pointer on the demosaic's name
 says what it does, on the clipped row what its shares are of, and on the
-*Profile* section's *Pixel* row what its numbers are. Under the rows, for
-a mosaic, are the photosites around the pointer, a window of five by five
-counts in their colors, which is what the demosaic read to make the pixel.
+*Profile* section's *Pixel* row what its numbers are. At the foot of the
+*Image* section, for a mosaic, are the photosites around the pointer, a
+window of five by five counts in their colors, which is what the demosaic
+read to make the pixel. The eye at the end of their caption shows the
+mosaic in the picture's place, as `M` does; while it is up, the *Develop*
+section is left out.
 A raw's *Display* plot is spaced in stops too, as a file of linear floats
 is, since both are linear light, and its readout is stops below white: a
 dark frame spreads across the plot instead of piling against its left
@@ -1007,6 +1026,7 @@ region behind: it belongs to the picture it was drawn on.
 | Click the camera button reading **RAW** or **JPEG**, near the bottom right | Show a raw as the camera's JPEG of it, or as the developed picture, as `v` does | |
 | Click the axes button, near `HDR` at the bottom right | Show a picture's depth map in its place, or the picture again, as `D` does | |
 | Click the sun button, just before `HDR` at the bottom right | Show a picture's gain map in its place, or the picture again, as `G` does | |
+| Click the four-square button, near `HDR` at the bottom right | Show a raw's mosaic in its place, or the developed picture again, as `M` does | |
 
 The button at the top of the left strip opens a menu of the
 copies beside it: the file's **Name**, its **Path**, its **URI**, the
