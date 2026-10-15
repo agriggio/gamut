@@ -56,6 +56,12 @@ nothing on screen is lifted, and its header's share of the lift shown would
 not be true of anything in the window. The Image section is then the depth
 map's own samples. The switch to the gain map is still in the bar and on its
 key, so leaving the section out strands nothing.
+While a raw's mosaic is shown, the Image section stays on the sensor's
+counts rather than plotting the mosaic's samples (`counts_of` in
+`stored.rs`): the mosaic is those counts laid out, a photosite to a pixel
+with the other two channels at nothing, and a plot of its samples would be
+the same counts rescaled under three spikes at zero. The Develop section is
+left out, its plots being of the developed picture, which is not up.
 
 Every section is a fixed height (`Section::height`), and the column is as
 tall as its sections, whatever the window. The two exceptions are both the

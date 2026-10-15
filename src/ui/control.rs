@@ -135,6 +135,11 @@ controls! {
     /// is, and drawn only for a picture that carries one. `G` does the
     /// same.
     GainMap,
+    /// The toggle beside the depth map's, before the camera's switch, that
+    /// draws a raw's mosaic in its place — each photosite's count in its
+    /// own filter's color: lit while it is, and drawn only for a raw that
+    /// keeps one. `M` does the same.
+    Mosaic,
     /// The button in the histogram's Gain map section that does what
     /// [`Control::GainMap`] does: lit while the map is on screen. A kind of
     /// its own rather than the same one, so that each of the two names
@@ -306,6 +311,7 @@ impl Control {
             Control::CameraJpeg => "Camera JPEG".to_string(),
             Control::Depth => "Depth".to_string(),
             Control::GainMap => "Gain map".to_string(),
+            Control::Mosaic => "Mosaic".to_string(),
             Control::ShowGainMap => "Show gain map".to_string(),
             Control::Profile => "Profile".to_string(),
             Control::Help => "Help".to_string(),

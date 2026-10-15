@@ -8,6 +8,13 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
 
 ### Added
 
+- A camera raw with a color filter over its sensor can be shown as its
+  mosaic: what the sensor counted, one value to a photosite, each in its
+  filter's color and running from the black level to white, before the
+  demosaic or the balance. A four-square button beside the depth map's in
+  the bottom bar, or `M`, puts it in the picture's place and back; the
+  histogram's *Image* section and the pointer's counts stay on the
+  sensor's while it is up. The Mac's Image menu has it as *Raw Mosaic*.
 - A *Photo* / *Data* switch, at the head of the histogram panel and under
   the Image heading of the information panel, that reads the file on
   screen the other way: *Data* as linear numbers windowed to what they

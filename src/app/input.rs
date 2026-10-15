@@ -169,6 +169,9 @@ pub enum Action {
     /// Between the picture and its gain map, drawn in its place in stops,
     /// for every picture with one from then on.
     ToggleGainMap,
+    /// Between a raw's developed picture and its mosaic, drawn in its place,
+    /// for every raw with one from then on.
+    ToggleMosaic,
     /// Between a raw as its profile renders it and as developed, for every
     /// raw from then on.
     ToggleProfile,
@@ -385,6 +388,7 @@ pub(super) fn action_of(tip: Tip) -> Option<Action> {
         Tip::Control(Control::CameraJpeg) => ToggleCameraJpeg,
         Tip::Control(Control::Depth) => ToggleDepth,
         Tip::Control(Control::GainMap | Control::ShowGainMap) => ToggleGainMap,
+        Tip::Control(Control::Mosaic) => ToggleMosaic,
         Tip::Control(Control::Profile) => ToggleProfile,
         Tip::Control(Control::Paste) => Action::Paste,
         Tip::Control(Control::Region) => ToggleRegion,
@@ -606,6 +610,8 @@ pub enum When {
     Depth,
     /// The picture on screen carries a gain map.
     GainMap,
+    /// The picture on screen is a raw that keeps its mosaic.
+    Mosaic,
     /// The picture on screen is a raw whose profile says how it should
     /// look.
     Profile,
@@ -633,7 +639,7 @@ impl When {
     /// Every condition, for a test to hold them all up against the
     /// application.
     #[cfg(test)]
-    pub const ALL: [When; 19] = [
+    pub const ALL: [When; 20] = [
         When::RegionSelected,
         When::SeveralFiles,
         When::Animation,
@@ -644,6 +650,7 @@ impl When {
         When::CameraJpeg,
         When::Depth,
         When::GainMap,
+        When::Mosaic,
         When::Profile,
         When::SingleChannel,
         When::Undoable,
@@ -669,6 +676,7 @@ impl When {
             When::CameraJpeg => "a raw with a camera JPEG",
             When::Depth => "an image has a depth map",
             When::GainMap => "an image has a gain map",
+            When::Mosaic => "a raw with a mosaic",
             When::Profile => "a raw with a camera profile",
             When::SingleChannel => "a single-channel image",
             When::Undoable => "an edit to undo",
@@ -706,6 +714,7 @@ impl Conditions {
             When::CameraJpeg => self.camera_jpeg,
             When::Depth => self.depth,
             When::GainMap => self.gain_map,
+            When::Mosaic => self.mosaic,
             When::Profile => self.profile,
             When::SingleChannel => self.single_channel,
             When::Undoable => self.undoable,
@@ -1386,6 +1395,12 @@ pub static ROWS: &[Row] = &[
         when: Some(When::GainMap),
         help: "Toggle gain map display",
         keys: one!("display.gain-map", ToggleGainMap, [key('G')]),
+    },
+    Row {
+        section: Section::Display,
+        when: Some(When::Mosaic),
+        help: "Toggle raw mosaic display",
+        keys: one!("display.mosaic", ToggleMosaic, [key('M')]),
     },
     Row {
         section: Section::Display,
@@ -2345,6 +2360,7 @@ impl App {
             ToggleCameraJpeg => return self.press(Control::CameraJpeg),
             ToggleDepth => return self.press(Control::Depth),
             ToggleGainMap => return self.press(Control::GainMap),
+            ToggleMosaic => return self.press(Control::Mosaic),
             ToggleProfile => return self.press(Control::Profile),
             ToggleRegion => return self.press(Control::Region),
             // Only a region moves, grows and shrinks, and there is none: see
@@ -2561,6 +2577,8 @@ impl App {
                 && current.is_some_and(|current| current.picture().0.carries(Auxiliary::Depth)),
             gain_map: self.animation.is_none()
                 && current.is_some_and(|current| current.picture().0.carries(Auxiliary::GainMap)),
+            mosaic: self.animation.is_none()
+                && current.is_some_and(|current| current.picture().0.carries(Auxiliary::Mosaic)),
             profile: self.animation.is_none()
                 && current.is_some_and(|current| {
                     current
@@ -3460,6 +3478,7 @@ impl App {
             // The file read the other way, which is a read like a step.
             Control::Reading(reading) => self.read_as(reading),
             Control::GainMap | Control::ShowGainMap => self.toggle_beside(Auxiliary::GainMap),
+            Control::Mosaic => self.toggle_beside(Auxiliary::Mosaic),
             Control::Profile => self.toggle_profile(),
             // The cross on the message at the foot of the window. The frame
             // after re-tests the pointer, which is what takes the highlight

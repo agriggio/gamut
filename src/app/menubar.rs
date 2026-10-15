@@ -413,6 +413,7 @@ fn image(b: &mut Builder) -> Vec<Node> {
         b.button("Camera JPEG", Control::CameraJpeg),
         b.button("Depth Map", Control::Depth),
         b.button("Gain Map", Control::GainMap),
+        b.button("Raw Mosaic", Control::Mosaic),
         b.button("Profile", Control::Profile),
     ]
 }
@@ -700,6 +701,9 @@ impl App {
                     .is_some_and(|current| current.showing == Showing::Auxiliary(Auxiliary::Depth)),
                 Control::GainMap => current.is_some_and(|current| {
                     current.showing == Showing::Auxiliary(Auxiliary::GainMap)
+                }),
+                Control::Mosaic => current.is_some_and(|current| {
+                    current.showing == Showing::Auxiliary(Auxiliary::Mosaic)
                 }),
                 Control::Region => self.marking.selection.is_on(),
                 Control::Output => self.headroom() == crate::image::display::Headroom::Above,

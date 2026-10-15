@@ -44,6 +44,7 @@ use egui::FontId;
 use super::plot::{self, Counts, plane_bars};
 use super::*;
 use crate::image::Samples;
+use crate::image::auxiliary::Auxiliary;
 use crate::image::sensor::Sensor;
 use crate::image::stats::{self, Axis, Stored};
 use crate::ui::pixel::component;
@@ -117,11 +118,23 @@ pub(super) fn sensor_of(current: &Current) -> Option<&Sensor> {
         .flatten()
 }
 
+/// The sensor whose counts the Image section plots: the one behind the
+/// picture, while the picture or its mosaic — which is those counts laid
+/// out — is up.
+fn counts_of(current: &Current) -> Option<&Sensor> {
+    matches!(
+        current.showing,
+        Showing::Picture | Showing::Auxiliary(Auxiliary::Mosaic)
+    )
+    .then(|| current.picture_face().image.sensor.as_deref())
+    .flatten()
+}
+
 impl<'a> Source<'a> {
     /// The Image section's: the sensor's counts for a raw, and the decoded
     /// picture otherwise.
     pub fn image(current: &'a Current) -> Self {
-        match sensor_of(current) {
+        match counts_of(current) {
             Some(sensor) => {
                 // The levels on the axis: nothing, each distinct black, and
                 // white.
@@ -467,7 +480,7 @@ pub(super) fn developed_mark(current: &Current, x: u32, y: u32) -> Option<Mark> 
 /// `(x, y)`: the sensor's counts there for a raw, and the pixel as the
 /// decoded picture holds it otherwise.
 pub(super) fn image_mark(current: &Current, x: u32, y: u32) -> Option<Mark> {
-    match sensor_of(current) {
+    match counts_of(current) {
         Some(sensor) => sensor_mark(current, sensor, x, y),
         None => pixel_mark(current, x, y),
     }

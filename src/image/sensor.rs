@@ -19,8 +19,10 @@
 
 use std::sync::Arc;
 
+use super::color::ColorSpace;
 use super::orient::{self, Orientation};
 use super::stats::Stored;
+use super::{AlphaMode, Channels, DecodedImage, Referred, Samples};
 
 pub type Shared = Arc<Sensor>;
 
@@ -293,6 +295,57 @@ impl Sensor {
     }
 }
 
+impl Sensor {
+    /// The mosaic as a picture of its own, turned as the developed picture
+    /// is: each photosite lit in its own plane alone — red, green or blue —
+    /// from its black to white, the others dark, so the filter's pattern
+    /// shows as the sensor saw it, before any demosaic or balance. A
+    /// monochrome sensor's is gray. `None` for a raw kept three counts a
+    /// pixel, which has no mosaic.
+    pub fn mosaic_image(&self) -> Option<DecodedImage> {
+        let Layout::Mosaic(mosaic) = &self.layout else {
+            return None;
+        };
+        let (width, height) = (mosaic.width as usize, mosaic.height as usize);
+        let (turned_width, turned_height) = orient::size(mosaic.width, mosaic.height, self.turned);
+        let mono = matches!(mosaic.pattern, Pattern::Mono);
+        let channels = if mono { Channels::Gray } else { Channels::Rgb };
+        let stride = if mono { 1 } else { 3 };
+        // Each plane's count to a sixteen-bit code: its black at nothing,
+        // white at full scale.
+        let scales: Vec<(f32, f32)> = self
+            .black
+            .iter()
+            .map(|&black| (black, 65535.0 / (self.white - black).max(1.0)))
+            .collect();
+        let mut data = vec![0u16; turned_width as usize * turned_height as usize * stride];
+        for y in 0..turned_height as usize {
+            for x in 0..turned_width as usize {
+                let (sx, sy) = orient::stored(self.turned, x, y, width, height);
+                let Some(&count) = mosaic.counts.get(sy * width + sx) else {
+                    continue;
+                };
+                let plane = mosaic.pattern.plane(sx as u32, sy as u32);
+                let (black, scale) = scales.get(plane).copied().unwrap_or((0.0, 1.0));
+                let code = ((f32::from(count) - black) * scale)
+                    .round()
+                    .clamp(0.0, 65535.0) as u16;
+                let at = (y * turned_width as usize + x) * stride;
+                data[at + if mono { 0 } else { plane.min(2) }] = code;
+            }
+        }
+        let mut image = DecodedImage::new(
+            turned_width,
+            turned_height,
+            Samples::U16 { channels, data },
+            ColorSpace::LINEAR_BT709,
+            AlphaMode::Opaque,
+        );
+        image.referred = Referred::Measured;
+        Some(image)
+    }
+}
+
 impl Mosaic {
     /// The count at `(x, y)` of the sensor, or `None` off it.
     pub fn count(&self, x: u32, y: u32) -> Option<u16> {
@@ -345,6 +398,52 @@ mod tests {
         assert_eq!(pattern.plane(2, 2), 0, "and it repeats");
         assert_eq!(pattern.planes(), 3);
         assert_eq!(Pattern::Mono.planes(), 1);
+    }
+
+    /// The mosaic as a picture: turned as the developed picture is, each
+    /// photosite in its own plane's channel alone, from its black to white.
+    #[test]
+    fn the_mosaic_is_shown_a_photosite_to_a_channel_and_turned() {
+        let mosaic = Mosaic {
+            width: 4,
+            height: 2,
+            counts: vec![15, 1015, 15, 4110, 15, 2015, 0, 15],
+            pattern: rggb(),
+        };
+        let stored = Arc::new(mosaic.tally(4110.0));
+        let sensor = Sensor {
+            layout: Layout::Mosaic(mosaic),
+            turned: orient::from_tag(Some(6)),
+            white: 4110.0,
+            black: vec![15.0; 3],
+            stored,
+            development: Development {
+                demosaic: Demosaic::Ahd,
+                balance: [1.0; 3],
+                kelvin: None,
+            },
+        };
+        let image = sensor.mosaic_image().expect("a mosaic");
+        assert_eq!((image.width, image.height), (2, 4));
+        let Samples::U16 { channels, data } = &image.samples else {
+            panic!("sixteen bits");
+        };
+        assert_eq!(*channels, Channels::Rgb);
+        let pixel = |x: usize, y: usize| {
+            let at = (y * 2 + x) * 3;
+            [data[at], data[at + 1], data[at + 2]]
+        };
+        // Counts above black, over the 4095 from black to white.
+        let code = |above: f32| (above * 65535.0 / 4095.0).round() as u16;
+        // Turned clockwise: the sensor's first photosite, red at its black,
+        // is the picture's top right, and the green beside it below that.
+        assert_eq!(pixel(1, 0), [0, 0, 0]);
+        assert_eq!(pixel(1, 1), [0, code(1000.0), 0]);
+        // The second row's second is blue; a count under black is nothing,
+        // and one at white is full scale.
+        assert_eq!(pixel(0, 1), [0, 0, code(2000.0)]);
+        assert_eq!(pixel(0, 2), [0, 0, 0]);
+        assert_eq!(pixel(1, 3), [0, 65535, 0]);
     }
 
     /// A 4 by 2 mosaic, turned a quarter turn as the camera was held: the

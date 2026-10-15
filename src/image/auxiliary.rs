@@ -30,6 +30,9 @@ pub enum Auxiliary {
     Depth,
     /// How far above SDR white each pixel goes — see [`super::gain_map`].
     GainMap,
+    /// The sensor's counts before they were developed, one to a photosite
+    /// under its color filter — see [`super::sensor`].
+    Mosaic,
 }
 
 /// Which of a file's images is on screen: the picture, or one it carries.
@@ -47,6 +50,10 @@ impl DecodedImage {
         match kind {
             Auxiliary::Depth => self.depth.as_ref().map(|map| map.image()),
             Auxiliary::GainMap => self.gain_map.as_ref().map(|map| map.image()),
+            Auxiliary::Mosaic => self
+                .sensor
+                .as_ref()
+                .and_then(|sensor| sensor.mosaic_image()),
         }
     }
 
@@ -56,6 +63,10 @@ impl DecodedImage {
         match kind {
             Auxiliary::Depth => self.depth.is_some(),
             Auxiliary::GainMap => self.gain_map.is_some(),
+            Auxiliary::Mosaic => self
+                .sensor
+                .as_ref()
+                .is_some_and(|sensor| matches!(sensor.layout, super::sensor::Layout::Mosaic(_))),
         }
     }
 }
