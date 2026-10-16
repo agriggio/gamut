@@ -170,9 +170,10 @@ short tick on the side that is up. Where the file records the focal length
 as its 35 mm equivalent and the horizon falls inside the picture, the line is
 the horizon itself — above the middle when the lens pointed down, below it
 when it pointed up — drawn in full, with a dot where it passes nearest the
-middle. Otherwise a thinner, lighter line runs through the middle and shows
-only which way is level; when the horizon is outside the frame, a chevron at
-the edge points toward it. A crop made after the picture was taken, or a
+middle. Otherwise a fainter line in shorter dashes runs through the middle
+and shows only which way is level; when the horizon is outside the frame, a
+chevron at the edge points toward it. A pill at the end of the section's
+heading says which of the two is drawn: *Horizon* or *Level*. A crop made after the picture was taken, or a
 wide lens's distortion, moves the true horizon away from where it is drawn.
 
 | Field | What it says |

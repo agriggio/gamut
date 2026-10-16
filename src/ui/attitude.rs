@@ -72,9 +72,8 @@ const HORIZON_LINE: f32 = 1.5;
 const DASH: f32 = 6.0;
 const GAP: f32 = 4.0;
 /// The lighter line through the middle that says only which way is level,
-/// where the horizon is not on the picture or has no place: thinner, in
-/// shorter dashes, and this share of the accent.
-const LEVEL_LINE: f32 = 1.0;
+/// where the horizon is not on the picture or has no place: as heavy as the
+/// horizon, in shorter dashes, and this share of the accent.
 const LEVEL_DASH: f32 = 3.0;
 const LEVEL_GAP: f32 = 3.0;
 const LEVEL_INK: f32 = 0.7;
@@ -378,11 +377,14 @@ fn mix(from: Color, to: Color, share: f32) -> Color32 {
 /// the line through the middle is drawn, lighter, saying only which way is
 /// level — and where the horizon falls outside the picture, a chevron at the
 /// edge points the way it lies. Nothing where the lens pointed too steeply
-/// for a horizon.
-pub(super) fn level_line(pass: &Pass, painter: &egui::Painter, current: &Current, shown: &Shown) {
-    let Some(horizon) = shown.horizon else {
-        return;
-    };
+/// for a horizon. Which of the two lines was drawn, if either.
+pub(super) fn level_line(
+    pass: &Pass,
+    painter: &egui::Painter,
+    current: &Current,
+    shown: &Shown,
+) -> Option<Line> {
+    let horizon = shown.horizon?;
     let size = current.size();
     let placement = pass.view.placement(size, pass.input.viewport);
     let scale = pass.input.scale;
@@ -422,14 +424,12 @@ pub(super) fn level_line(pass: &Pass, painter: &egui::Painter, current: &Current
             let at = screen(foot);
             tick(at, strokes);
             painter.circle_filled(at, width * 1.5, accent);
-            return;
+            return Some(Line::Horizon);
         }
     }
-    let Some([from, to]) = across(middle, [cos, sin], size) else {
-        return;
-    };
+    let [from, to] = across(middle, [cos, sin], size)?;
     let strokes = line(
-        grid.line_width(LEVEL_LINE),
+        grid.line_width(HORIZON_LINE),
         accent.gamma_multiply(LEVEL_INK),
         LEVEL_DASH,
         LEVEL_GAP,
@@ -451,6 +451,26 @@ pub(super) fn level_line(pass: &Pass, painter: &egui::Painter, current: &Current
         for stroke in [Stroke::new(width + 2.0, UNDER), Stroke::new(width, accent)] {
             painter.line_segment([back + side, tip], stroke);
             painter.line_segment([tip, back - side], stroke);
+        }
+    }
+    Some(Line::Level)
+}
+
+/// Which line [`level_line`] drew across the picture.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Line {
+    /// The true horizon, where it falls on the picture.
+    Horizon,
+    /// The line through the middle, which says only which way is level.
+    Level,
+}
+
+impl Line {
+    /// What the pill at the section's heading calls it.
+    pub(super) fn word(self) -> &'static str {
+        match self {
+            Line::Horizon => "Horizon",
+            Line::Level => "Level",
         }
     }
 }

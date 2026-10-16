@@ -867,6 +867,17 @@ fn the_orientation_section_draws_the_level_line_on_the_picture() {
     harness.get_by_label("Orientation").hover();
     harness.run();
     assert!(segments(&harness) > before + 10);
+    // On the heading, its end is the button that copies the section; on
+    // the rest of the section, the pill there names the line drawn.
+    let said = |harness: &Harness<'static, State>, word: &str| {
+        harness.output().shapes.iter().any(
+            |shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == word),
+        )
+    };
+    assert!(!said(&harness, "Level"));
+    harness.get_by_label("Pitch").hover();
+    harness.run();
+    assert!(said(&harness, "Level"));
 
     // Only the true horizon wears a dot, and only a file that says its
     // focal length has one placed; pitched far enough down, it is off the
@@ -890,6 +901,8 @@ fn the_orientation_section_draws_the_level_line_on_the_picture() {
         harness.state_mut().current = Some(current);
         harness.run();
         assert_eq!(dots(&harness), unplaced + placed, "{gravity:?}");
+        let word = if placed == 1 { "Horizon" } else { "Level" };
+        assert!(said(&harness, word), "{gravity:?}");
         assert!(segments(&harness) > before + 10, "{gravity:?}");
     }
 }

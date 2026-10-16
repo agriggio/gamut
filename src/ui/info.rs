@@ -671,7 +671,7 @@ fn headed_section(
         // The pill stands at the column's end, level with the mark, in
         // room the head is kept out of.
         let left = ui.cursor().min.x;
-        let pill = section.showing.then(|| showing_width(ui));
+        let pill = section.showing.then(|| pill_width(ui, SHOWING));
         let at = line(
             pass,
             ui,
@@ -691,7 +691,7 @@ fn headed_section(
                 ),
                 vec2(pill, CHIP_HEIGHT),
             );
-            paint_showing(ui, rect, theme, pass.grid);
+            paint_pill(ui, rect, theme, pass.grid, SHOWING);
         }
     }
     if reading {
@@ -785,7 +785,7 @@ fn marked_heading(
             );
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if section.showing {
-                    showing_pill(ui, theme, grid);
+                    pill(ui, theme, grid, SHOWING);
                     ui.add_space(CHIP_GAP);
                 }
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
@@ -806,29 +806,28 @@ fn marked_heading(
 }
 
 /// The pill at the end of a heading whose section is on screen: an eye and
-/// the word, in the accent, round at both ends so it reads as a state
-/// rather than as a button to press.
-fn showing_pill(ui: &mut egui::Ui, theme: &Theme, grid: icon::Grid) {
-    let (rect, _) = ui.allocate_exact_size(vec2(showing_width(ui), CHIP_HEIGHT), Sense::HOVER);
-    paint_showing(ui, rect, theme, grid);
+/// `word`, in the accent, round at both ends so it reads as a state rather
+/// than as a button to press.
+fn pill(ui: &mut egui::Ui, theme: &Theme, grid: icon::Grid, word: &str) {
+    let (rect, _) = ui.allocate_exact_size(vec2(pill_width(ui, word), CHIP_HEIGHT), Sense::HOVER);
+    paint_pill(ui, rect, theme, grid, word);
 }
 
-/// The words the pill says, laid out to be drawn.
-fn showing_galley(ui: &egui::Ui) -> Arc<egui::Galley> {
+/// `word` as the pill says it, laid out to be drawn.
+fn pill_galley(ui: &egui::Ui, word: &str) -> Arc<egui::Galley> {
     let font = egui::FontId::proportional(LABEL_SIZE);
-    ui.ctx().fonts_mut(|fonts| {
-        fonts.layout_no_wrap(SHOWING.to_string(), font, egui::Color32::PLACEHOLDER)
-    })
+    ui.ctx()
+        .fonts_mut(|fonts| fonts.layout_no_wrap(word.to_string(), font, egui::Color32::PLACEHOLDER))
 }
 
-/// How wide the pill is.
-fn showing_width(ui: &egui::Ui) -> f32 {
-    (2.0 * CHIP_PADDING + COPY_ICON + CHIP_GAP + showing_galley(ui).size().x).round()
+/// How wide the pill saying `word` is.
+fn pill_width(ui: &egui::Ui, word: &str) -> f32 {
+    (2.0 * CHIP_PADDING + COPY_ICON + CHIP_GAP + pill_galley(ui, word).size().x).round()
 }
 
-/// The pill drawn in `rect`, wherever the heading has put it.
-fn paint_showing(ui: &egui::Ui, rect: egui::Rect, theme: &Theme, grid: icon::Grid) {
-    let galley = showing_galley(ui);
+/// The pill saying `word` drawn in `rect`, wherever the heading has put it.
+fn paint_pill(ui: &egui::Ui, rect: egui::Rect, theme: &Theme, grid: icon::Grid, word: &str) {
+    let galley = pill_galley(ui, word);
     let ink: egui::Color32 = theme.accent.into();
     let ground: egui::Color32 = theme.bar_background.into();
     let painter = ui.painter();
@@ -976,6 +975,10 @@ fn orientation_section(
     let left = ui.cursor().min.x;
     let top = ui.cursor().min.y;
     marked_heading(pass, ui, place, section, width, icon::MOVE_3D);
+    let heading = egui::Rect::from_x_y_ranges(
+        left..=left + width,
+        top..=ui.cursor().min.y - ui.spacing().item_spacing.y,
+    );
     ui.add_space(HEAD_GAP);
     let (theme, grid) = (pass.theme, pass.grid);
     block(pass, ui, Copyable::Section(place), width, |ui| {
@@ -985,8 +988,23 @@ fn orientation_section(
     ui.add_space(HEAD_GAP);
     table(pass, ui, (first..).zip(&section.facts), width);
     let whole = egui::Rect::from_x_y_ranges(left..=left + width, top..=ui.cursor().min.y);
-    if ui.rect_contains_pointer(whole) {
-        attitude::level_line(pass, picture, current, &shown);
+    // Which line is drawn on the picture is said at the heading's end, as
+    // the pill a section on screen wears — except while the pointer is on
+    // the heading, whose end is the button that copies the section.
+    if ui.rect_contains_pointer(whole)
+        && let Some(line) = attitude::level_line(pass, picture, current, &shown)
+        && !ui.rect_contains_pointer(heading)
+    {
+        let word = line.word();
+        let width = pill_width(ui, word);
+        let rect = egui::Rect::from_min_size(
+            pos2(
+                heading.max.x - width,
+                (heading.center().y - CHIP_HEIGHT / 2.0).round(),
+            ),
+            vec2(width, CHIP_HEIGHT),
+        );
+        paint_pill(ui, rect, pass.theme, pass.grid, word);
     }
 }
 
