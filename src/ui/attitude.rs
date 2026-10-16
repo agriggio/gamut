@@ -420,6 +420,41 @@ pub(super) fn level_line(
         let foot = [middle[0] + offset[0], middle[1] + offset[1]];
         if let Some([from, to]) = across(foot, [cos, sin], size) {
             let width = grid.line_width(HORIZON_LINE);
+            // The uprights first, under the horizon: spread along the
+            // level line through the middle, each running toward the point
+            // they all meet at, or square to the horizon where the lens was
+            // level and they never meet.
+            let vanishing = shown
+                .vanishing(size.map(f64::from), current.exif.focal_equivalent)
+                .map(|[x, y]| [middle[0] + x as f32, middle[1] + y as f32]);
+            if let Some([start, end]) = across(middle, [cos, sin], size) {
+                for step in 0..UPRIGHTS {
+                    let share = (step as f32 + 0.5) / UPRIGHTS as f32;
+                    let at = [
+                        start[0] + (end[0] - start[0]) * share,
+                        start[1] + (end[1] - start[1]) * share,
+                    ];
+                    let direction = match vanishing {
+                        Some(point) => [point[0] - at[0], point[1] - at[1]],
+                        None => [-sin, cos],
+                    };
+                    let length = direction[0].hypot(direction[1]);
+                    if length < 1e-3 {
+                        continue;
+                    }
+                    let direction = direction.map(|value| value / length);
+                    if let Some([from, to]) = across(at, direction, size) {
+                        line(
+                            width,
+                            accent.gamma_multiply(LEVEL_INK),
+                            LEVEL_DASH,
+                            LEVEL_GAP,
+                            from,
+                            to,
+                        );
+                    }
+                }
+            }
             let strokes = line(width, accent, DASH, GAP, from, to);
             let at = screen(foot);
             tick(at, strokes);
@@ -477,6 +512,9 @@ impl Line {
 
 /// The band under the lines and the chevron drawn across the picture.
 const UNDER: Color32 = Color32::WHITE;
+
+/// How many upright lines are drawn across the picture with the horizon.
+const UPRIGHTS: usize = 5;
 
 /// How far the chevron marking a horizon off the picture runs back and
 /// out to either side.

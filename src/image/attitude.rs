@@ -209,13 +209,31 @@ impl Shown {
     /// down, below it pointed up.
     pub fn horizon_through(&self, size: [f64; 2], equivalent: Option<f64>) -> Option<[f64; 2]> {
         self.horizon?;
-        let equivalent = equivalent.filter(|mm| mm.is_finite() && *mm > 0.0)?;
-        let focal = equivalent / FULL_FRAME_DIAGONAL * size[0].hypot(size[1]);
+        let focal = focal(size, equivalent)?;
         let [x, y, z] = self.gravity;
         let across = x * x + y * y;
         let along = -z * focal / across;
         Some([x * along, y * along])
     }
+
+    /// Where every upright line in the scene meets in the same picture: the
+    /// point straight below the camera with the lens pointed down, straight
+    /// above it pointed up, as an offset from the middle in pixels — the
+    /// pixel looking along gravity, `f·(gx, gy) / gz`. `None` with the lens
+    /// level, when the uprights are parallel and run along `(gx, gy)`, or
+    /// with no focal length to place it by.
+    pub fn vanishing(&self, size: [f64; 2], equivalent: Option<f64>) -> Option<[f64; 2]> {
+        let focal = focal(size, equivalent)?;
+        let [x, y, z] = self.gravity;
+        (z.abs() > 1e-6).then(|| [focal * x / z, focal * y / z])
+    }
+}
+
+/// The focal length in pixels of a picture `size` pixels across and down,
+/// taken with a lens of `equivalent` mm on a 35 mm frame.
+fn focal(size: [f64; 2], equivalent: Option<f64>) -> Option<f64> {
+    let equivalent = equivalent.filter(|mm| mm.is_finite() && *mm > 0.0)?;
+    Some(equivalent / FULL_FRAME_DIAGONAL * size[0].hypot(size[1]))
 }
 
 /// A direction across the picture carried through `orientation`: the part
@@ -473,6 +491,13 @@ mod tests {
         let (sin, cos) = rolled.horizon.unwrap().to_radians().sin_cos();
         assert!((x * cos + y * sin).abs() < 1e-6);
         assert!(y < 0.0);
+        // Every upright meets below the middle with the lens pointed down,
+        // on the far side of the horizon from it.
+        let [x, y] = rolled.vanishing(size, normal).unwrap();
+        let (sin, cos) = rolled.horizon.unwrap().to_radians().sin_cos();
+        assert!((x * cos + y * sin).abs() < 1e-6 && y > 0.0);
+        assert!((x.hypot(y) - 5000.0 / f64::tan(20f64.to_radians())).abs() < 1e-6);
+        assert_eq!(level.vanishing(size, normal), None);
         // Too steep for a horizon, nothing is placed.
         let steep = Attitude::level(at(-85.0, 0.0), Orientation::NoTransforms)
             .unwrap()
