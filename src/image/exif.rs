@@ -149,6 +149,10 @@ pub struct Exif {
     /// in mm, which places the true horizon on it. `None` where the file
     /// does not say.
     pub focal_equivalent: Option<f64>,
+    /// The bearing the lens pointed at, in degrees clockwise from north, as
+    /// the GPS directory says — true or magnetic north, as its reference
+    /// does. `None` where the file does not say.
+    pub heading: Option<f64>,
     /// How the pixels are compressed, for a TIFF: its own directory says,
     /// and the info panel's `Image` section shows it. `None` for every other
     /// file — a raw's directory is about the preview in front of it, and
@@ -414,6 +418,7 @@ impl Exif {
                 attitude: level::dji(xmp)
                     .and_then(|level| Attitude::level(level, Orientation::NoTransforms)),
                 focal_equivalent: None,
+                heading: None,
                 compression: None,
             };
         };
@@ -452,6 +457,7 @@ impl Exif {
             focal_equivalent: uint(exif, Tag::FocalLengthIn35mmFilm)
                 .filter(|mm| *mm > 0)
                 .map(f64::from),
+            heading: rational(exif, Tag::GPSImgDirection).map(|degrees| degrees.rem_euclid(360.0)),
             compression: primary(exif, Tag::Compression)
                 .map(|field| display(exif, field))
                 .filter(|value| !value.is_empty()),

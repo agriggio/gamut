@@ -420,45 +420,79 @@ pub(super) fn level_line(
         let foot = [middle[0] + offset[0], middle[1] + offset[1]];
         if let Some([from, to]) = across(foot, [cos, sin], size) {
             let width = grid.line_width(HORIZON_LINE);
-            // The uprights first, under the horizon: spread along the
-            // level line through the middle, each running toward the point
-            // they all meet at, or square to the horizon where the lens was
-            // level and they never meet.
+            let mut labels: Vec<(Pos2, String)> = Vec::new();
+            // The uprights first, under the horizon: one every
+            // `UPRIGHT_STEP` degrees round from where the lens pointed —
+            // on the round bearings, where the file says what bearing that
+            // was — each from the point every upright meets at, out through
+            // where its way crosses the horizon.
+            let picture = size.map(f64::from);
+            let focal = current.exif.focal_equivalent;
             let vanishing = shown
-                .vanishing(size.map(f64::from), current.exif.focal_equivalent)
+                .vanishing(picture, focal)
                 .map(|[x, y]| [middle[0] + x as f32, middle[1] + y as f32]);
-            if let Some([start, end]) = across(middle, [cos, sin], size) {
-                for step in 0..UPRIGHTS {
-                    let share = (step as f32 + 0.5) / UPRIGHTS as f32;
-                    let at = [
-                        start[0] + (end[0] - start[0]) * share,
-                        start[1] + (end[1] - start[1]) * share,
-                    ];
-                    let direction = match vanishing {
-                        Some(point) => [point[0] - at[0], point[1] - at[1]],
-                        None => [-sin, cos],
-                    };
-                    let length = direction[0].hypot(direction[1]);
-                    if length < 1e-3 {
-                        continue;
-                    }
-                    let direction = direction.map(|value| value / length);
-                    if let Some([from, to]) = across(at, direction, size) {
-                        line(
-                            width,
-                            accent.gamma_multiply(LEVEL_INK),
-                            LEVEL_DASH,
-                            LEVEL_GAP,
-                            from,
-                            to,
-                        );
-                    }
+            let heading = current.exif.heading;
+            let first = heading.map_or(0.0, |heading| {
+                (heading / UPRIGHT_STEP).ceil() * UPRIGHT_STEP - heading
+            });
+            let ink = accent.gamma_multiply(LEVEL_INK);
+            let mut azimuth = first - (90.0 / UPRIGHT_STEP).ceil() * UPRIGHT_STEP;
+            while azimuth < 90.0 {
+                let this = azimuth;
+                azimuth += UPRIGHT_STEP;
+                let Some([x, y]) = shown.bearing(picture, focal, this) else {
+                    continue;
+                };
+                let crossing = [middle[0] + x as f32, middle[1] + y as f32];
+                let direction = match vanishing {
+                    Some(point) => [crossing[0] - point[0], crossing[1] - point[1]],
+                    None => [-sin, cos],
+                };
+                let length = direction[0].hypot(direction[1]);
+                if length < 1e-3 {
+                    continue;
+                }
+                let direction = direction.map(|value| value / length);
+                // Past the point the uprights meet, the line is the way
+                // behind the camera, and is left out.
+                let behind = vanishing.map_or(f32::NEG_INFINITY, |_| -length);
+                let Some((enter, leave)) = span(crossing, direction, size) else {
+                    continue;
+                };
+                let enter = enter.max(behind);
+                if enter >= leave {
+                    continue;
+                }
+                let at = |t: f32| {
+                    [
+                        crossing[0] + t * direction[0],
+                        crossing[1] + t * direction[1],
+                    ]
+                };
+                line(width, ink, LEVEL_DASH, LEVEL_GAP, at(enter), at(leave));
+                if let Some(heading) = heading
+                    && (0.0..=size[0]).contains(&crossing[0])
+                    && (0.0..=size[1]).contains(&crossing[1])
+                {
+                    let bearing = (heading + this).round().rem_euclid(360.0) as u32;
+                    labels.push((screen(crossing), compass(bearing)));
                 }
             }
             let strokes = line(width, accent, DASH, GAP, from, to);
             let at = screen(foot);
             tick(at, strokes);
             painter.circle_filled(at, width * 1.5, accent);
+            // Each bearing over the horizon where its upright crosses it,
+            // above the dashes, on the band's white.
+            let font = egui::FontId::proportional(BEARING_SIZE);
+            let up = vec2(sin, -cos);
+            for (at, words) in labels {
+                let galley = painter.layout_no_wrap(words, font.clone(), Color32::PLACEHOLDER);
+                let middle = at + up * (BEARING_RISE + galley.size().y / 2.0);
+                let rect = egui::Rect::from_center_size(middle, galley.size() + vec2(6.0, 2.0));
+                painter.rect_filled(rect, 3.0, UNDER);
+                painter.galley(rect.center() - galley.size() / 2.0, galley, accent);
+            }
             return Some(Line::Horizon);
         }
     }
@@ -513,8 +547,24 @@ impl Line {
 /// The band under the lines and the chevron drawn across the picture.
 const UNDER: Color32 = Color32::WHITE;
 
-/// How many upright lines are drawn across the picture with the horizon.
-const UPRIGHTS: usize = 5;
+/// How many degrees round apart the upright lines drawn with the horizon
+/// are.
+const UPRIGHT_STEP: f64 = 10.0;
+/// The size a bearing is written at, and how far above the horizon.
+const BEARING_SIZE: f32 = 11.0;
+const BEARING_RISE: f32 = 6.0;
+
+/// A bearing as written over its upright: the four points of the compass by
+/// their letters, and the rest in degrees.
+fn compass(bearing: u32) -> String {
+    match bearing {
+        0 => "N".to_string(),
+        90 => "E".to_string(),
+        180 => "S".to_string(),
+        270 => "W".to_string(),
+        _ => format!("{bearing}\u{00b0}"),
+    }
+}
 
 /// How far the chevron marking a horizon off the picture runs back and
 /// out to either side.
@@ -523,6 +573,14 @@ const CHEVRON: f32 = 7.0;
 /// Where the line through `point` along `direction` enters and leaves a
 /// picture `size` across and down: `None` where it misses it.
 fn across(point: [f32; 2], direction: [f32; 2], size: [f32; 2]) -> Option<[[f32; 2]; 2]> {
+    let (enter, leave) = span(point, direction, size)?;
+    let at = |t: f32| [point[0] + t * direction[0], point[1] + t * direction[1]];
+    Some([at(enter), at(leave)])
+}
+
+/// How far along `direction` from `point` the line enters and leaves a
+/// picture `size` across and down: `None` where it misses it.
+fn span(point: [f32; 2], direction: [f32; 2], size: [f32; 2]) -> Option<(f32, f32)> {
     let (mut enter, mut leave) = (f32::NEG_INFINITY, f32::INFINITY);
     for axis in 0..2 {
         if direction[axis].abs() < 1e-6 {
@@ -536,8 +594,7 @@ fn across(point: [f32; 2], direction: [f32; 2], size: [f32; 2]) -> Option<[[f32;
         enter = enter.max(a.min(b));
         leave = leave.min(a.max(b));
     }
-    let at = |t: f32| [point[0] + t * direction[0], point[1] + t * direction[1]];
-    (enter < leave).then(|| [at(enter), at(leave)])
+    (enter < leave).then_some((enter, leave))
 }
 
 /// The share of `offset` from the middle that reaches the picture's edge,

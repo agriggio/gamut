@@ -905,6 +905,21 @@ fn the_orientation_section_draws_the_level_line_on_the_picture() {
         assert!(said(&harness, word), "{gravity:?}");
         assert!(segments(&harness) > before + 10, "{gravity:?}");
     }
+
+    // With the bearing the lens pointed at, the uprights are on the round
+    // bearings and say which: none without it.
+    for heading in [None, Some(212.0)] {
+        let mut current = photograph();
+        current.exif.attitude = Attitude::gopro([-0.0377, 0.9992, -0.0092]);
+        current.exif.focal_equivalent = Some(26.0);
+        current.exif.heading = heading;
+        harness.state_mut().current = Some(current);
+        harness.run();
+        assert_eq!(said(&harness, "210\u{00b0}"), heading.is_some());
+    }
+    assert!(said(&harness, "210\u{00b0}"));
+    assert!(said(&harness, "220\u{00b0}"));
+    assert!(!said(&harness, "212\u{00b0}"));
 }
 
 /// The side panel is laid out where the chrome's geometry says, between

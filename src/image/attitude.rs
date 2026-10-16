@@ -229,6 +229,44 @@ impl Shown {
     }
 }
 
+impl Shown {
+    /// Where the uprights standing `azimuth` degrees to the right of where
+    /// the lens pointed, across the ground, cross the horizon, in the same
+    /// picture: an offset from the middle in pixels. Every upright that way,
+    /// near or far, is seen on the line from [`Shown::vanishing`] through
+    /// it. `None` where there is no horizon, no focal length, or the way
+    /// is behind the lens.
+    ///
+    /// The ground's own axes in the picture's are gravity, `g`; ahead, the
+    /// lens's axis with gravity's share taken out; and right, `g × ahead`,
+    /// as the picture's right is its down by its ahead. The way `azimuth`
+    /// round from ahead toward right is seen at `f·(dx, dy) / dz`.
+    pub fn bearing(
+        &self,
+        size: [f64; 2],
+        equivalent: Option<f64>,
+        azimuth: f64,
+    ) -> Option<[f64; 2]> {
+        self.horizon?;
+        let focal = focal(size, equivalent)?;
+        let g = self.gravity;
+        let level = (1.0 - g[2] * g[2]).max(0.0).sqrt();
+        let ahead = [
+            -g[2] * g[0] / level,
+            -g[2] * g[1] / level,
+            (1.0 - g[2] * g[2]) / level,
+        ];
+        let right = [
+            g[1] * ahead[2] - g[2] * ahead[1],
+            g[2] * ahead[0] - g[0] * ahead[2],
+            g[0] * ahead[1] - g[1] * ahead[0],
+        ];
+        let (sin, cos) = azimuth.to_radians().sin_cos();
+        let way: [f64; 3] = std::array::from_fn(|axis| cos * ahead[axis] + sin * right[axis]);
+        (way[2] > 1e-3).then(|| [focal * way[0] / way[2], focal * way[1] / way[2]])
+    }
+}
+
 /// The focal length in pixels of a picture `size` pixels across and down,
 /// taken with a lens of `equivalent` mm on a 35 mm frame.
 fn focal(size: [f64; 2], equivalent: Option<f64>) -> Option<f64> {
@@ -498,6 +536,20 @@ mod tests {
         assert!((x * cos + y * sin).abs() < 1e-6 && y > 0.0);
         assert!((x.hypot(y) - 5000.0 / f64::tan(20f64.to_radians())).abs() < 1e-6);
         assert_eq!(level.vanishing(size, normal), None);
+        // Straight ahead is where the horizon passes nearest the middle,
+        // and a way to the right is to the right along it, on it.
+        let ahead = rolled.bearing(size, normal, 0.0).unwrap();
+        let through = rolled.horizon_through(size, normal).unwrap();
+        assert!((ahead[0] - through[0]).abs() < 1e-6 && (ahead[1] - through[1]).abs() < 1e-6);
+        let [x, y] = rolled.bearing(size, normal, 30.0).unwrap();
+        let along = (x - through[0]) * cos + (y - through[1]) * sin;
+        let off = (x - through[0]) * -sin + (y - through[1]) * cos;
+        assert!(along > 0.0 && off.abs() < 1e-6, "{along} {off}");
+        // Level, 45 degrees to the right is a focal length to the right.
+        let [x, y] = level.bearing(size, normal, 45.0).unwrap();
+        let (sin, cos) = level.horizon.unwrap().to_radians().sin_cos();
+        assert!((x * cos + y * sin - 5000.0).abs() < 1e-6);
+        assert_eq!(level.bearing(size, normal, 120.0), None);
         // Too steep for a horizon, nothing is placed.
         let steep = Attitude::level(at(-85.0, 0.0), Orientation::NoTransforms)
             .unwrap()
