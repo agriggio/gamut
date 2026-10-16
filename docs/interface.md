@@ -1370,10 +1370,18 @@ angle. Its axes in the world come from gravity alone, with the lens's
 heading fixed straight ahead, since nothing in either source says which way
 the camera pointed across the ground. The eye is behind the camera, so that
 a turn of the picture clockwise on screen is a turn of the drawing clockwise
-too. The level line is the line through the picture's center that is square
-to gravity's part across the picture: it is the image of a level line in the
-scene square to the lens, which is why no focal length is needed to draw it.
-It is painted as the regions are, on the picture's layer while the pointer
+too. The level line runs square to gravity's part across the picture, and
+where the file gives a 35 mm equivalent focal length it is the true horizon:
+through a rectilinear lens with its axis at the picture's center, the pixel
+`(x, y)` from the center looks along `(x, y, f)`, so the directions square
+to gravity are the line `gx·x + gy·y + gz·f = 0`, `f·|gz| / (gx² + gy²)`
+from the center (`Shown::horizon_through`). `f` in pixels is the equivalent
+over a full frame's diagonal, times the picture's diagonal, since the
+equivalent is defined by the diagonal and is the one focal length that does
+not need the sensor's size to be known. Without it the line goes through
+the center, which is the image of the level line square to the lens and so
+right in angle though not in place. A horizon that misses the picture is a
+chevron at its edge on the way from the center. It is painted as the regions are, on the picture's layer while the pointer
 is anywhere on the section.
 
 The panel is also the one part of the interface that is read out rather than

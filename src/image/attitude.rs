@@ -40,6 +40,10 @@ const ACCELERATION: u16 = 8;
 /// turn about the vertical, which gravity cannot see.
 pub const STEEPEST: f64 = 80.0;
 
+/// The diagonal of a 35 mm frame, 36 by 24 mm, which a focal length said
+/// as its 35 mm equivalent is measured against.
+const FULL_FRAME_DIAGONAL: f64 = 43.266_615_305_567_87;
+
 /// What a file says about which way its camera faced.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Attitude {
@@ -184,6 +188,33 @@ impl Attitude {
             horizon,
             gravity,
         }
+    }
+}
+
+impl Shown {
+    /// Where the true horizon runs in a picture `size` pixels across and
+    /// down, taken with a lens of `equivalent` mm on a 35 mm frame: the
+    /// point of it nearest the picture's middle, as an offset from the
+    /// middle in pixels. `None` where there is no horizon to draw, or no
+    /// focal length to place it by.
+    ///
+    /// The horizon is where everything level and far away is seen: the
+    /// directions square to gravity. Through a lens that keeps straight
+    /// lines straight, with the middle of the picture on its axis, a pixel
+    /// `(x, y)` from the middle looks along `(x, y, f)`, `f` the focal
+    /// length in pixels, so the horizon is the line on which
+    /// `gx·x + gy·y + gz·f` is nothing. It runs at [`Shown::horizon`]'s
+    /// angle, as far from the middle as `f·gz` is against gravity's
+    /// share across the picture: above the middle with the lens pointed
+    /// down, below it pointed up.
+    pub fn horizon_through(&self, size: [f64; 2], equivalent: Option<f64>) -> Option<[f64; 2]> {
+        self.horizon?;
+        let equivalent = equivalent.filter(|mm| mm.is_finite() && *mm > 0.0)?;
+        let focal = equivalent / FULL_FRAME_DIAGONAL * size[0].hypot(size[1]);
+        let [x, y, z] = self.gravity;
+        let across = x * x + y * y;
+        let along = -z * focal / across;
+        Some([x * along, y * along])
     }
 }
 
@@ -401,6 +432,52 @@ mod tests {
             .unwrap()
             .shown(Orientation::NoTransforms, Turn::NONE, [4000, 3000]);
         assert!((shown.horizon.unwrap() + 3.8).abs() < 1e-9);
+    }
+
+    /// Pointed down, the horizon is above the middle, as far as the focal
+    /// length makes the pitch; pointed up, below it; level, through it.
+    /// Without a focal length it has no place.
+    #[test]
+    fn the_horizon_is_placed_by_the_pitch_and_the_focal_length() {
+        use super::super::level::Maker;
+        let at = |pitch: f64, roll: f64| Level {
+            roll,
+            pitch,
+            yaw: None,
+            maker: Maker::Panasonic,
+        };
+        let size = [4000.0, 3000.0];
+        // 43.27 mm on a 35 mm frame is a focal length as long as the
+        // frame's diagonal, 5000 pixels here.
+        let normal = Some(FULL_FRAME_DIAGONAL);
+        for (pitch, sign) in [(-20.0, -1.0), (15.0, 1.0)] {
+            let shown = Attitude::level(at(pitch, 0.0), Orientation::NoTransforms)
+                .unwrap()
+                .shown(Orientation::NoTransforms, Turn::NONE, [4000, 3000]);
+            let [x, y] = shown.horizon_through(size, normal).unwrap();
+            let expected = 5000.0 * f64::tan(pitch.abs().to_radians());
+            assert!(x.abs() < 1e-6, "{pitch}: {x}");
+            assert!((y - sign * expected).abs() < 1e-6, "{pitch}: {y}");
+            assert_eq!(shown.horizon_through(size, None), None);
+        }
+        let level = Attitude::level(at(0.0, 10.0), Orientation::NoTransforms)
+            .unwrap()
+            .shown(Orientation::NoTransforms, Turn::NONE, [4000, 3000]);
+        let [x, y] = level.horizon_through(size, normal).unwrap();
+        assert!(x.hypot(y) < 1e-6);
+        // Rolled, the offset is square to the line, still on the up side.
+        let rolled = Attitude::level(at(-20.0, 10.0), Orientation::NoTransforms)
+            .unwrap()
+            .shown(Orientation::NoTransforms, Turn::NONE, [4000, 3000]);
+        let [x, y] = rolled.horizon_through(size, normal).unwrap();
+        let (sin, cos) = rolled.horizon.unwrap().to_radians().sin_cos();
+        assert!((x * cos + y * sin).abs() < 1e-6);
+        assert!(y < 0.0);
+        // Too steep for a horizon, nothing is placed.
+        let steep = Attitude::level(at(-85.0, 0.0), Orientation::NoTransforms)
+            .unwrap()
+            .shown(Orientation::NoTransforms, Turn::NONE, [4000, 3000]);
+        assert_eq!(steep.horizon_through(size, normal), None);
     }
 
     #[test]

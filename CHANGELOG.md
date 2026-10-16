@@ -16,7 +16,9 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
   dimensions as it was pitched and turned over a level floor, and says how
   far the lens pointed up or down and how far the horizon runs from level
   in the picture as shown. Resting the pointer on the section draws the
-  level line across the picture.
+  level line across the picture — where the true horizon falls, for a
+  file that records its 35 mm equivalent focal length, and through the
+  middle otherwise.
 
 - A camera raw with a color filter over its sensor can be shown as its
   mosaic: what the sensor counted, one value to a photosite, each in its

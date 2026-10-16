@@ -72,6 +72,10 @@ const LEVEL_LINE: f32 = 1.5;
 const DASH: f32 = 6.0;
 const GAP: f32 = 4.0;
 
+/// How squarely a face must face the eye to be drawn: the cosine of the
+/// angle between its outward way and the way back to the eye.
+const EDGE_ON: f32 = 0.03;
+
 /// A point of the scene.
 type Point = [f32; 3];
 
@@ -156,8 +160,10 @@ pub(super) fn diagram(
             let corners: Vec<Point> = face.corners.iter().map(|&point| world(point)).collect();
             let normal = world(face.outward);
             let seen = view(normal);
-            // Facing away from the eye, which looks along +z.
-            if seen[2] >= 0.0 {
+            // Facing away from the eye, which looks along +z, or so nearly
+            // edge-on that it is a sliver, whose sharp corners would be
+            // stroked as spikes.
+            if seen[2] >= -EDGE_ON {
                 return None;
             }
             let depth =
@@ -196,15 +202,33 @@ pub(super) fn diagram(
                 .map(|point| (middle + (point.to_vec2() - middle) * SCREEN).to_pos2())
                 .collect::<Vec<Pos2>>()
         });
-        painter.add(egui::Shape::convex_polygon(points, fill, edge));
+        painter.add(egui::Shape::convex_polygon(
+            points.clone(),
+            fill,
+            Stroke::NONE,
+        ));
+        outline(painter, &points, edge);
         if let Some(screen) = screen {
             let glass = mix(theme.bar_background, theme.accent, 0.05);
             painter.add(egui::Shape::convex_polygon(
-                screen,
+                screen.clone(),
                 glass,
-                Stroke::new(edge.width, dim),
+                Stroke::NONE,
             ));
+            outline(painter, &screen, Stroke::new(edge.width, dim));
         }
+    }
+}
+
+/// Strokes round `points` edge by edge, each corner rounded. A closed
+/// polygon's own stroke joins its corners with miters that egui does not
+/// limit, so a sharp corner seen in perspective grows a spike.
+fn outline(painter: &egui::Painter, points: &[Pos2], stroke: Stroke) {
+    for (&a, &b) in points.iter().zip(points.iter().cycle().skip(1)) {
+        painter.line_segment([a, b], stroke);
+    }
+    for &point in points {
+        painter.circle_filled(point, stroke.width / 2.0, stroke.color);
     }
 }
 
@@ -339,10 +363,13 @@ fn mix(from: Color, to: Color, share: f32) -> Color32 {
     )
 }
 
-/// Draws the level line across the picture with `painter`: through its
-/// middle, at the angle `shown` says the horizon runs, from one edge of the
-/// picture to the other, with a short square mark at the middle pointing
-/// up. Nothing where the lens pointed too steeply for a horizon.
+/// Draws the level line across the picture with `painter`, at the angle
+/// `shown` says the horizon runs: where the true horizon is, where the file
+/// says what focal length it was taken at, and through the middle where it
+/// does not; from one edge of the picture to the other, with a short square
+/// mark at the point nearest the middle pointing up. A horizon that falls
+/// outside the picture is a mark at the edge pointing the way it lies.
+/// Nothing where the lens pointed too steeply for a horizon.
 pub(super) fn level_line(pass: &Pass, painter: &egui::Painter, current: &Current, shown: &Shown) {
     let Some(horizon) = shown.horizon else {
         return;
@@ -355,41 +382,103 @@ pub(super) fn level_line(pass: &Pass, painter: &egui::Painter, current: &Current
         pos2(x / scale, y / scale)
     };
     let middle = [size[0] / 2.0, size[1] / 2.0];
+    let offset = shown
+        .horizon_through(size.map(f64::from), current.exif.focal_equivalent)
+        .map_or([0.0, 0.0], |offset| offset.map(|value| value as f32));
+    let foot = [middle[0] + offset[0], middle[1] + offset[1]];
     let (sin, cos) = (horizon as f32).to_radians().sin_cos();
-    // How far either way the line runs before it leaves the picture.
-    let reach = [cos, sin]
+    let grid = pass.grid;
+    let accent: Color32 = pass.theme.accent.into();
+    let width = grid.line_width(LEVEL_LINE);
+    // A dark band under the dashes, so they are seen on a bright sky too.
+    let under = Stroke::new(width + 2.0, Color32::from_black_alpha(90));
+    let ink = Stroke::new(width, accent);
+
+    let Some([from, to]) = across(foot, [cos, sin], size) else {
+        // Off the picture: a chevron at the edge, on the way from the
+        // middle to the horizon, pointing out toward it.
+        let reach = edge_reach(offset, middle);
+        let at = screen([middle[0] + offset[0] * reach, middle[1] + offset[1] * reach]);
+        let out = (screen(foot) - screen(middle)).normalized();
+        let side = out.rot90() * CHEVRON;
+        let tip = at - out * 2.0;
+        let back = tip - out * CHEVRON;
+        for stroke in [under, ink] {
+            painter.line_segment([back + side, tip], stroke);
+            painter.line_segment([tip, back - side], stroke);
+        }
+        return;
+    };
+    let ends = [screen(from), screen(to)];
+    painter.line_segment(ends, under);
+    painter.extend(egui::Shape::dashed_line(&ends, ink, DASH, GAP));
+    // The point nearest the middle, and which side of the line is up.
+    let at = screen(foot);
+    let up = vec2(sin, -cos) * 10.0;
+    painter.line_segment([at, at + up], under);
+    painter.line_segment([at, at + up], ink);
+    painter.circle_filled(at, width * 1.5, accent);
+}
+
+/// How far the chevron marking a horizon off the picture runs back and
+/// out to either side.
+const CHEVRON: f32 = 7.0;
+
+/// Where the line through `point` along `direction` enters and leaves a
+/// picture `size` across and down: `None` where it misses it.
+fn across(point: [f32; 2], direction: [f32; 2], size: [f32; 2]) -> Option<[[f32; 2]; 2]> {
+    let (mut enter, mut leave) = (f32::NEG_INFINITY, f32::INFINITY);
+    for axis in 0..2 {
+        if direction[axis].abs() < 1e-6 {
+            if !(0.0..=size[axis]).contains(&point[axis]) {
+                return None;
+            }
+            continue;
+        }
+        let a = -point[axis] / direction[axis];
+        let b = (size[axis] - point[axis]) / direction[axis];
+        enter = enter.max(a.min(b));
+        leave = leave.min(a.max(b));
+    }
+    let at = |t: f32| [point[0] + t * direction[0], point[1] + t * direction[1]];
+    (enter < leave).then(|| [at(enter), at(leave)])
+}
+
+/// The share of `offset` from the middle that reaches the picture's edge,
+/// `middle` being half the picture each way.
+fn edge_reach(offset: [f32; 2], middle: [f32; 2]) -> f32 {
+    offset
         .iter()
         .zip(middle)
         .filter(|(along, _)| along.abs() > 1e-6)
         .map(|(along, half)| half / along.abs())
-        .fold(f32::INFINITY, f32::min);
-    if !reach.is_finite() {
-        return;
+        .fold(1.0, f32::min)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A line through the picture is cut at its edges; one that passes it
+    /// by, level or slanted, is not drawn at all.
+    #[test]
+    fn a_line_is_cut_to_the_picture() {
+        let size = [400.0, 300.0];
+        assert_eq!(
+            across([200.0, 100.0], [1.0, 0.0], size),
+            Some([[0.0, 100.0], [400.0, 100.0]])
+        );
+        assert_eq!(across([200.0, -10.0], [1.0, 0.0], size), None);
+        let (sin, cos) = 0.1f32.sin_cos();
+        let [from, to] = across([200.0, 150.0], [cos, sin], size).unwrap();
+        assert!(from[0].abs() < 1e-3 && (to[0] - 400.0).abs() < 1e-3);
+        assert_eq!(across([200.0, -400.0], [cos, sin], size), None);
     }
-    let end = |sign: f32| {
-        screen([
-            middle[0] + sign * reach * cos,
-            middle[1] + sign * reach * sin,
-        ])
-    };
-    let ends = [end(-1.0), end(1.0)];
-    let grid = pass.grid;
-    let theme = pass.theme;
-    let accent: Color32 = theme.accent.into();
-    let width = grid.line_width(LEVEL_LINE);
-    // A dark band under the dashes, so they are seen on a bright sky too.
-    let under = Stroke::new(width + 2.0, Color32::from_black_alpha(90));
-    painter.line_segment(ends, under);
-    painter.extend(egui::Shape::dashed_line(
-        &ends,
-        Stroke::new(width, accent),
-        DASH,
-        GAP,
-    ));
-    // The middle, and which side of the line is up.
-    let at = screen(middle);
-    let up = vec2(sin, -cos) * 10.0;
-    painter.line_segment([at, at + up], under);
-    painter.line_segment([at, at + up], Stroke::new(width, accent));
-    painter.circle_filled(at, width * 1.5, accent);
+
+    /// The edge is reached along the way to a horizon off the picture.
+    #[test]
+    fn a_horizon_off_the_picture_is_marked_at_its_edge() {
+        assert_eq!(edge_reach([0.0, -600.0], [200.0, 150.0]), 0.25);
+        assert_eq!(edge_reach([0.0, -100.0], [200.0, 150.0]), 1.0);
+    }
 }

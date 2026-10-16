@@ -145,6 +145,10 @@ pub struct Exif {
     /// iPhone's accelerometer, a GoPro's gravity vector. `None` where the
     /// file does not say.
     pub attitude: Option<Attitude>,
+    /// The focal length the picture was taken at, as its 35 mm equivalent
+    /// in mm, which places the true horizon on it. `None` where the file
+    /// does not say.
+    pub focal_equivalent: Option<f64>,
     /// How the pixels are compressed, for a TIFF: its own directory says,
     /// and the info panel's `Image` section shows it. `None` for every other
     /// file — a raw's directory is about the preview in front of it, and
@@ -409,6 +413,7 @@ impl Exif {
                 orientation: None,
                 attitude: level::dji(xmp)
                     .and_then(|level| Attitude::level(level, Orientation::NoTransforms)),
+                focal_equivalent: None,
                 compression: None,
             };
         };
@@ -444,6 +449,9 @@ impl Exif {
                 let level = level_of(exif).or_else(|| level::dji(xmp))?;
                 Attitude::level(level, orientation.unwrap_or(Orientation::NoTransforms))
             }),
+            focal_equivalent: uint(exif, Tag::FocalLengthIn35mmFilm)
+                .filter(|mm| *mm > 0)
+                .map(f64::from),
             compression: primary(exif, Tag::Compression)
                 .map(|field| display(exif, field))
                 .filter(|value| !value.is_empty()),
