@@ -123,7 +123,11 @@ modifiers, and how it is used: `left`, `middle`, `right`, `back` or
 `forward`, then `.drag`, `.hold`, `.click` or `.double-click` —
 `shift+left.drag`, `middle.click`, `left.double-click`. Or it is the wheel, turned with modifiers or with a button
 other than the left held down: `wheel`, `ctrl+wheel`, `right+wheel`,
-`ctrl+middle+wheel`. Or it is a pinch on a trackpad, with modifiers: `pinch`,
+`ctrl+middle+wheel`. Or it is a scroll, written the same way — `scroll`,
+`cmd+scroll`, `right+scroll` — which is two fingers on a trackpad or a wheel
+that scrolls smoothly rather than in notches; a scroll with no slot of its
+own does what the wheel with the same modifiers and button does. Or it is a
+pinch on a trackpad, with modifiers: `pinch`,
 `cmd+pinch`. The left button cannot be a hold, being a drag.
 
 What each takes:
@@ -132,7 +136,7 @@ What each takes:
 | --- | --- |
 | A drag | `pan`, `zoom-box`, `move-region`, or `none` |
 | A hold | `loupe`, or `none` |
-| The wheel, or a pinch | `zoom`, `loupe-magnification`, `exposure`, `black-point`, `white-point`, `files`, `frames`, `pan`, or `none` |
+| The wheel, a scroll, or a pinch | `zoom`, `loupe-magnification`, `exposure`, `black-point`, `white-point`, `files`, `frames`, `pan`, or `none` |
 | A click or a double-click | the name of a key, which it then does — `files.back`, `interface.grid`, `zoom.100` — or `none` |
 | A drag or a click on the minimap | `center`, or `none` |
 
@@ -144,14 +148,15 @@ The first click of a double-click is a click as well, and does whatever
 that button's click does. `move-region` moves a selected region when the drag starts inside it, and
 elsewhere does whatever the same button does with nothing held.
 
-A pinch outward is the wheel turned up. On a Mac the defaults differ in three
-slots: `gesture.image.wheel` is `pan`, `gesture.image.cmd+wheel` is `zoom`,
-and `gesture.image.pinch` is `zoom`.
+A pinch outward is the wheel turned up. On a Mac the defaults add three
+slots: `gesture.image.scroll` is `pan`, `gesture.image.cmd+scroll` is
+`zoom`, and `gesture.image.pinch` is `zoom`; a mouse's notched wheel zooms,
+as it does elsewhere.
 
 A gesture is matched exactly: a slot for `left.drag` says nothing about
 `ctrl+left.drag`, which does nothing unless it has a slot of its own. A
 wheel with `Ctrl`, `Alt` or `Super` held does nothing by default, as those
-belong to the window manager; on a Mac, only `Cmd` with the wheel does
+belong to the window manager; on a Mac, only `Cmd` with the scroll does
 something by default.
 
 Some of what the left button does on the picture comes before its slot and

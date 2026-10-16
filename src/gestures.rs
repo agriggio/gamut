@@ -225,8 +225,9 @@ impl Kind {
 }
 
 /// What is pressed or turned: a button, held with modifiers and used one
-/// way; the wheel, turned with modifiers and, it may be, a button held; or
-/// two fingers pinched on a trackpad, with modifiers.
+/// way; the wheel, turned with modifiers and, it may be, a button held; a
+/// smooth scroll, the same; or two fingers pinched on a trackpad, with
+/// modifiers.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Input {
     Button {
@@ -234,14 +235,14 @@ pub enum Input {
         button: Button,
         kind: Kind,
     },
-    Wheel {
-        mods: Mods,
-        held: Option<Button>,
-    },
+    /// A wheel that turns in notches.
+    Wheel { mods: Mods, held: Option<Button> },
+    /// A scroll that says how far it went rather than how many notches: two
+    /// fingers on a trackpad, or a mouse that scrolls smoothly. Takes what
+    /// the wheel takes, and where no slot of its own says, the wheel's.
+    Scroll { mods: Mods, held: Option<Button> },
     /// Takes what the wheel takes, a pinch out being the wheel turned up.
-    Pinch {
-        mods: Mods,
-    },
+    Pinch { mods: Mods },
 }
 
 /// One place for the hand: a surface and what is done on it.
@@ -253,7 +254,8 @@ pub struct Slot {
 
 impl Slot {
     /// The slot a name of the file names — the part after `gesture.`:
-    /// `image.shift+left.drag`, `image.right+wheel`, `minimap.left.click`.
+    /// `image.shift+left.drag`, `image.right+wheel`, `image.scroll`,
+    /// `minimap.left.click`.
     pub fn read(name: &str) -> Result<Slot, String> {
         let (surface, rest) = name
             .split_once('.')
@@ -273,10 +275,15 @@ impl Slot {
                 return Err("a pinch is made with no button held".to_string());
             }
             Input::Pinch { mods }
-        } else if rest.to_ascii_lowercase().ends_with("wheel") && !rest.contains('.') {
+        } else if let Some(smooth) = ["wheel", "scroll"]
+            .into_iter()
+            .position(|word| rest.to_ascii_lowercase().ends_with(word))
+            .filter(|_| !rest.contains('.'))
+            .map(|found| found == 1)
+        {
             let mut words: Vec<&str> = rest.split('+').collect();
-            let wheel = words.pop().unwrap_or_default();
-            if !wheel.eq_ignore_ascii_case("wheel") {
+            let last = words.pop().unwrap_or_default();
+            if !last.eq_ignore_ascii_case(if smooth { "scroll" } else { "wheel" }) {
                 return Err(format!("unknown gesture `{rest}`"));
             }
             let (mods, held) = modifiers_and_button(&words)?;
@@ -285,7 +292,10 @@ impl Slot {
                     "the left button held is a drag; hold another with the wheel".to_string(),
                 );
             }
-            Input::Wheel { mods, held }
+            match smooth {
+                true => Input::Scroll { mods, held },
+                false => Input::Wheel { mods, held },
+            }
         } else {
             let (input, kind) = rest.rsplit_once('.').ok_or_else(|| {
                 format!("`{rest}` is a button and what is done with it, or the wheel")
@@ -331,6 +341,11 @@ impl Slot {
             ),
             Input::Wheel { mods, held } => format!(
                 "{}{}wheel",
+                modifiers_token(mods),
+                held.map_or(String::new(), |button| format!("{}+", button.token()))
+            ),
+            Input::Scroll { mods, held } => format!(
+                "{}{}scroll",
                 modifiers_token(mods),
                 held.map_or(String::new(), |button| format!("{}+", button.token()))
             ),
@@ -388,6 +403,12 @@ impl Slot {
                     format!("{}+Wheel", button.spelled())
                 }),
             ),
+            Input::Scroll { mods, held } => with_modifiers(
+                mods,
+                &held.map_or("Scroll".to_string(), |button| {
+                    format!("{}+Scroll", button.spelled())
+                }),
+            ),
             Input::Pinch { mods } => with_modifiers(mods, "Pinch"),
         };
         match self.surface {
@@ -397,11 +418,11 @@ impl Slot {
     }
 
     /// The kind of gesture this is, and so which words it takes: `None` for
-    /// the wheel and for a pinch, which takes the wheel's.
+    /// the wheel, and for a scroll and a pinch, which take the wheel's.
     fn kind(&self) -> Option<Kind> {
         match self.input {
             Input::Button { kind, .. } => Some(kind),
-            Input::Wheel { .. } | Input::Pinch { .. } => None,
+            Input::Wheel { .. } | Input::Scroll { .. } | Input::Pinch { .. } => None,
         }
     }
 }
@@ -584,6 +605,7 @@ fn slot_kind_word(slot: &Slot) -> &'static str {
     match (slot.surface, slot.kind()) {
         (Surface::Minimap, _) => "minimap gesture",
         (_, None) if matches!(slot.input, Input::Pinch { .. }) => "pinch",
+        (_, None) if matches!(slot.input, Input::Scroll { .. }) => "scroll",
         (_, None) => "wheel",
         (_, Some(kind)) => kind.token(),
     }
@@ -644,16 +666,16 @@ impl Default for Gestures {
 impl Gestures {
     /// The table as a Mac has it: two fingers scrolling pan the picture, as
     /// they do in every Mac program that shows one, and the zoom is a pinch,
-    /// or the wheel with Command held. Built on every platform, so that the
-    /// tests can read it wherever they run.
+    /// the scroll with Command held, or a mouse's notched wheel. Built on
+    /// every platform, so that the tests can read it wherever they run.
     pub fn mac() -> Self {
         let mut gestures = Self::table();
-        let wheel = |mods| Slot {
+        let scroll = |mods| Slot {
             surface: Surface::Image,
-            input: Input::Wheel { mods, held: None },
+            input: Input::Scroll { mods, held: None },
         };
-        gestures.set(wheel(Mods::empty()), Behavior::Wheel(WheelAction::Pan));
-        gestures.set(wheel(Mods::SUPER), Behavior::Wheel(WheelAction::Zoom));
+        gestures.set(scroll(Mods::empty()), Behavior::Wheel(WheelAction::Pan));
+        gestures.set(scroll(Mods::SUPER), Behavior::Wheel(WheelAction::Zoom));
         gestures.set(
             Slot {
                 surface: Surface::Image,
@@ -776,12 +798,29 @@ impl Gestures {
         }
     }
 
-    /// What the wheel steps on `surface`, turned with `mods` and `held`.
-    pub fn wheel(&self, surface: Surface, mods: Mods, held: Option<Button>) -> Option<WheelAction> {
-        match self.get(&Slot {
+    /// What the wheel steps on `surface`, turned with `mods` and `held`;
+    /// where it is `smooth`, a scroll's slot first, and the wheel's where
+    /// the scroll has none.
+    pub fn wheel(
+        &self,
+        surface: Surface,
+        mods: Mods,
+        held: Option<Button>,
+        smooth: bool,
+    ) -> Option<WheelAction> {
+        let wheel = Slot {
             surface,
             input: Input::Wheel { mods, held },
-        })? {
+        };
+        let scroll = Slot {
+            surface,
+            input: Input::Scroll { mods, held },
+        };
+        let behavior = match smooth {
+            true => self.get(&scroll).or_else(|| self.get(&wheel)),
+            false => self.get(&wheel),
+        };
+        match behavior? {
             Behavior::Wheel(action) => Some(*action),
             _ => None,
         }
@@ -853,8 +892,10 @@ impl Gestures {
              # A surface is image or minimap. An input is [mods+]<button>.<kind>, the kind\n\
              # drag, hold, click or double-click and the button left, middle, right, back\n\
              # or forward; or [mods+][button+]wheel for the wheel turned with a button\n\
-             # held; or [mods+]pinch for two fingers pinched on a trackpad, which takes\n\
-             # what the wheel takes. Modifiers as for keys. A drag takes pan, zoom-box,\n\
+             # held; or [mods+][button+]scroll for a trackpad's or a smooth wheel's\n\
+             # scroll, which takes the wheel's slot where it has none of its own; or\n\
+             # [mods+]pinch for two fingers pinched on a trackpad; both take what the\n\
+             # wheel takes. Modifiers as for keys. A drag takes pan, zoom-box,\n\
              # move-region or none; a hold loupe or none; the wheel zoom,\n\
              # loupe-magnification, exposure, black-point, white-point, files, frames, pan\n\
              # or none; a click or a double-click a key's name or none. On the minimap, a\n\
@@ -883,6 +924,8 @@ mod tests {
         names.extend(
             [
                 "image.ctrl+middle+wheel",
+                "image.scroll",
+                "image.shift+right+scroll",
                 "image.shift+left.drag",
                 "image.back.click",
                 "image.ctrl+middle.double-click",
@@ -928,19 +971,28 @@ mod tests {
         assert!(Slot::read("minimap.pinch").is_err());
     }
 
-    /// On a Mac two fingers pan, and the zoom is a pinch or the wheel with
-    /// Command; everything else is the table's.
+    /// On a Mac two fingers pan, and the zoom is a pinch, the scroll with
+    /// Command or a notched wheel; everything else is the table's.
     #[test]
     fn the_mac_pans_with_two_fingers_and_zooms_with_a_pinch() {
         let mac = Gestures::mac();
         let table = Gestures::table();
         assert_eq!(
-            mac.wheel(Surface::Image, Mods::empty(), None),
+            mac.wheel(Surface::Image, Mods::empty(), None, true),
             Some(WheelAction::Pan)
         );
         assert_eq!(
-            mac.wheel(Surface::Image, Mods::SUPER, None),
+            mac.wheel(Surface::Image, Mods::SUPER, None, true),
             Some(WheelAction::Zoom)
+        );
+        assert_eq!(
+            mac.wheel(Surface::Image, Mods::empty(), None, false),
+            Some(WheelAction::Zoom)
+        );
+        // A scroll no slot of its own names takes the wheel's.
+        assert_eq!(
+            mac.wheel(Surface::Image, Mods::empty(), Some(Button::Right), true),
+            Some(WheelAction::LoupeMagnification)
         );
         assert_eq!(
             mac.pinch(Surface::Image, Mods::empty()),
@@ -978,6 +1030,9 @@ mod tests {
         assert!(Slot::read("image.thumb.drag").is_err());
         assert!(Slot::read("image.hyper+left.drag").is_err());
         assert!(Slot::read("minimap.wheel").is_err());
+        assert!(Slot::read("minimap.scroll").is_err());
+        assert!(Slot::read("image.left+scroll").is_err());
+        assert!(Slot::read("image.wheelscroll").is_err());
         assert!(Slot::read("minimap.left.hold").is_err());
         assert!(Slot::read("minimap.left.double-click").is_err());
     }
@@ -992,6 +1047,8 @@ mod tests {
         assert_eq!(spelled("image.wheel"), "Wheel");
         assert_eq!(spelled("image.right+wheel"), "Right+Wheel");
         assert_eq!(spelled("image.ctrl+wheel"), spelled_here("Ctrl+Wheel"));
+        assert_eq!(spelled("image.scroll"), "Scroll");
+        assert_eq!(spelled("image.right+scroll"), "Right+Scroll");
         assert_eq!(spelled("image.back.click"), "Back");
         assert_eq!(spelled("image.middle.click"), "Middle click");
         assert_eq!(spelled("image.left.double-click"), "Double-click");
@@ -1080,9 +1137,12 @@ mod tests {
             gestures.drag(Surface::Image, Mods::empty(), Button::Middle),
             None
         );
-        assert_eq!(gestures.wheel(Surface::Image, Mods::CONTROL, None), None);
         assert_eq!(
-            gestures.wheel(Surface::Image, Mods::empty(), Some(Button::Right)),
+            gestures.wheel(Surface::Image, Mods::CONTROL, None, false),
+            None
+        );
+        assert_eq!(
+            gestures.wheel(Surface::Image, Mods::empty(), Some(Button::Right), false),
             Some(WheelAction::LoupeMagnification)
         );
         assert_eq!(
