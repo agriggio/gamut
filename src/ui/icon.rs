@@ -651,6 +651,17 @@ pub(super) const EYE: &[Mark] = &[
     Mark::circle([12.0, 12.0], 3.0),
 ];
 
+/// Lucide's `compass`, as it was drawn before its needle's corners were
+/// rounded: a ring with a needle across it, for the horizon grid, which
+/// is laid out by the bearings round the camera.
+pub(super) const COMPASS: &[Mark] = &[
+    Mark::circle([12.0, 12.0], 10.0),
+    Mark::Line([16.24, 7.76], [14.12, 14.12]),
+    Mark::Line([14.12, 14.12], [7.76, 16.24]),
+    Mark::Line([7.76, 16.24], [9.88, 9.88]),
+    Mark::Line([9.88, 9.88], [16.24, 7.76]),
+];
+
 /// Lucide's `zoom-in`: a magnifying glass with a plus in it, for the loupe,
 /// which is one.
 pub(super) const ZOOM_IN: &[Mark] = &[

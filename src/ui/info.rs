@@ -22,7 +22,6 @@ use egui::{
 };
 
 use crate::clock;
-use ::image::metadata::Orientation;
 
 use crate::image::AlphaMode;
 use crate::image::attitude::{Attitude, Shown, Source};
@@ -991,8 +990,15 @@ fn orientation_section(
     // Which line is drawn on the picture is said at the heading's end, as
     // the pill a section on screen wears — except while the pointer is on
     // the heading, whose end is the button that copies the section.
-    if ui.rect_contains_pointer(whole)
-        && let Some(line) = attitude::level_line(pass, picture, current, &shown)
+    // The section is a preview of the horizon grid: while the pointer is
+    // on it the grid is drawn, as the toggle would — unless the toggle has
+    // it up already.
+    let pointed = ui.rect_contains_pointer(whole);
+    if pointed && !pass.panels.horizon_grid {
+        attitude::paint(pass, picture, current, &shown, pass.panels.horizon_step);
+    }
+    if pointed
+        && let Some(line) = attitude::line(current, &shown)
         && !ui.rect_contains_pointer(heading)
     {
         let word = line.word();
@@ -1536,14 +1542,11 @@ fn contents(current: &Current) -> Contents {
     );
     // Which way the camera faced, worked out in the picture as shown, which
     // the turn in force decides as it does for the regions.
-    if let Some(attitude) = &exif.attitude {
+    if let Some(attitude) = &exif.attitude
+        && let Some(shown) = attitude::shown(current)
+    {
         let face = current.picture_face();
         let size = current.turn.size([face.image.width, face.image.height]);
-        let shown = attitude.shown(
-            exif.orientation.unwrap_or(Orientation::NoTransforms),
-            current.turn,
-            size,
-        );
         sections.push(Section {
             attitude: Some((shown, size.map(|side| side as f32))),
             ..Section::new(

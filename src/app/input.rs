@@ -131,6 +131,10 @@ pub enum Action {
     ToggleRawData,
     ToggleMinimap,
     ToggleGrid,
+    /// The horizon grid: the toggle the button after the grid's presses,
+    /// and the spacing of its uprights stepped round the ones on offer.
+    ToggleHorizonGrid,
+    CycleHorizonStep,
     /// The loupe: the toggle the button beside the grid's presses, and the
     /// magnification stepped round the ones on offer, which the wheel
     /// steps with the secondary button held.
@@ -380,6 +384,7 @@ pub(super) fn action_of(tip: Tip) -> Option<Action> {
         Tip::Control(Control::Histogram) => ToggleHistogram,
         Tip::Control(Control::Info) => ToggleInfo,
         Tip::Control(Control::Grid) => ToggleGrid,
+        Tip::Control(Control::HorizonGrid) => ToggleHorizonGrid,
         Tip::Control(Control::Loupe) => ToggleLoupe,
         // The plain press: Shift on the same button asks for the other key,
         // which the tooltip lists under this one — see `App::tooltip`.
@@ -623,10 +628,13 @@ pub enum When {
     /// at the head of the file list go back and forward to.
     VisitedBefore,
     VisitedAfter,
-    /// The file on screen says where its pixels are on the ground.
-    Georeferenced,
+    /// The file on screen says more of where a pixel is than its column
+    /// and row: where it is on the ground, or which way it looks.
+    Coordinates,
     /// And can say it in latitude and longitude.
     Geographic,
+    /// The file on screen says which way its camera faced.
+    Orientation,
     /// The image on screen is read as data rather than as a photo: numbers
     /// windowed to what they hold, which is what the window rules are for.
     Data,
@@ -639,7 +647,7 @@ impl When {
     /// Every condition, for a test to hold them all up against the
     /// application.
     #[cfg(test)]
-    pub const ALL: [When; 20] = [
+    pub const ALL: [When; 21] = [
         When::RegionSelected,
         When::SeveralFiles,
         When::Animation,
@@ -656,8 +664,9 @@ impl When {
         When::Undoable,
         When::VisitedBefore,
         When::VisitedAfter,
-        When::Georeferenced,
+        When::Coordinates,
         When::Geographic,
+        When::Orientation,
         When::Data,
         When::Photo,
     ];
@@ -682,8 +691,9 @@ impl When {
             When::Undoable => "an edit to undo",
             When::VisitedBefore => "a file shown before this one",
             When::VisitedAfter => "a file shown after this one",
-            When::Georeferenced => "a georeferenced file",
+            When::Coordinates => "a file with other coordinates",
             When::Geographic => "a file placed in lat/long",
+            When::Orientation => "a file with camera orientation",
             When::Data => "an image read as data",
             When::Photo => "an image read as a photo",
         }
@@ -720,8 +730,9 @@ impl Conditions {
             When::Undoable => self.undoable,
             When::VisitedBefore => self.visited_before,
             When::VisitedAfter => self.visited_after,
-            When::Georeferenced => self.georeferenced,
+            When::Coordinates => self.coordinates,
             When::Geographic => self.geographic,
+            When::Orientation => self.orientation,
             When::Data => self.data,
             When::Photo => !self.data && !self.nothing_open,
         }
@@ -971,6 +982,18 @@ pub static ROWS: &[Row] = &[
     },
     Row {
         section: Section::Interface,
+        when: Some(When::Orientation),
+        help: "Toggle the horizon grid",
+        keys: one!("interface.horizon-grid", ToggleHorizonGrid, [key('b')]),
+    },
+    Row {
+        section: Section::Interface,
+        when: Some(When::Orientation),
+        help: "Cycle the horizon grid's spacing: 5, 10, 15, 30 degrees",
+        keys: one!("interface.horizon-step", CycleHorizonStep, [key('B')]),
+    },
+    Row {
+        section: Section::Interface,
         when: None,
         help: "Toggle the loupe",
         keys: one!("interface.loupe", ToggleLoupe, [key('l')]),
@@ -1029,8 +1052,8 @@ pub static ROWS: &[Row] = &[
     // rather than what is in it.
     Row {
         section: Section::Interface,
-        when: Some(When::Georeferenced),
-        help: "Cycle the coordinate readout: pixel, projected, geographic",
+        when: Some(When::Coordinates),
+        help: "Cycle the coordinate readout: pixel, projected, geographic, direction",
         keys: one!("interface.coordinate-format", CycleCoordinates, [key(',')]),
     },
     Row {
@@ -1659,7 +1682,7 @@ impl Naming for Namer {
                     (
                         ui::tooltip::PIXEL_COORDINATE_CYCLE,
                         CycleCoordinates,
-                        self.conditions.georeferenced,
+                        self.conditions.coordinates,
                     ),
                     (
                         ui::tooltip::PIXEL_GEOGRAPHIC_CYCLE,
@@ -2229,6 +2252,11 @@ impl App {
             ToggleRawData => return self.show_info_on(ui::tags::Tab::Tags),
             ToggleMinimap => return self.press(Control::Minimap),
             ToggleGrid => return self.press(Control::Grid),
+            ToggleHorizonGrid => return self.press(Control::HorizonGrid),
+            CycleHorizonStep => {
+                self.panels.horizon_step = ui::attitude::cycle(self.panels.horizon_step);
+                return Effect::Redraw;
+            }
             ToggleLoupe => return self.press(Control::Loupe),
             CycleMagnification => {
                 self.panels.loupe_magnification = ui::loupe::cycle(self.panels.loupe_magnification);
@@ -2335,11 +2363,8 @@ impl App {
             // from a choice the bar is not showing would look as though it
             // skipped one.
             CycleCoordinates => {
-                let georeference = self
-                    .current
-                    .as_ref()
-                    .and_then(|current| current.exif.georeference.as_ref());
-                self.panels.coordinate_format = self.panels.coordinate_format.next(georeference);
+                let answers = ui::pixel::Answers::of(self.current.as_ref());
+                self.panels.coordinate_format = self.panels.coordinate_format.next(answers);
             }
             CycleGeographicFormat => {
                 self.panels.geographic_format = self.panels.geographic_format.next();
@@ -2566,9 +2591,9 @@ impl App {
             visited_after: self
                 .visited
                 .can_forward(|path| self.files.position(path).is_some()),
-            georeferenced: georeference
-                .is_some_and(|geo| geo.offers_projected() || geo.offers_geographic()),
+            coordinates: ui::pixel::Answers::of(current).beyond_pixel(),
             geographic: georeference.is_some_and(|geo| geo.offers_geographic()),
+            orientation: current.is_some_and(|current| current.exif.attitude.is_some()),
             room: self.room(),
             hdr: self.hdr_state(),
             camera_jpeg: current
@@ -3180,6 +3205,20 @@ impl App {
             // rendering, which is why the reset below leaves it alone; the
             // marks are where `w` lands too, so that the key and the button
             // beside the panel's band cannot come to mean different things.
+            // The horizon grid is a flag too, and the pointer's readout
+            // follows it into the ways the pixels look along and back out:
+            // a readout already chosen otherwise is left as it is.
+            Control::HorizonGrid => {
+                let on = !self.panels.horizon_grid;
+                self.panels.horizon_grid = on;
+                let format = &mut self.panels.coordinate_format;
+                *format = match (on, *format) {
+                    (true, ui::CoordinateFormat::Pixel) => ui::CoordinateFormat::Direction,
+                    (false, ui::CoordinateFormat::Direction) => ui::CoordinateFormat::Pixel,
+                    (_, kept) => kept,
+                };
+                Effect::Redraw
+            }
             Control::Minimap | Control::Grid | Control::Loupe | Control::Marks => {
                 let flag = self
                     .panels

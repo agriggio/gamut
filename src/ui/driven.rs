@@ -106,6 +106,8 @@ pub(super) fn panels() -> Panels {
         mark_clipped: false,
         show_minimap: true,
         show_grid: false,
+        horizon_grid: false,
+        horizon_step: super::attitude::DEFAULT_STEP,
         show_loupe: false,
         loupe_magnification: super::loupe::DEFAULT_MAGNIFICATION,
         pixel_format: PixelFormat::default(),
@@ -380,6 +382,7 @@ fn a_toggle_in_the_chrome_hands_back_its_press() {
         ("Information", Control::Info),
         ("Minimap", Control::Minimap),
         ("Grid", Control::Grid),
+        ("Horizon grid", Control::HorizonGrid),
         ("Loupe", Control::Loupe),
         ("Maximize", Control::Maximize),
         ("Region", Control::Region),
@@ -3114,4 +3117,65 @@ fn the_output_band_wears_chevrons_past_white_only_on_a_surface_with_room() {
     for [top, ..] in chevrons {
         assert!(top.x >= white.min.x, "{top:?} left of {white:?}");
     }
+}
+
+/// A picture pitched down a fifth of a right angle, taken at a 26 mm
+/// equivalent: what the horizon grid has to go on.
+fn pitched() -> Current {
+    use crate::image::attitude::Attitude;
+    let mut current = picture(5, 3);
+    let (sin, cos) = 20f64.to_radians().sin_cos();
+    current.exif.attitude = Attitude::gopro([0.0, cos, sin]);
+    current.exif.focal_equivalent = Some(26.0);
+    current
+}
+
+/// With the horizon grid on, the grid is drawn over the picture, and the
+/// curve through the pointer with it while the pointer is on the picture.
+#[test]
+fn the_horizon_grid_follows_the_pointer() {
+    let mut on = panels();
+    on.horizon_grid = true;
+    let mut harness = open(WINDOW, 1, on);
+    harness.state_mut().current = Some(pitched());
+    let curves = |harness: &mut Harness<'static, State>| {
+        harness.run();
+        harness
+            .output()
+            .shapes
+            .iter()
+            .filter(|shape| matches!(&shape.shape, egui::Shape::Path(path) if !path.closed))
+            .count()
+    };
+    let without = curves(&mut harness);
+    harness.state_mut().input.pointer = Some([2, 1]);
+    assert!(curves(&mut harness) > without);
+    harness.state_mut().panels.horizon_grid = false;
+    assert_eq!(curves(&mut harness), without);
+}
+
+/// The pointer's readout in the ways the pixels look: the bearing where the
+/// file says which way the lens pointed, and how far round from that where
+/// it does not, then the elevation — padded in the bar, bare in a copy.
+#[test]
+fn the_readout_says_which_way_a_pixel_looks() {
+    use super::pixel::{CoordinateFormat, GeographicFormat, place};
+    let mut current = pitched();
+    let write = |current: &Current, padded| {
+        place(
+            current,
+            [2, 1],
+            CoordinateFormat::Direction,
+            GeographicFormat::Decimal,
+            padded,
+        )
+    };
+    assert_eq!(write(&current, true), "( +0.0\u{00b0}, -20.0\u{00b0})");
+    current.exif.heading = Some(212.0);
+    assert_eq!(write(&current, true), "(212.0\u{00b0}, -20.0\u{00b0})");
+    assert_eq!(write(&current, false), "212.0,-20.0");
+    // Without a focal length there is no way to tell, and the pixel's own
+    // place is written instead.
+    current.exif.focal_equivalent = None;
+    assert_eq!(write(&current, false), "2,1");
 }

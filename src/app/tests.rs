@@ -4856,3 +4856,45 @@ fn i_and_shift_i_each_put_up_their_own_tab() {
     assert_eq!(shown(&app), (true, Tab::Tags), "the button keeps the tab");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The horizon grid is refused for a picture that does not say which way
+/// its camera faced, and its tooltip says so. For one that does, it comes
+/// on with the pointer's readout following it into the ways the pixels
+/// look — where the readout was the pixel's — and back out; a readout
+/// chosen otherwise is left alone. The key steps the spacing round.
+#[test]
+fn the_horizon_grid_needs_an_orientation_and_brings_the_direction() {
+    use crate::image::attitude::Attitude;
+    use crate::ui::{CoordinateFormat, Naming};
+    use input::Action;
+
+    let (mut app, _dir) = app_over("horizon", &[("a.png", 64, 48)]);
+    let tip = ui::Tip::Control(ui::Control::HorizonGrid);
+    assert_eq!(app.press(ui::Control::HorizonGrid), Effect::Nothing);
+    assert!(!app.panels.horizon_grid);
+    assert_eq!(
+        app.namer().tooltip(tip).map(|tooltip| tooltip.title),
+        Some(vec![ui::tooltip::NO_ORIENTATION.to_string()])
+    );
+
+    let current = app.current.as_mut().expect("a.png is on screen");
+    current.exif.attitude = Attitude::gopro([0.0, 0.94, 0.34]);
+    current.exif.focal_equivalent = Some(26.0);
+    assert_eq!(app.press(ui::Control::HorizonGrid), Effect::Redraw);
+    assert!(app.panels.horizon_grid);
+    assert_eq!(app.panels.coordinate_format, CoordinateFormat::Direction);
+    assert_eq!(app.perform(Action::ToggleHorizonGrid), Effect::Redraw);
+    assert!(!app.panels.horizon_grid);
+    assert_eq!(app.panels.coordinate_format, CoordinateFormat::Pixel);
+
+    app.panels.coordinate_format = CoordinateFormat::Geographic;
+    assert_eq!(app.press(ui::Control::HorizonGrid), Effect::Redraw);
+    assert_eq!(app.press(ui::Control::HorizonGrid), Effect::Redraw);
+    assert_eq!(app.panels.coordinate_format, CoordinateFormat::Geographic);
+
+    assert_eq!(app.panels.horizon_step, 10.0);
+    for step in [15.0, 30.0, 5.0, 10.0] {
+        assert_eq!(app.perform(Action::CycleHorizonStep), Effect::Redraw);
+        assert_eq!(app.panels.horizon_step, step);
+    }
+}

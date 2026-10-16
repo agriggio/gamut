@@ -6,7 +6,7 @@
 //! geometry is — and what was pressed comes back as commands, so that a
 //! frame can be built and driven with no application behind it.
 
-mod attitude;
+pub mod attitude;
 pub mod chooser;
 pub mod chrome;
 pub mod control;
@@ -526,6 +526,14 @@ pub struct Panels {
     /// is not held: it follows the zoom, and is worked out afresh each frame
     /// by [`grid::step`].
     pub show_grid: bool,
+    /// Whether the horizon grid is drawn over the picture — the horizon,
+    /// the uprights round the camera and the two lines through the pointer
+    /// — for a file that says which way its camera faced; see
+    /// [`attitude::paint`].
+    pub horizon_grid: bool,
+    /// How many degrees round the camera apart its uprights are: one of
+    /// [`attitude::STEPS`], which its key steps through.
+    pub horizon_step: f32,
     /// Whether the loupe follows the pointer over the image. The secondary
     /// button held on the picture puts it up as well, whatever this says;
     /// where it is on any one frame is [`FrameInput::loupe`].
@@ -561,6 +569,7 @@ impl Panels {
             Control::Filmstrip => &mut self.show_filmstrip,
             Control::Minimap => &mut self.show_minimap,
             Control::Grid => &mut self.show_grid,
+            Control::HorizonGrid => &mut self.horizon_grid,
             Control::Loupe => &mut self.show_loupe,
             Control::Marks => &mut self.mark_clipped,
             _ => return None,
@@ -1095,7 +1104,7 @@ impl Pass<'_> {
     }
 
     /// What floats over the picture, in the order it is stacked: the grid
-    /// under everything, then the region marked out on the picture, then
+    /// under everything, then the horizon grid, then the region marked out on the picture, then
     /// the minimap, then the message about what was just done — there
     /// whether or not the bars are, since what it says does not stop being
     /// true because they are away.
@@ -1133,6 +1142,26 @@ impl Pass<'_> {
                 grid::step(zoom, self.input.scale),
                 self.theme,
             );
+        }
+        // The horizon grid, over the pixel grid and under the region, and
+        // the two lines through the pointer — but not under the loupe,
+        // whose glass is what the hand is reading then.
+        if self.panels.horizon_grid
+            && picture
+            && let Some(shown) = attitude::shown(current)
+        {
+            attitude::paint(
+                self,
+                ui.painter(),
+                current,
+                &shown,
+                self.panels.horizon_step,
+            );
+            if self.input.loupe.is_none()
+                && let Some(at) = self.input.pointer
+            {
+                attitude::pointer(self, ui.painter(), current, &shown, at);
+            }
         }
         // Under the minimap, like the grid: the region marks up the picture,
         // and what floats over the picture is over the region too. The box

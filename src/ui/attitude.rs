@@ -10,6 +10,7 @@
 //! the light, the faces turned away from the eye left out and the rest
 //! painted from the farthest in — enough for a few convex boxes.
 
+use ::image::metadata::Orientation;
 use egui::{Color32, Pos2, Stroke, pos2, vec2};
 
 use crate::image::attitude::Shown;
@@ -369,163 +370,324 @@ fn mix(from: Color, to: Color, share: f32) -> Color32 {
     )
 }
 
-/// Draws the line across the picture with `painter` at the angle `shown`
-/// says the horizon runs, from one edge of the picture to the other, with a
-/// short square mark pointing up. Where the file says what focal length it
-/// was taken at and the true horizon falls on the picture, that is the line
-/// drawn, in full, with a dot where it passes nearest the middle. Otherwise
-/// the line through the middle is drawn, lighter, saying only which way is
-/// level — and where the horizon falls outside the picture, a chevron at the
-/// edge points the way it lies. Nothing where the lens pointed too steeply
-/// for a horizon. Which of the two lines was drawn, if either.
-pub(super) fn level_line(
+/// Which way the camera faced in the picture on screen, as the info
+/// panel's Orientation section, the horizon grid and the pointer's readout
+/// read it: the file's attitude worked out in the picture as shown, which
+/// the turn in force decides. `None` where the file does not say.
+pub(super) fn shown(current: &Current) -> Option<Shown> {
+    let attitude = current.exif.attitude.as_ref()?;
+    let face = current.picture_face();
+    let size = current.turn.size([face.image.width, face.image.height]);
+    Some(
+        attitude.shown(
+            current
+                .exif
+                .orientation
+                .unwrap_or(Orientation::NoTransforms),
+            current.turn,
+            size,
+        ),
+    )
+}
+
+/// The spacings the horizon grid's uprights are drawn at, in degrees round
+/// the camera, which its key steps through; and the one it starts at.
+pub const STEPS: [f32; 4] = [5.0, 10.0, 15.0, 30.0];
+pub const DEFAULT_STEP: f32 = 10.0;
+
+/// The spacing after `step` among [`STEPS`], round to the first after the
+/// last; the default from one that is not among them.
+pub fn cycle(step: f32) -> f32 {
+    match STEPS.iter().position(|&each| each == step) {
+        Some(at) => STEPS[(at + 1) % STEPS.len()],
+        None => DEFAULT_STEP,
+    }
+}
+
+/// A spacing as the horizon grid's button writes it after its mark.
+pub fn label(step: f32) -> String {
+    format!("{step}\u{00b0}")
+}
+
+/// Which line [`paint`] draws across the picture for `shown`: the true
+/// horizon where the file says what focal length it was taken at and the
+/// horizon falls on the picture, the level line through the middle
+/// otherwise, and neither where the lens pointed too steeply for a horizon.
+pub(super) fn line(current: &Current, shown: &Shown) -> Option<Line> {
+    let horizon = shown.horizon?;
+    let size = current.size();
+    let (sin, cos) = (horizon as f32).to_radians().sin_cos();
+    Some(match foot(current, shown) {
+        Some(foot) if across(foot, [cos, sin], size).is_some() => Line::Horizon,
+        _ => Line::Level,
+    })
+}
+
+/// The point of the true horizon nearest the middle of the picture on
+/// screen, in its pixels: `None` where it has no place.
+fn foot(current: &Current, shown: &Shown) -> Option<[f32; 2]> {
+    let size = current.size();
+    let [x, y] = shown.horizon_through(size.map(f64::from), current.exif.focal_equivalent)?;
+    Some([size[0] / 2.0 + x as f32, size[1] / 2.0 + y as f32])
+}
+
+/// Where the picture is on screen, and the strokes drawn over it.
+struct Canvas<'a> {
+    painter: &'a egui::Painter,
+    screen: Box<dyn Fn([f32; 2]) -> Pos2 + 'a>,
+    size: [f32; 2],
+    accent: Color32,
+    width: f32,
+}
+
+impl<'a> Canvas<'a> {
+    fn new(pass: &'a Pass, painter: &'a egui::Painter, current: &Current) -> Self {
+        let size = current.size();
+        let placement = pass.view.placement(size, pass.input.viewport);
+        let scale = pass.input.scale;
+        Canvas {
+            painter,
+            screen: Box::new(move |[x, y]| {
+                let [x, y] = placement.screen_point([x, y]);
+                pos2(x / scale, y / scale)
+            }),
+            size,
+            accent: pass.theme.accent.into(),
+            width: pass.grid.line_width(HORIZON_LINE),
+        }
+    }
+
+    fn screen(&self, point: [f32; 2]) -> Pos2 {
+        (self.screen)(point)
+    }
+
+    /// The solid band under every line, so that it stands out from
+    /// whatever the picture is behind it; and the line's own stroke.
+    fn strokes(&self, ink: Color32) -> (Stroke, Stroke) {
+        (
+            Stroke::new(self.width + 2.0, UNDER),
+            Stroke::new(self.width, ink),
+        )
+    }
+
+    /// A dashed line from `from` to `to`, on its band.
+    fn dashed(&self, ink: Color32, dash: f32, gap: f32, from: [f32; 2], to: [f32; 2]) {
+        let ends = [self.screen(from), self.screen(to)];
+        let (under, ink) = self.strokes(ink);
+        self.painter.line_segment(ends, under);
+        self.painter
+            .extend(egui::Shape::dashed_line(&ends, ink, dash, gap));
+    }
+
+    /// A short square mark from `at` on a line running `cos, sin`, pointing
+    /// to the side of it that is up.
+    fn tick(&self, at: Pos2, [cos, sin]: [f32; 2], ink: Color32) {
+        let up = vec2(sin, -cos) * 10.0;
+        let (under, ink) = self.strokes(ink);
+        self.painter.line_segment([at, at + up], under);
+        self.painter.line_segment([at, at + up], ink);
+    }
+}
+
+/// The horizon grid, drawn across the picture with `painter`: the line at
+/// the angle `shown` says the horizon runs, from one edge of the picture to
+/// the other, with a short square mark pointing up. Where [`line()`] says it
+/// is the true horizon, it is drawn in full, with a dot where it passes
+/// nearest the middle, under uprights `step` degrees apart round the
+/// camera and the bearings they stand on. Otherwise the line through the
+/// middle is drawn, lighter, saying only which way is level — and where the
+/// horizon falls outside the picture, a chevron at the edge points the way
+/// it lies. Nothing where the lens pointed too steeply for a horizon.
+pub(super) fn paint(
     pass: &Pass,
     painter: &egui::Painter,
     current: &Current,
     shown: &Shown,
-) -> Option<Line> {
-    let horizon = shown.horizon?;
-    let size = current.size();
-    let placement = pass.view.placement(size, pass.input.viewport);
-    let scale = pass.input.scale;
-    let screen = |[x, y]: [f32; 2]| {
-        let [x, y] = placement.screen_point([x, y]);
-        pos2(x / scale, y / scale)
+    step: f32,
+) {
+    let Some(kind) = line(current, shown) else {
+        return;
     };
+    let Some(horizon) = shown.horizon else {
+        return;
+    };
+    let canvas = Canvas::new(pass, painter, current);
+    let size = canvas.size;
     let middle = [size[0] / 2.0, size[1] / 2.0];
     let (sin, cos) = (horizon as f32).to_radians().sin_cos();
-    let accent: Color32 = pass.theme.accent.into();
-    let grid = pass.grid;
-    let line = |width: f32, ink: Color32, dash: f32, gap: f32, from: [f32; 2], to: [f32; 2]| {
-        let ends = [screen(from), screen(to)];
-        // A solid band under the dashes, so they stand out from whatever
-        // the picture is behind them.
-        let under = Stroke::new(width + 2.0, UNDER);
-        let ink = Stroke::new(width, ink);
-        painter.line_segment(ends, under);
-        painter.extend(egui::Shape::dashed_line(&ends, ink, dash, gap));
-        (under, ink)
-    };
-    // Which side of the line is up, from the point on it at `at`.
-    let tick = |at: Pos2, (under, ink): (Stroke, Stroke)| {
-        let up = vec2(sin, -cos) * 10.0;
-        painter.line_segment([at, at + up], under);
-        painter.line_segment([at, at + up], ink);
-    };
+    let accent = canvas.accent;
+    let level = accent.gamma_multiply(LEVEL_INK);
+    let foot = foot(current, shown);
 
-    let offset = shown
-        .horizon_through(size.map(f64::from), current.exif.focal_equivalent)
-        .map(|offset| offset.map(|value| value as f32));
-    if let Some(offset) = offset {
-        let foot = [middle[0] + offset[0], middle[1] + offset[1]];
-        if let Some([from, to]) = across(foot, [cos, sin], size) {
-            let width = grid.line_width(HORIZON_LINE);
-            let mut labels: Vec<(Pos2, String)> = Vec::new();
-            // The uprights first, under the horizon: one every
-            // `UPRIGHT_STEP` degrees round from where the lens pointed —
-            // on the round bearings, where the file says what bearing that
-            // was — each from the point every upright meets at, out through
-            // where its way crosses the horizon.
-            let picture = size.map(f64::from);
-            let focal = current.exif.focal_equivalent;
-            let vanishing = shown
-                .vanishing(picture, focal)
-                .map(|[x, y]| [middle[0] + x as f32, middle[1] + y as f32]);
-            let heading = current.exif.heading;
-            let first = heading.map_or(0.0, |heading| {
-                (heading / UPRIGHT_STEP).ceil() * UPRIGHT_STEP - heading
-            });
-            let ink = accent.gamma_multiply(LEVEL_INK);
-            let mut azimuth = first - (90.0 / UPRIGHT_STEP).ceil() * UPRIGHT_STEP;
-            while azimuth < 90.0 {
-                let this = azimuth;
-                azimuth += UPRIGHT_STEP;
-                let Some([x, y]) = shown.bearing(picture, focal, this) else {
-                    continue;
-                };
-                let crossing = [middle[0] + x as f32, middle[1] + y as f32];
-                let direction = match vanishing {
-                    Some(point) => [crossing[0] - point[0], crossing[1] - point[1]],
-                    None => [-sin, cos],
-                };
-                let length = direction[0].hypot(direction[1]);
-                if length < 1e-3 {
-                    continue;
-                }
-                let direction = direction.map(|value| value / length);
-                // Past the point the uprights meet, the line is the way
-                // behind the camera, and is left out.
-                let behind = vanishing.map_or(f32::NEG_INFINITY, |_| -length);
-                let Some((enter, leave)) = span(crossing, direction, size) else {
-                    continue;
-                };
-                let enter = enter.max(behind);
-                if enter >= leave {
-                    continue;
-                }
-                let at = |t: f32| {
-                    [
-                        crossing[0] + t * direction[0],
-                        crossing[1] + t * direction[1],
-                    ]
-                };
-                line(width, ink, LEVEL_DASH, LEVEL_GAP, at(enter), at(leave));
-                if let Some(heading) = heading
-                    && (0.0..=size[0]).contains(&crossing[0])
-                    && (0.0..=size[1]).contains(&crossing[1])
-                {
-                    let bearing = (heading + this).round().rem_euclid(360.0) as u32;
-                    labels.push((screen(crossing), compass(bearing)));
-                }
+    if let (Line::Horizon, Some(foot)) = (kind, foot)
+        && let Some([from, to]) = across(foot, [cos, sin], size)
+    {
+        // The uprights first, under the horizon: one every `step` degrees
+        // round from where the lens pointed — on the round bearings, where
+        // the file says what bearing that was — and over each the bearing
+        // it stands on, where it crosses the horizon on the picture.
+        let mut labels: Vec<(Pos2, String)> = Vec::new();
+        let heading = current.exif.heading;
+        let step = f64::from(step);
+        let first = heading.map_or(0.0, |heading| (heading / step).ceil() * step - heading);
+        let mut azimuth = first - (90.0 / step).ceil() * step;
+        while azimuth < 90.0 {
+            let this = azimuth;
+            azimuth += step;
+            let Some(([from, to], crossing)) = upright(current, shown, this) else {
+                continue;
+            };
+            canvas.dashed(level, LEVEL_DASH, LEVEL_GAP, from, to);
+            if let Some(heading) = heading
+                && (0.0..=size[0]).contains(&crossing[0])
+                && (0.0..=size[1]).contains(&crossing[1])
+            {
+                let bearing = (heading + this).round().rem_euclid(360.0) as u32;
+                labels.push((canvas.screen(crossing), compass(bearing)));
             }
-            let strokes = line(width, accent, DASH, GAP, from, to);
-            let at = screen(foot);
-            tick(at, strokes);
-            painter.circle_filled(at, width * 1.5, accent);
-            // Each bearing over the horizon where its upright crosses it,
-            // above the dashes, on the band's white.
-            let font = egui::FontId::proportional(BEARING_SIZE);
-            let up = vec2(sin, -cos);
-            for (at, words) in labels {
-                let galley = painter.layout_no_wrap(words, font.clone(), Color32::PLACEHOLDER);
-                let middle = at + up * (BEARING_RISE + galley.size().y / 2.0);
-                let rect = egui::Rect::from_center_size(middle, galley.size() + vec2(6.0, 2.0));
-                painter.rect_filled(rect, 3.0, UNDER);
-                painter.galley(rect.center() - galley.size() / 2.0, galley, accent);
-            }
-            return Some(Line::Horizon);
         }
+        canvas.dashed(accent, DASH, GAP, from, to);
+        let at = canvas.screen(foot);
+        canvas.tick(at, [cos, sin], accent);
+        painter.circle_filled(at, canvas.width * 1.5, accent);
+        // Each bearing over the horizon where its upright crosses it,
+        // above the dashes, on the band's white.
+        let font = egui::FontId::proportional(BEARING_SIZE);
+        let up = vec2(sin, -cos);
+        for (at, words) in labels {
+            let galley = painter.layout_no_wrap(words, font.clone(), Color32::PLACEHOLDER);
+            let middle = at + up * (BEARING_RISE + galley.size().y / 2.0);
+            let rect = egui::Rect::from_center_size(middle, galley.size() + vec2(6.0, 2.0));
+            painter.rect_filled(rect, 3.0, UNDER);
+            painter.galley(rect.center() - galley.size() / 2.0, galley, accent);
+        }
+        return;
     }
-    let [from, to] = across(middle, [cos, sin], size)?;
-    let strokes = line(
-        grid.line_width(HORIZON_LINE),
-        accent.gamma_multiply(LEVEL_INK),
-        LEVEL_DASH,
-        LEVEL_GAP,
-        from,
-        to,
-    );
-    tick(screen(middle), strokes);
+    let Some([from, to]) = across(middle, [cos, sin], size) else {
+        return;
+    };
+    canvas.dashed(level, LEVEL_DASH, LEVEL_GAP, from, to);
+    canvas.tick(canvas.screen(middle), [cos, sin], level);
     // The horizon off the picture: a chevron at the edge, on the way from
     // the middle to it, pointing out toward it.
-    if let Some(offset) = offset {
+    if let Some(foot) = foot {
+        let offset = [foot[0] - middle[0], foot[1] - middle[1]];
         let reach = edge_reach(offset, middle);
-        let at = screen([middle[0] + offset[0] * reach, middle[1] + offset[1] * reach]);
-        let out =
-            (screen([middle[0] + offset[0], middle[1] + offset[1]]) - screen(middle)).normalized();
+        let at = canvas.screen([middle[0] + offset[0] * reach, middle[1] + offset[1] * reach]);
+        let out = (canvas.screen(foot) - canvas.screen(middle)).normalized();
         let side = out.rot90() * CHEVRON;
         let tip = at - out * 2.0;
         let back = tip - out * CHEVRON;
-        let width = grid.line_width(HORIZON_LINE);
-        for stroke in [Stroke::new(width + 2.0, UNDER), Stroke::new(width, accent)] {
+        let (under, ink) = canvas.strokes(accent);
+        for stroke in [under, ink] {
             painter.line_segment([back + side, tip], stroke);
             painter.line_segment([tip, back - side], stroke);
         }
     }
-    Some(Line::Level)
 }
 
-/// Which line [`level_line`] drew across the picture.
+/// The upright `azimuth` degrees round from where the lens pointed, cut to
+/// the picture on screen: from the point every upright meets at, out
+/// through where its way crosses the horizon — and that crossing, in the
+/// picture's pixels. Past the meeting point the line is the way behind the
+/// camera, and is left out. `None` where it misses the picture, or its way
+/// is behind the lens.
+fn upright(current: &Current, shown: &Shown, azimuth: f64) -> Option<([[f32; 2]; 2], [f32; 2])> {
+    let horizon = shown.horizon?;
+    let size = current.size();
+    let picture = size.map(f64::from);
+    let focal = current.exif.focal_equivalent;
+    let middle = [size[0] / 2.0, size[1] / 2.0];
+    let place = |[x, y]: [f64; 2]| [middle[0] + x as f32, middle[1] + y as f32];
+    let crossing = place(shown.bearing(picture, focal, azimuth)?);
+    let vanishing = shown.vanishing(picture, focal).map(place);
+    let (sin, cos) = (horizon as f32).to_radians().sin_cos();
+    let direction = match vanishing {
+        Some(point) => [crossing[0] - point[0], crossing[1] - point[1]],
+        None => [-sin, cos],
+    };
+    let length = direction[0].hypot(direction[1]);
+    if length < 1e-3 {
+        return None;
+    }
+    let direction = direction.map(|value| value / length);
+    let behind = vanishing.map_or(f32::NEG_INFINITY, |_| -length);
+    let (enter, leave) = span(crossing, direction, size)?;
+    let enter = enter.max(behind);
+    if enter >= leave {
+        return None;
+    }
+    let at = |t: f32| {
+        [
+            crossing[0] + t * direction[0],
+            crossing[1] + t * direction[1],
+        ]
+    };
+    Some(([at(enter), at(leave)], crossing))
+}
+
+/// The two lines through the pixel `at` under the pointer, drawn with
+/// `painter` while the horizon grid is on: the upright it stands on, and
+/// the curve through every way as far above or below level as its own —
+/// a curve, since a cone of ways round the camera is seen through a lens
+/// as one — both solid, to tell them from the grid's dashes. Nothing where
+/// the horizon has no place to start from.
+pub(super) fn pointer(
+    pass: &Pass,
+    painter: &egui::Painter,
+    current: &Current,
+    shown: &Shown,
+    at: [u32; 2],
+) {
+    if line(current, shown) != Some(Line::Horizon) {
+        return;
+    }
+    let canvas = Canvas::new(pass, painter, current);
+    let size = canvas.size;
+    let picture = size.map(f64::from);
+    let focal = current.exif.focal_equivalent;
+    let offset = [
+        f64::from(at[0]) + 0.5 - picture[0] / 2.0,
+        f64::from(at[1]) + 0.5 - picture[1] / 2.0,
+    ];
+    let Some(way) = shown.direction(picture, focal, offset) else {
+        return;
+    };
+    let Some(azimuth) = way.azimuth else {
+        return;
+    };
+    let corners = [canvas.screen([0.0, 0.0]), canvas.screen(size)];
+    let clip = egui::Rect::from_two_pos(corners[0], corners[1]).intersect(painter.clip_rect());
+    let painter = painter.with_clip_rect(clip);
+    let (under, ink) = canvas.strokes(canvas.accent);
+    if let Some(([from, to], _)) = upright(current, shown, azimuth) {
+        let ends = [canvas.screen(from), canvas.screen(to)];
+        painter.line_segment(ends, under);
+        painter.line_segment(ends, ink);
+    }
+    // The curve, a degree round at a time, broken where it goes behind
+    // the lens.
+    let mut runs: Vec<Vec<Pos2>> = vec![Vec::new()];
+    for degree in -CURVE_REACH..=CURVE_REACH {
+        match shown.toward(picture, focal, f64::from(degree), way.elevation) {
+            Some([x, y]) => runs
+                .last_mut()
+                .expect("never empty")
+                .push(canvas.screen([size[0] / 2.0 + x as f32, size[1] / 2.0 + y as f32])),
+            None => runs.push(Vec::new()),
+        }
+    }
+    for run in runs.into_iter().filter(|run| run.len() > 1) {
+        painter.add(egui::Shape::line(run.clone(), under));
+        painter.add(egui::Shape::line(run, ink));
+    }
+}
+
+/// How far either way round the camera the pointer's level curve is
+/// followed, in degrees: as far as anything ahead of the lens can be.
+const CURVE_REACH: i32 = 89;
+
+/// Which line [`paint`] draws across the picture.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Line {
     /// The true horizon, where it falls on the picture.
@@ -547,9 +709,6 @@ impl Line {
 /// The band under the lines and the chevron drawn across the picture.
 const UNDER: Color32 = Color32::WHITE;
 
-/// How many degrees round apart the upright lines drawn with the horizon
-/// are.
-const UPRIGHT_STEP: f64 = 10.0;
 /// The size a bearing is written at, and how far above the horizon.
 const BEARING_SIZE: f32 = 11.0;
 const BEARING_RISE: f32 = 6.0;

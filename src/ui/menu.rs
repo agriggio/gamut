@@ -17,7 +17,7 @@ use super::chrome::Pass;
 use super::control::Control;
 use super::filmstrip::{Direction, Order, Sort};
 use super::info::HEADER_GAP;
-use super::pixel::{CoordinateFormat, GeographicFormat, PixelFormat};
+use super::pixel::{Answers, CoordinateFormat, GeographicFormat, PixelFormat};
 use super::style::TOGGLE_RADIUS;
 use super::tags::Table;
 use super::tooltip::Tip;
@@ -201,6 +201,7 @@ pub fn describe_coordinates(format: CoordinateFormat) -> &'static str {
         CoordinateFormat::Pixel => "Column and row of the pixel",
         CoordinateFormat::Projected => "Coordinates in the file's own system",
         CoordinateFormat::Geographic => "Latitude and longitude on WGS 84",
+        CoordinateFormat::Direction => "Bearing and elevation the pixel looks along",
     }
 }
 
@@ -318,18 +319,16 @@ pub(super) fn pixel_cells(pass: &mut Pass, ui: &mut Ui) {
         PixelFormat::ALL.map(|format| (Control::Format(format), format == chosen)),
     );
 
-    let georeference = pass
-        .current
-        .and_then(|current| current.exif.georeference.as_ref());
+    let answers = Answers::of(pass.current);
     let offered: Vec<CoordinateFormat> = CoordinateFormat::ALL
         .into_iter()
-        .filter(|format| format.offered(georeference))
+        .filter(|format| format.offered(answers))
         .collect();
     if offered.len() < 2 {
         return;
     }
     heading(pass, ui, "Coordinate", false);
-    let shown = pass.panels.coordinate_format.shown(georeference);
+    let shown = pass.panels.coordinate_format.shown(answers);
     cell_row(
         pass,
         ui,

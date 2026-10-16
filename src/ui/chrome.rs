@@ -642,6 +642,8 @@ impl Pass<'_> {
                     ui.add_space(BAR_PADDING);
                     self.grid_toggle(ui, spacing.as_deref());
                     ui.add_space(BUTTON_GAP);
+                    self.horizon_toggle(ui);
+                    ui.add_space(BUTTON_GAP);
                     self.loupe_toggle(ui);
                     ui.add_space(BUTTON_GAP);
                     self.pixel_dot(ui);
@@ -751,6 +753,20 @@ impl Pass<'_> {
     /// apart its lines are, written after the mark it qualifies.
     fn grid_toggle(&mut self, ui: &mut Ui, spacing: Option<&str>) {
         self.reading_toggle(ui, icon::GRID_3X3, Control::Grid, spacing);
+    }
+
+    /// The horizon grid's toggle, after the pixel grid's: the other grid
+    /// laid over the picture, and so beside it. While it is on, the spacing
+    /// of its uprights is written after the mark, as the grid's is. Drawn
+    /// dead rather than left out for a file that does not say which way its
+    /// camera faced, so that the loupe and the readout after it hold still
+    /// from one file to the next.
+    fn horizon_toggle(&mut self, ui: &mut Ui) {
+        let reading = self
+            .panels
+            .horizon_grid
+            .then(|| super::attitude::label(self.panels.horizon_step));
+        self.reading_toggle(ui, icon::COMPASS, Control::HorizonGrid, reading.as_deref());
     }
 
     /// The loupe toggle, beside the grid's: a way of looking at the picture

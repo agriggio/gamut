@@ -1383,8 +1383,28 @@ the picture, a lighter line goes through the center instead, the image of
 the level line square to the lens and so right in angle though not in place,
 with a chevron at the edge on the way to a horizon that has a place. The two
 lines are always parallel, so they are never drawn together; the style says
-which one is up, the full one only ever meaning the horizon itself. It is painted as the regions are, on the picture's layer while the pointer
-is anywhere on the section.
+which one is up, the full one only ever meaning the horizon itself.
+
+That line and what goes with it are the horizon grid (`attitude::paint`),
+which the section previews while the pointer is anywhere on it and the
+compass toggle in the bottom bar keeps up (`Panels::horizon_grid`), drawn
+from `Pass::overlays` over the pixel grid and under the region. Everything in
+it is one map between a way round the camera and a pixel. The ground's axes
+in the picture's are gravity, ahead — the lens's axis with gravity's share
+taken out — and right, `g × ahead`; the way `azimuth` round and `elevation`
+up is `cos e·(cos a·ahead + sin a·right) − sin e·g`, seen at `f·(dx, dy)/dz`
+(`Shown::toward`), and `Shown::direction` is its inverse, which the
+pointer's readout writes out as `CoordinateFormat::Direction`. An upright in
+the scene is a vertical plane through the camera, so it is seen on the line
+from the point gravity is seen at (`Shown::vanishing`, `f·(gx, gy)/gz`)
+through where its way crosses the horizon; the half beyond that point is the
+way behind the camera and is cut off. The uprights are spaced in degrees
+round, `Panels::horizon_step` apart, and fall on round bearings where the
+GPS directory gives the lens's heading. A level circle — every way at one
+elevation — is a cone, which a rectilinear lens shows as a conic: the curve
+through the pointer is sampled a degree of azimuth at a time rather than
+drawn as a line. The readout follows the toggle in and out only from and to
+the pixel's own coordinate, so a reading chosen by hand is never taken away.
 
 The panel is also the one part of the interface that is read out rather than
 merely read. A click on a field copies it, a click on a heading copies the

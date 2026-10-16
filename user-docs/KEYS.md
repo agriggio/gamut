@@ -830,6 +830,8 @@ where all of it is set.
 | `I` | Show the file information on its *Raw Data* tab, or hide it | `interface.raw-data` |
 | `m` | Show or hide the minimap | `interface.minimap` |
 | `g` | Show or hide the grid over the image | `interface.grid` |
+| `b` | Show or hide the horizon grid, for a picture that records which way the camera faced | `interface.horizon-grid` |
+| `B` | Cycle the horizon grid's spacing: 5, 10, 15 or 30 degrees | `interface.horizon-step` |
 | `l` | Show or hide the loupe | `interface.loupe` |
 | `Shift+L` | Cycle the loupe's magnification: 2, 4, 8 or 16 times | `interface.loupe-magnification` |
 | `Ctrl+=`, `Ctrl++` | Increase interface scale; the picture is not affected | `interface.scale.up` |
@@ -837,7 +839,7 @@ where all of it is set.
 | `Ctrl+0` | Reset interface scale to the monitor's own | `interface.scale.reset` |
 | `x` | Select a region of the image; again, or `Esc`, removes it | `region.select` |
 | `.` | Cycle how the pixel under the pointer is read out: hex → decimal → mapped → depth | `interface.pixel-format` |
-| `,` | In a georeferenced file, cycle where the pixel is read out as: pixel → projected → geographic | `interface.coordinate-format` |
+| `,` | Cycle where the pixel is read out as, among what the file can say: pixel → projected → geographic → direction | `interface.coordinate-format` |
 | `<` (`Shift+,`) | Switch a latitude and longitude between decimal degrees and degrees, minutes and seconds | `interface.geographic-format` |
 | `` ` `` | Show or hide the panels around the image | `interface.toggle` |
 | `~` | The same, and closes the histogram, information, minimap and file list | `interface.toggle-panels` |
@@ -916,6 +918,34 @@ The grid divides the image into squares of a round number of image pixels —
 screen pixels apart at whatever zoom the view is at. The button at the head of
 the bottom bar says which spacing is in force, in the reading beside its mark,
 so a distance on screen can be counted off in the image's own pixels.
+
+The horizon grid, `b` or the compass button after the grid's, is for a
+picture whose camera recorded which way it faced — see the *Orientation*
+section in [METADATA.md](METADATA.md#orientation). It draws the true horizon
+across the picture, and upright lines a set number of degrees apart round the
+camera, each running toward the point where everything upright in the scene
+meets. Where the file records which way the lens pointed on the compass, the
+uprights fall on round bearings and each is labeled with its bearing over the
+horizon. While the pointer is on the picture, two solid lines go through it:
+the upright it stands on, and the curve of everything as far above or below
+eye level as it is — a curve, since that is how a lens shows it. `B` steps
+the spacing through 5, 10, 15 and 30 degrees, and the button reads out the
+spacing in force.
+
+Turning the horizon grid on also reads the pointer's place out as a
+direction, where the readout was showing the pixel's column and row: its
+bearing — or, without a compass reading, how far right of where the lens
+pointed — and how far above level, in degrees. Turning it off puts the pixel
+back. `,` reaches the direction too, without the grid.
+
+The grid needs the focal length as well, as a 35 mm equivalent; without one
+it draws only a fainter line through the middle that shows which way is
+level, and the readout cannot give a direction. A compass in a phone is
+often off by five to ten degrees, which moves every bearing by the same
+amount; a wide lens bends straight edges near the frame away from the lines;
+and a picture cropped after it was taken has its middle in the wrong place,
+which moves the horizon. Differences between two places in the same picture
+are good to about a degree.
 
 The loupe, `l` or the button beside the grid's, rings the pixels around
 the pointer and shows them magnified in a circle beside it, for looking
@@ -1003,7 +1033,8 @@ region behind: it belongs to the picture it was drawn on.
 | Press the minimap | Center the view on the point pressed, as near as the image's edges allow, the moment the button goes down | `gesture.minimap.left.drag` |
 | Drag the minimap | Move the view with the pointer, keeping the marked-out part of the map under it | `gesture.minimap.left.drag` |
 | Click the grid button in the bottom left | Show or hide the grid | |
-| Click the loupe button beside it | Show or hide the loupe, a magnified circle beside the pointer | |
+| Click the compass button beside it | Show or hide the horizon grid | |
+| Click the loupe button after that | Show or hide the loupe, a magnified circle beside the pointer | |
 | Hold the right button on the picture | Show the loupe for as long as the button is held | `gesture.image.right.hold` |
 | Wheel while holding the right button | Step the loupe's magnification: 2, 4, 8 or 16 times | `gesture.image.right+wheel` |
 | The back and forward buttons on the side of the mouse | Back and forward in image history, as `Alt+[` and `Alt+]` do | `gesture.image.back.click`, `gesture.image.forward.click` |

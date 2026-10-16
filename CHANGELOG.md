@@ -20,6 +20,15 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
   equivalent focal length, and otherwise — or with the horizon out of
   frame, which a chevron at the edge points to — a lighter level line
   through the middle.
+- A *horizon grid*, `b` or the compass button after the pixel grid's, for a
+  picture that records which way its camera faced and its focal length: the
+  true horizon, and upright lines 5, 10, 15 or 30 degrees apart round the
+  camera (`B` steps through them), converging as the scene's uprights do and
+  labeled with their compass bearings where the file records a heading. The
+  upright and the level curve through the pointer follow it, and the
+  pointer's readout gains a *Direction* coordinate — bearing and elevation —
+  which the grid turns on. Resting on the information panel's *Orientation*
+  section previews it.
 
 - A camera raw with a color filter over its sensor can be shown as its
   mosaic: what the sensor counted, one value to a photosite, each in its

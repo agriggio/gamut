@@ -773,6 +773,8 @@ impl App {
                 mark_clipped: false,
                 show_minimap: config.show_minimap,
                 show_grid: false,
+                horizon_grid: false,
+                horizon_step: kept_state.horizon_step,
                 show_loupe: false,
                 loupe_magnification: kept_state.loupe_magnification,
                 pixel_format: kept_state.pixel_format,
@@ -1667,6 +1669,7 @@ impl App {
         State {
             filmstrip_width: self.filmstrip.slot(),
             loupe_magnification: self.panels.loupe_magnification,
+            horizon_step: self.panels.horizon_step,
             ui_scale: self.ui_scale,
             order: self.filmstrip.order(),
             camera_jpeg: self.rendering == Rendering::CameraJpeg,

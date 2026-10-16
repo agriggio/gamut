@@ -103,14 +103,15 @@ impl PixelFormat {
     }
 }
 
-/// How the pointer's place is written: which pixel of the raster it is, or
-/// where that pixel is on the ground.
+/// How the pointer's place is written: which pixel of the raster it is,
+/// where that pixel is on the ground, or which way it looks.
 ///
 /// The two ground readings are offered only for a file that places its
-/// pixels — a GeoTIFF — and each only where the file can answer it; wherever
-/// it cannot, the readout is the pixel's, whatever was chosen, so that the
-/// choice outlives a file with nothing to say about it and applies again at
-/// the next map.
+/// pixels — a GeoTIFF — and each only where the file can answer it; the way
+/// a pixel looks only for one that says which way its camera faced and at
+/// what focal length. Wherever the file cannot answer, the readout is the
+/// pixel's, whatever was chosen, so that the choice outlives a file with
+/// nothing to say about it and applies again at the next that can.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum CoordinateFormat {
     /// Column and row, from the top left. The default, and every image's.
@@ -121,15 +122,49 @@ pub enum CoordinateFormat {
     Projected,
     /// Latitude and longitude on WGS 84.
     Geographic,
+    /// The way the pixel looks: its bearing, or how far round from where
+    /// the lens pointed, and how far above or below level.
+    Direction,
+}
+
+/// What a file can say of where a pixel is beyond its column and row: the
+/// georeference that places its pixels on the ground, and whether it says
+/// which way each looks.
+#[derive(Clone, Copy, Default)]
+pub struct Answers<'a> {
+    pub georeference: Option<&'a Georeference>,
+    pub direction: bool,
+}
+
+impl<'a> Answers<'a> {
+    /// What `current` can answer; nothing where there is no picture.
+    pub fn of(current: Option<&'a Current>) -> Self {
+        let Some(current) = current else {
+            return Self::default();
+        };
+        Answers {
+            georeference: current.exif.georeference.as_ref(),
+            direction: current.exif.attitude.is_some() && current.exif.focal_equivalent.is_some(),
+        }
+    }
+
+    /// Whether any format but the pixel's is offered, and whether one of
+    /// them is a latitude.
+    pub fn beyond_pixel(self) -> bool {
+        CoordinateFormat::ALL[1..]
+            .iter()
+            .any(|format| format.offered(self))
+    }
 }
 
 impl CoordinateFormat {
     /// Every format, in the order the menu offers them and the key steps
     /// through them.
-    pub const ALL: [CoordinateFormat; 3] = [
+    pub const ALL: [CoordinateFormat; 4] = [
         CoordinateFormat::Pixel,
         CoordinateFormat::Projected,
         CoordinateFormat::Geographic,
+        CoordinateFormat::Direction,
     ];
 
     pub fn label(self) -> &'static str {
@@ -137,6 +172,7 @@ impl CoordinateFormat {
             CoordinateFormat::Pixel => "Pixel",
             CoordinateFormat::Projected => "Projected",
             CoordinateFormat::Geographic => "Geographic",
+            CoordinateFormat::Direction => "Direction",
         }
     }
 
@@ -148,11 +184,12 @@ impl CoordinateFormat {
             .find(|format| format.label().eq_ignore_ascii_case(value))
     }
 
-    /// Whether `georeference` can answer this format. The pixel is always
-    /// there to be read.
-    pub fn offered(self, georeference: Option<&Georeference>) -> bool {
-        match (self, georeference) {
+    /// Whether the file whose `answers` these are can answer this format.
+    /// The pixel is always there to be read.
+    pub fn offered(self, answers: Answers) -> bool {
+        match (self, answers.georeference) {
             (CoordinateFormat::Pixel, _) => true,
+            (CoordinateFormat::Direction, _) => answers.direction,
             (_, None) => false,
             (CoordinateFormat::Projected, Some(geo)) => geo.offers_projected(),
             (CoordinateFormat::Geographic, Some(geo)) => geo.offers_geographic(),
@@ -161,8 +198,8 @@ impl CoordinateFormat {
 
     /// What the readout actually shows for a file: this, where the file can
     /// answer it, and the pixel where it cannot.
-    pub fn shown(self, georeference: Option<&Georeference>) -> Self {
-        if self.offered(georeference) {
+    pub fn shown(self, answers: Answers) -> Self {
+        if self.offered(answers) {
             self
         } else {
             CoordinateFormat::Pixel
@@ -171,15 +208,15 @@ impl CoordinateFormat {
 
     /// The format after the one shown, among those the file offers: what the
     /// key steps to. A file that offers only the pixel stays on it.
-    pub fn next(self, georeference: Option<&Georeference>) -> Self {
-        let shown = self.shown(georeference);
+    pub fn next(self, answers: Answers) -> Self {
+        let shown = self.shown(answers);
         let at = Self::ALL
             .iter()
             .position(|format| *format == shown)
             .unwrap_or(0);
         (1..=Self::ALL.len())
             .map(|step| Self::ALL[(at + step) % Self::ALL.len()])
-            .find(|format| format.offered(georeference))
+            .find(|format| format.offered(answers))
             .unwrap_or(CoordinateFormat::Pixel)
     }
 }
@@ -334,8 +371,14 @@ pub fn place(
         true => coordinate(at, current.pixels()),
         false => copied_coordinate(at),
     };
-    let georeference = current.exif.georeference.as_ref();
-    let Some(geo) = georeference.filter(|_| format.shown(georeference) != CoordinateFormat::Pixel)
+    let answers = Answers::of(Some(current));
+    let format = format.shown(answers);
+    if format == CoordinateFormat::Direction {
+        return direction(current, at, padded).unwrap_or_else(pixel);
+    }
+    let Some(geo) = answers
+        .georeference
+        .filter(|_| format != CoordinateFormat::Pixel)
     else {
         return pixel();
     };
@@ -347,8 +390,51 @@ pub fn place(
             Some(point) => latitude_longitude(point, geographic, padded),
             None => pixel(),
         },
-        CoordinateFormat::Pixel => pixel(),
+        CoordinateFormat::Pixel | CoordinateFormat::Direction => pixel(),
     }
+}
+
+/// The way the pixel `at` looks, to a tenth of a degree: its bearing where
+/// the file says which way the lens pointed, and otherwise how far round to
+/// the right of that, signed; then how far above level, signed. Bare and
+/// parted by a comma for a copy; in parentheses, each as wide as it can be,
+/// for the bar. A dash for the way round where the lens pointed too steeply
+/// for that to be told. `None` where the file cannot say.
+fn direction(current: &Current, at: [u32; 2], padded: bool) -> Option<String> {
+    let shown = super::attitude::shown(current)?;
+    let size = current.size().map(f64::from);
+    let offset = [
+        f64::from(at[0]) + 0.5 - size[0] / 2.0,
+        f64::from(at[1]) + 0.5 - size[1] / 2.0,
+    ];
+    let way = shown.direction(size, current.exif.focal_equivalent, offset)?;
+    let round = way.azimuth.map(|azimuth| match current.exif.heading {
+        Some(heading) => {
+            let bearing = (heading + azimuth).rem_euclid(360.0);
+            // Rounded to the tenth, a bearing a hair under north is north.
+            let bearing = if (bearing * 10.0).round() >= 3600.0 {
+                0.0
+            } else {
+                bearing
+            };
+            match padded {
+                true => format!("{bearing:5.1}\u{00b0}"),
+                false => format!("{bearing:.1}"),
+            }
+        }
+        None => match padded {
+            true => format!("{azimuth:+5.1}\u{00b0}"),
+            false => format!("{azimuth:.1}"),
+        },
+    });
+    let elevation = way.elevation;
+    Some(match padded {
+        true => format!(
+            "({}, {elevation:+5.1}\u{00b0})",
+            round.unwrap_or_else(|| "    \u{2014} ".to_string())
+        ),
+        false => format!("{},{elevation:.1}", round.unwrap_or_default()),
+    })
 }
 
 /// The file's own coordinates at the middle of the stored pixel `at`, with
@@ -817,20 +903,39 @@ mod tests {
         let projected = georeference(1, 32767);
         let geographic = georeference(2, 4326);
 
-        assert_eq!(Pixel.next(Some(&both)), Projected);
-        assert_eq!(Projected.next(Some(&both)), Geographic);
-        assert_eq!(Geographic.next(Some(&both)), Pixel);
+        let on = |geo| Answers {
+            georeference: Some(geo),
+            direction: false,
+        };
+        assert_eq!(Pixel.next(on(&both)), Projected);
+        assert_eq!(Projected.next(on(&both)), Geographic);
+        assert_eq!(Geographic.next(on(&both)), Pixel);
 
-        assert_eq!(Projected.next(Some(&projected)), Pixel);
-        assert_eq!(Pixel.next(Some(&geographic)), Geographic);
+        assert_eq!(Projected.next(on(&projected)), Pixel);
+        assert_eq!(Pixel.next(on(&geographic)), Geographic);
         // Shown as the pixel, so the next is the first thing after it.
-        assert_eq!(Geographic.shown(Some(&projected)), Pixel);
-        assert_eq!(Geographic.next(Some(&projected)), Projected);
+        assert_eq!(Geographic.shown(on(&projected)), Pixel);
+        assert_eq!(Geographic.next(on(&projected)), Projected);
 
         for format in CoordinateFormat::ALL {
-            assert_eq!(format.shown(None), Pixel);
-            assert_eq!(format.next(None), Pixel);
+            assert_eq!(format.shown(Answers::default()), Pixel);
+            assert_eq!(format.next(Answers::default()), Pixel);
         }
+
+        // A photograph that says which way it looked offers the way, and
+        // a map that does as well offers it after the ground's.
+        let looks = Answers {
+            georeference: None,
+            direction: true,
+        };
+        assert_eq!(Pixel.next(looks), Direction);
+        assert_eq!(Direction.next(looks), Pixel);
+        assert_eq!(Geographic.shown(looks), Pixel);
+        let both_ways = Answers {
+            direction: true,
+            ..on(&both)
+        };
+        assert_eq!(Geographic.next(both_ways), Direction);
     }
 
     /// A latitude is written to six decimal places or to hundredths of a
