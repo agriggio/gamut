@@ -168,8 +168,9 @@ dashed line along where the lens pointed. Rest the pointer anywhere on the
 section to see the horizon grid on the picture for as long as it stays there
 — the grid `b` keeps up, described under [the interface](KEYS.md#the-interface).
 Its line along the true horizontal has a short tick on the side that is up.
-Where the file records the focal length as its 35 mm equivalent and the
-horizon falls inside the picture, the line is the horizon itself — above the
+Where the file records the focal length — as its 35 mm equivalent, or with
+the size of the sensor it was focused on — and the horizon falls inside the
+picture, the line is the horizon itself — above the
 middle when the lens pointed down, below it when it pointed up — drawn in
 full, with a dot where it passes nearest the middle, and the upright lines
 round the camera with it. Otherwise a fainter line in shorter dashes runs

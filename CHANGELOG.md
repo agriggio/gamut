@@ -28,7 +28,9 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
   upright and the level curve through the pointer follow it, and the
   pointer's readout gains a *Direction* coordinate — bearing and elevation —
   which the grid turns on. Resting on the information panel's *Orientation*
-  section previews it.
+  section previews it. A file that does not give its focal length as a
+  35 mm equivalent, as a Canon's does not, has it worked out from the
+  lens's focal length and the sensor's size.
 
 - A camera raw with a color filter over its sensor can be shown as its
   mosaic: what the sensor counted, one value to a photosite, each in its

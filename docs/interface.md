@@ -1378,7 +1378,13 @@ to gravity are the line `gx·x + gy·y + gz·f = 0`, `f·|gz| / (gx² + gy²)`
 from the center (`Shown::horizon_through`). `f` in pixels is the equivalent
 over a full frame's diagonal, times the picture's diagonal, since the
 equivalent is defined by the diagonal and is the one focal length that does
-not need the sensor's size to be known. Without it, or where the horizon misses
+not need the sensor's size to be known. A file that leaves the equivalent
+out — a Canon's — has it made in `exif.rs::focal_equivalent` from the lens's
+focal length and the sensor's size, `PixelX/YDimension` over
+`FocalPlaneX/YResolution`: EXIF's own pixel count rather than the decoded
+picture's, since the resolution is stated against it. A sensor that comes
+out at no size a camera has is taken for the nonsense some programs write
+there, and gives nothing. Without it, or where the horizon misses
 the picture, a lighter line goes through the center instead, the image of
 the level line square to the lens and so right in angle though not in place,
 with a chevron at the edge on the way to a horizon that has a place. The two

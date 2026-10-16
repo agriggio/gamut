@@ -42,7 +42,7 @@ pub const STEEPEST: f64 = 80.0;
 
 /// The diagonal of a 35 mm frame, 36 by 24 mm, which a focal length said
 /// as its 35 mm equivalent is measured against.
-const FULL_FRAME_DIAGONAL: f64 = 43.266_615_305_567_87;
+pub(crate) const FULL_FRAME_DIAGONAL: f64 = 43.266_615_305_567_87;
 
 /// What a file says about which way its camera faced.
 #[derive(Clone, Copy, PartialEq, Debug)]

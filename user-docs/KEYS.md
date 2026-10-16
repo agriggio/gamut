@@ -938,8 +938,9 @@ bearing — or, without a compass reading, how far right of where the lens
 pointed — and how far above level, in degrees. Turning it off puts the pixel
 back. `,` reaches the direction too, without the grid.
 
-The grid needs the focal length as well, as a 35 mm equivalent; without one
-it draws only a fainter line through the middle that shows which way is
+The grid needs the focal length as well: as a 35 mm equivalent, or as the
+lens's own focal length with the size of the sensor, which most cameras that
+leave the equivalent out record instead. Without either it draws only a fainter line through the middle that shows which way is
 level, and the readout cannot give a direction. A compass in a phone is
 often off by five to ten degrees, which moves every bearing by the same
 amount; a wide lens bends straight edges near the frame away from the lines;

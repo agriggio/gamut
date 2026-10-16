@@ -29,7 +29,7 @@ use std::path::Path;
 use ::image::metadata::Orientation;
 use exif::{Context, In, Rational, Tag, Value};
 
-use super::attitude::{self, Attitude};
+use super::attitude::{self, Attitude, FULL_FRAME_DIAGONAL};
 use super::decode::{Opened, ReadSeek};
 use super::level::{self, Level};
 use super::metadata_region::{MetadataRegion, Placed};
@@ -454,9 +454,7 @@ impl Exif {
                 let level = level_of(exif).or_else(|| level::dji(xmp))?;
                 Attitude::level(level, orientation.unwrap_or(Orientation::NoTransforms))
             }),
-            focal_equivalent: uint(exif, Tag::FocalLengthIn35mmFilm)
-                .filter(|mm| *mm > 0)
-                .map(f64::from),
+            focal_equivalent: focal_equivalent(exif),
             heading: rational(exif, Tag::GPSImgDirection).map(|degrees| degrees.rem_euclid(360.0)),
             compression: primary(exif, Tag::Compression)
                 .map(|field| display(exif, field))
@@ -703,6 +701,42 @@ fn exposure(exif: &exif::Exif) -> Vec<Entry> {
     );
     rows
 }
+
+/// The focal length the picture was taken at as its 35 mm equivalent, in
+/// mm: as the file says it, or — where it does not, as a Canon's does not —
+/// worked out from the focal length and the size of the sensor, which the
+/// focal plane's resolution gives against the picture's own pixels. `None`
+/// where the file says neither, or where the sensor that comes out is no
+/// sensor a camera has, as a focal plane some programs write nonsense into
+/// makes it.
+fn focal_equivalent(exif: &exif::Exif) -> Option<f64> {
+    if let Some(mm) = uint(exif, Tag::FocalLengthIn35mmFilm).filter(|mm| *mm > 0) {
+        return Some(f64::from(mm));
+    }
+    let focal = rational(exif, Tag::FocalLength).filter(|mm| *mm > 0.0)?;
+    // The unit the resolution counts pixels in, in mm: an inch unless the
+    // file says centimeters.
+    let unit = match uint(exif, Tag::FocalPlaneResolutionUnit).unwrap_or(2) {
+        2 => 25.4,
+        3 => 10.0,
+        _ => return None,
+    };
+    let side = |pixels: Tag, resolution: Tag| {
+        let pixels = f64::from(uint(exif, pixels)?);
+        let per_unit = rational(exif, resolution).filter(|value| *value > 0.0)?;
+        Some(pixels / per_unit * unit)
+    };
+    let width = side(Tag::PixelXDimension, Tag::FocalPlaneXResolution)?;
+    let height = side(Tag::PixelYDimension, Tag::FocalPlaneYResolution)?;
+    let diagonal = width.hypot(height);
+    SENSOR_DIAGONALS
+        .contains(&diagonal)
+        .then(|| focal * FULL_FRAME_DIAGONAL / diagonal)
+}
+
+/// The diagonals, in mm, a camera's sensor runs between: from a phone's
+/// smallest to a medium-format back's.
+const SENSOR_DIAGONALS: std::ops::RangeInclusive<f64> = 3.0..=80.0;
 
 /// The camera, by its maker and its model. The maker is usually the first
 /// word of the model — "Canon EOS R6", and Nikon's "NIKON D100" under the
@@ -2029,6 +2063,37 @@ mod tests {
 
     /// The maker is said once: where the model starts with it, or with the
     /// first word of a make that is a company's whole name.
+    /// A focal length the file does not give as its 35 mm equivalent is
+    /// worked out from the sensor's size, which the focal plane gives: a
+    /// full-frame body's 42 mm is 42 mm. A focal plane that makes no sensor
+    /// gives nothing, and an equivalent the file does give is taken as it is.
+    #[test]
+    fn a_focal_length_is_made_equivalent_from_the_focal_plane() {
+        let equivalent = |name: &str, x: (u32, u32), stated: Option<u16>| {
+            let mut exif = Block::new();
+            exif.rational(0x920a, &[(42, 1)]); // FocalLength
+            if let Some(mm) = stated {
+                exif.short(0xa405, mm); // FocalLengthIn35mmFilm
+            }
+            exif.short(0xa002, 6000); // PixelXDimension
+            exif.short(0xa003, 4000); // PixelYDimension
+            exif.rational(0xa20e, &[x]); // FocalPlaneXResolution
+            exif.rational(0xa20f, &[(42328, 10)]); // FocalPlaneYResolution
+            exif.short(0xa210, 2); // FocalPlaneResolutionUnit, inches
+            let path = written(name, &jpeg_with(with_exif(Block::new(), exif)));
+            let read = Exif::read(&path);
+            let _ = std::fs::remove_file(&path);
+            read.focal_equivalent
+        };
+        let full = equivalent("focal-full", (42343, 10), None).expect("worked out");
+        assert!((full - 42.0).abs() < 0.05, "{full}");
+        assert_eq!(equivalent("focal-nonsense", (1, 10), None), None);
+        assert_eq!(
+            equivalent("focal-stated", (42343, 10), Some(63)),
+            Some(63.0)
+        );
+    }
+
     #[test]
     fn a_camera_is_named_once() {
         let name = |make: &str, model: &str| {
