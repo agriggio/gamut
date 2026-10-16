@@ -136,26 +136,55 @@ fn mrw(file: &mut dyn ReadSeek) -> Option<Vec<u8>> {
 /// The `CMT1`, `CMT2` and `CMT4` boxes of a CR3, written back out as one
 /// TIFF.
 fn cr3(file: &mut dyn ReadSeek) -> Option<Vec<u8>> {
-    // Everything wanted is in `moov`, which comes right after `ftyp`; the
-    // pixels are in `mdat` after it, and nothing here goes near them.
-    let bytes = isobmff::top_level(file, b"moov", Some(b"mdat"), PREFIX as u64).ok()??;
-    let (uuid, uuid_end) = isobmff::find(&bytes, 0, bytes.len(), b"uuid")?;
-    // Canon's uuid, the 16 bytes after the box header.
-    const CANON: [u8; 16] = [
-        0x85, 0xc0, 0xb6, 0x87, 0x82, 0x0f, 0x11, 0xe0, 0x81, 0x11, 0xf4, 0xce, 0x46, 0x2b, 0x6a,
-        0x48,
-    ];
-    if bytes.get(uuid..uuid + 16)? != CANON {
+    let canon = Canon::read(file)?;
+    combine(
+        canon.body(b"CMT1")?,
+        canon.body(b"CMT2"),
+        canon.body(b"CMT4"),
+    )
+}
+
+/// A CR3's `CMT3` box, the maker note, as the TIFF it is: one directory,
+/// addressing its values from the box's first byte. `None` for any other
+/// file.
+pub fn cr3_maker_note(file: &mut dyn ReadSeek) -> Option<Vec<u8>> {
+    file.seek(SeekFrom::Start(0)).ok()?;
+    let mut head = [0u8; 12];
+    file.read_exact(&mut head).ok()?;
+    file.seek(SeekFrom::Start(0)).ok()?;
+    if head.get(4..12) != Some(b"ftypcrx ") {
         return None;
     }
-    let body = |name: &[u8; 4]| {
-        let (start, end) = isobmff::find(&bytes, uuid + 16, uuid_end, name)?;
-        bytes.get(start..end)
-    };
-    let image = body(b"CMT1")?;
-    let exif = body(b"CMT2");
-    let gps = body(b"CMT4");
-    combine(image, exif, gps)
+    Canon::read(file)?.body(b"CMT3").map(<[u8]>::to_vec)
+}
+
+/// A CR3's `moov`, and where Canon's `uuid` box is in it.
+struct Canon {
+    bytes: Vec<u8>,
+    start: usize,
+    end: usize,
+}
+
+impl Canon {
+    fn read(file: &mut dyn ReadSeek) -> Option<Self> {
+        // Everything wanted is in `moov`, which comes right after `ftyp`;
+        // the pixels are in `mdat` after it, and nothing here goes near
+        // them.
+        let bytes = isobmff::top_level(file, b"moov", Some(b"mdat"), PREFIX as u64).ok()??;
+        let (start, end) = isobmff::find(&bytes, 0, bytes.len(), b"uuid")?;
+        // Canon's uuid, the 16 bytes after the box header.
+        const CANON: [u8; 16] = [
+            0x85, 0xc0, 0xb6, 0x87, 0x82, 0x0f, 0x11, 0xe0, 0x81, 0x11, 0xf4, 0xce, 0x46, 0x2b,
+            0x6a, 0x48,
+        ];
+        (bytes.get(start..start + 16)? == CANON).then_some(Self { bytes, start, end })
+    }
+
+    /// The body of the box under the `uuid` called `name`.
+    fn body(&self, name: &[u8; 4]) -> Option<&[u8]> {
+        let (start, end) = isobmff::find(&self.bytes, self.start + 16, self.end, name)?;
+        self.bytes.get(start..end)
+    }
 }
 
 /// The three directories as one TIFF. Each box is a TIFF of its own, its

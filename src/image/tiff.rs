@@ -69,7 +69,7 @@ impl Order {
         }
     }
 
-    fn read_u16(self, bytes: &[u8], at: usize) -> Option<u16> {
+    pub fn read_u16(self, bytes: &[u8], at: usize) -> Option<u16> {
         let bytes: [u8; 2] = bytes.get(at..at + 2)?.try_into().ok()?;
         Some(match self {
             Order::Little => u16::from_le_bytes(bytes),
@@ -140,7 +140,9 @@ pub fn entries(tiff: &[u8], order: Order, skipping: &[u16]) -> Option<Vec<Entry>
 /// The entries of the directory at `at` in `block`, written in `order`,
 /// whose offsets count from the block's first byte: a TIFF's own, or the
 /// directory a maker note keeps behind a header of its own. `None` where
-/// the directory does not add up.
+/// the directory does not add up. An entry of a type TIFF does not define
+/// is passed over, as the specification asks of a reader: an iPhone's maker
+/// note holds one, of type zero, among the entries that are wanted.
 pub fn entries_at(block: &[u8], order: Order, at: usize, skipping: &[u16]) -> Option<Vec<Entry>> {
     let tiff = block;
     let count = order.read_u16(tiff, at)? as usize;
@@ -151,10 +153,10 @@ pub fn entries_at(block: &[u8], order: Order, at: usize, skipping: &[u16]) -> Op
         let kind = order.read_u16(tiff, at + 2)?;
         let count = order.read_u32(tiff, at + 4)?;
         let value: [u8; 4] = tiff.get(at + 8..at + 12)?.try_into().ok()?;
-        if skipping.contains(&tag) {
+        let Some(unit) = type_size(kind).filter(|_| !skipping.contains(&tag)) else {
             continue;
-        }
-        let size = u64::from(count) * u64::from(type_size(kind)?);
+        };
+        let size = u64::from(count) * u64::from(unit);
         let (inline, offset) = if size <= 4 {
             (Some(value), 0)
         } else {
@@ -309,13 +311,13 @@ mod tests {
 
     /// A directory's entries are read in the block's own order, an entry
     /// too long for its slot pointing into the block, and the tags asked
-    /// to be skipped are.
+    /// to be skipped are, as is one of a type TIFF does not define.
     #[test]
     fn a_directory_is_read_in_its_own_order_and_the_pointers_left_out() {
         for order in [Order::Little, Order::Big] {
             let mut block = signature(order, Kind::Classic).to_vec();
             block.extend(order.u32(8));
-            block.extend(order.u16(3));
+            block.extend(order.u16(4));
             // 0x0100 ImageWidth, SHORT, one component, inline.
             block.extend(order.u16(0x0100));
             block.extend(order.u16(3));
@@ -327,6 +329,12 @@ mod tests {
             block.extend(order.u16(4));
             block.extend(order.u32(1));
             block.extend(order.u32(999));
+            // A type TIFF does not define, as an iPhone's maker note
+            // holds, to be passed over.
+            block.extend(order.u16(0x0123));
+            block.extend(order.u16(0));
+            block.extend(order.u32(1));
+            block.extend(order.u32(0));
             // 0x010e ImageDescription, ASCII, eight bytes, at an offset.
             block.extend(order.u16(0x010e));
             block.extend(order.u16(2));

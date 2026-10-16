@@ -1313,6 +1313,69 @@ its column heads, rather than as the two columns every other section
 copies as: the section is a table on screen, and a region pasted anywhere
 is wanted as its numbers.
 
+Which way the camera faced is read from the one thing that measures it
+directly: gravity. An iPhone writes its accelerometer's reading into Apple's
+maker note, tag 8 (read by `image/apple_note.rs`, which the HEIF decoder's
+gain-map headroom reads through too), and a GoPro writes a unit gravity
+vector, `GRAV`, into the GPMF block of its JPEG's `APP6` segment, which
+`attitude::in_jpeg` walks to. The two are in different axes, and
+`attitude::Attitude` holds gravity in neither: in the picture as stored, x
+across, y down and z out of the lens. GoPro's `GRAV` already is, as the
+horizon of a HERO12's shot of the sea agrees.
+Apple's is in the device's axes, x to its right edge, y to its top and z out
+of its screen, and its sensor is the device's landscape. Which camera took
+the picture matters: the rear one looks along -z and the front one along +z,
+and the front one's picture is the other way up across the device, so the
+lens model the EXIF names says which mapping applies. Both were settled
+against a few hundred iPhone and iPad files, their orientation tags giving the
+answer: a landscape picture with no turn reads gravity along -x from the
+rear camera and +x from the front. `Attitude::shown` then carries gravity as
+the regions are carried, through the orientation tag and the turn in force,
+using only the part of `orient::upright` that does not move the origin,
+since gravity is a direction rather than a point. An Apple file whose stored
+picture is taller than wide has been stood up by an editor that dropped the
+tag; it is turned back whichever quarter leaves gravity pulling down it.
+Pitch and the horizon's angle are read off the shown vector. A turn about
+the lens is invisible to gravity when the lens points straight up or down,
+so past `attitude::STEEPEST` there is no horizon and no line.
+
+A camera with an electronic level writes angles rather than a vector, and
+`image/level.rs` reads them out of the maker note into a `Level` — a roll
+clockwise as seen from behind the camera and a pitch above level, the signs
+ExifTool states for each maker, so that every layout lands on one
+convention. The layouts are ExifTool's: Canon's `LevelInfo` (tag 0x4059;
+a CR3 keeps its maker note in the `CMT3` box, which `enclosed::cr3_maker_note`
+hands over as the TIFF it is), Panasonic's tags 0x90 and 0x91 (in the EXIF
+of the JPEG an RW2 keeps under tag 0x2E, not the RW2's own), Pentax's
+`LevelInfo` and the K-3 Mark III's (in a PEF's `AOC` note or a DNG's private
+data), and Olympus's tags 0x903 and 0x904 under its camera settings
+directory; DJI's gimbal is three XMP properties. Each was checked against
+ExifTool on the sample files raw.pixls.us holds, about a hundred, and agrees
+with it to the tenth of a degree. Nikon's three angles are in its
+`ShotInfo`, which is encrypted against the serial number and the shutter
+count, and are not read. Whether a maker measures the roll all the way
+round or from the way the camera was held is not documented for every one
+— a Panasonic portrait reads -89.7 — so `Attitude::level` takes whichever
+of the two readings agrees with the EXIF orientation's quarter turn, which
+is right either way except with the lens pointed nearly straight up or
+down, where there is no horizon to draw. A level's angles become gravity in
+the stored picture's axes there, and from then on are read as every other
+source is.
+
+The section is drawn by `ui/attitude.rs`. The camera is three convex solids
+— the body, shaped as the picture as shown, a button on its top and the lens
+— whose faces are culled against the eye and painted from the farthest in,
+which is all a painter's algorithm needs for convex pieces seen at one
+angle. Its axes in the world come from gravity alone, with the lens's
+heading fixed straight ahead, since nothing in either source says which way
+the camera pointed across the ground. The eye is behind the camera, so that
+a turn of the picture clockwise on screen is a turn of the drawing clockwise
+too. The level line is the line through the picture's center that is square
+to gravity's part across the picture: it is the image of a level line in the
+scene square to the lens, which is why no focal length is needed to draw it.
+It is painted as the regions are, on the picture's layer while the pointer
+is anywhere on the section.
+
 The panel is also the one part of the interface that is read out rather than
 merely read. A click on a field copies it, a click on a heading copies the
 section under it, and a button in a header above the column copies the lot.

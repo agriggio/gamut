@@ -826,6 +826,49 @@ fn a_regions_row_marks_it_on_the_picture() {
     assert!(marked(&harness));
 }
 
+/// A file that says which way its camera faced has an Orientation section,
+/// and one that does not has none; while the pointer is on the section the
+/// level line is drawn across the picture, beside the panel.
+#[test]
+fn the_orientation_section_draws_the_level_line_on_the_picture() {
+    use super::side::Side;
+    use crate::image::attitude::Attitude;
+
+    let mut with_info = panels();
+    with_info.side = Some(Side::Info);
+    let mut harness = open(WINDOW, 1, with_info);
+    harness.state_mut().current = Some(photograph());
+    harness.run();
+    assert!(harness.query_by_label("Orientation").is_none());
+
+    let mut current = photograph();
+    current.exif.attitude = Attitude::gopro([-0.0377, 0.9992, -0.0092]);
+    harness.state_mut().current = Some(current);
+    harness.run();
+    assert!(harness.query_by_label("2.2\u{00b0} clockwise").is_some());
+    assert!(harness.query_by_label("0.5\u{00b0} up").is_some());
+
+    let side = egui::PanelState::load(&harness.ctx, egui::Id::new("side"))
+        .expect("the side panel is up")
+        .outer_rect;
+    // A dashed line is many segments, drawn where the picture is.
+    let segments = |harness: &Harness<'static, State>| {
+        harness
+            .output()
+            .shapes
+            .iter()
+            .filter(|shape| {
+                matches!(&shape.shape, egui::Shape::LineSegment { points, .. }
+                    if points[0].x < side.min.x && points[1].x < side.min.x)
+            })
+            .count()
+    };
+    let before = segments(&harness);
+    harness.get_by_label("Orientation").hover();
+    harness.run();
+    assert!(segments(&harness) > before + 10);
+}
+
 /// The side panel is laid out where the chrome's geometry says, between
 /// the picture and the right strip, and the histogram at its head; while
 /// another file is on its way in it keeps that place and says nothing of

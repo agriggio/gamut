@@ -156,6 +156,30 @@ GeoTIFF elevation model or scanned map.
 | Orientation | Only where the raster is rotated against the map's axes. |
 | No data | The value that marks a pixel with no data. |
 
+## Orientation
+
+Only for a picture whose camera recorded which way it faced: an iPhone or
+iPad, from its accelerometer; a GoPro; a camera with an electronic level —
+recent Canon mirrorless bodies, Panasonic Lumix, Pentax, and Olympus and OM
+System; or a DJI drone, from its gimbal. Nikon records it too, but in a form
+that is not read. A drawing shows the
+camera from behind, pitched and turned as it was over a level floor, with a
+dashed line along where the lens pointed. Rest the pointer anywhere on the
+section to draw the level line across the picture: through its middle, along
+the true horizontal, with a short tick on the side that is up.
+
+| Field | What it says |
+| --- | --- |
+| Pitch | How far the lens pointed above or below level. |
+| Horizon | How far the level line runs from the picture's own horizontal, clockwise or counterclockwise, as shown. It follows the orientation and any turn. Left out, with the level line, when the lens pointed within ten degrees of straight up or down, where no horizon can be told. |
+| Accelerometer | An iPhone's or iPad's reading, in g, in the device's own axes. |
+| Gravity | A GoPro's, in the picture's own axes. |
+| Level | A camera's electronic level as it recorded it: the roll, clockwise as seen from behind the camera, and the pitch. A camera held on its side may record its roll from that position rather than from level; the picture's orientation says which. |
+| Gimbal | A DJI drone's gimbal: its roll, its pitch, and its yaw, the compass direction it pointed. |
+
+A picture an editor turned upright and saved again without its orientation
+is assumed to have been turned whichever way stands it upright.
+
 ## Regions
 
 The regions the file marks out on the picture, as a table of their subject,

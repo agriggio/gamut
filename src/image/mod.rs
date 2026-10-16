@@ -8,6 +8,8 @@
 //! The pixel model is here; what the numbers mean is [`color`]; the decoders
 //! that produce it are [`decode`].
 
+pub mod apple_note;
+pub mod attitude;
 pub mod auxiliary;
 pub mod color;
 pub mod decode;
@@ -20,6 +22,7 @@ pub mod exif;
 pub mod gain_map;
 pub mod geo;
 pub mod isobmff;
+pub mod level;
 pub mod metadata_region;
 pub mod orient;
 pub mod region;
