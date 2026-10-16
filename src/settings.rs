@@ -807,8 +807,9 @@ mod tests {
             .filter(|line| line.starts_with("gesture."))
             .count();
         assert_eq!(keys, 102, "{uncommented}");
-        // A Mac's two more: the wheel with Command, and the pinch.
-        let slots = if cfg!(target_os = "macos") { 12 } else { 10 };
+        // A Mac's three more: the scroll, the scroll with Command, and the
+        // pinch.
+        let slots = if cfg!(target_os = "macos") { 13 } else { 10 };
         assert_eq!(gestures, slots, "{uncommented}");
         assert_eq!(
             uncommented.lines().count(),
@@ -877,7 +878,9 @@ mod tests {
             Some(HoldAction::Loupe)
         );
         assert_eq!(
-            config.gestures.wheel(Surface::Image, Mods::empty(), None),
+            config
+                .gestures
+                .wheel(Surface::Image, Mods::empty(), None, false),
             None
         );
         assert_eq!(
