@@ -867,6 +867,31 @@ fn the_orientation_section_draws_the_level_line_on_the_picture() {
     harness.get_by_label("Orientation").hover();
     harness.run();
     assert!(segments(&harness) > before + 10);
+
+    // Only the true horizon wears a dot, and only a file that says its
+    // focal length has one placed; pitched far enough down, it is off the
+    // picture and the lighter level line is drawn instead.
+    let dots = |harness: &Harness<'static, State>| {
+        harness
+            .output()
+            .shapes
+            .iter()
+            .filter(|shape| {
+                matches!(&shape.shape, egui::Shape::Circle(circle)
+                    if circle.center.x < side.min.x)
+            })
+            .count()
+    };
+    let unplaced = dots(&harness);
+    for (gravity, placed) in [([-0.0377, 0.9992, -0.0092], 1), ([0.0, 0.8, 0.6], 0)] {
+        let mut current = photograph();
+        current.exif.attitude = Attitude::gopro(gravity);
+        current.exif.focal_equivalent = Some(26.0);
+        harness.state_mut().current = Some(current);
+        harness.run();
+        assert_eq!(dots(&harness), unplaced + placed, "{gravity:?}");
+        assert!(segments(&harness) > before + 10, "{gravity:?}");
+    }
 }
 
 /// The side panel is laid out where the chrome's geometry says, between

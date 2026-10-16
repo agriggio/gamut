@@ -1378,10 +1378,12 @@ to gravity are the line `gx·x + gy·y + gz·f = 0`, `f·|gz| / (gx² + gy²)`
 from the center (`Shown::horizon_through`). `f` in pixels is the equivalent
 over a full frame's diagonal, times the picture's diagonal, since the
 equivalent is defined by the diagonal and is the one focal length that does
-not need the sensor's size to be known. Without it the line goes through
-the center, which is the image of the level line square to the lens and so
-right in angle though not in place. A horizon that misses the picture is a
-chevron at its edge on the way from the center. It is painted as the regions are, on the picture's layer while the pointer
+not need the sensor's size to be known. Without it, or where the horizon misses
+the picture, a lighter line goes through the center instead, the image of
+the level line square to the lens and so right in angle though not in place,
+with a chevron at the edge on the way to a horizon that has a place. The two
+lines are always parallel, so they are never drawn together; the style says
+which one is up, the full one only ever meaning the horizon itself. It is painted as the regions are, on the picture's layer while the pointer
 is anywhere on the section.
 
 The panel is also the one part of the interface that is read out rather than

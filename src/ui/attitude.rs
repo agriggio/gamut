@@ -65,12 +65,19 @@ const MAX_ASPECT: f32 = 2.0;
 const SCENE_SPAN: f32 = 3.8;
 
 /// The weight of the camera's edges and of the line it looks along, and of
-/// the level line drawn across the picture.
+/// the horizon drawn across the picture.
 const EDGE: f32 = 1.0;
-const LEVEL_LINE: f32 = 1.5;
-/// The dashes the level line and the line of sight are drawn in.
+const HORIZON_LINE: f32 = 1.5;
+/// The dashes the horizon and the line of sight are drawn in.
 const DASH: f32 = 6.0;
 const GAP: f32 = 4.0;
+/// The lighter line through the middle that says only which way is level,
+/// where the horizon is not on the picture or has no place: thinner, in
+/// shorter dashes, and this share of the accent.
+const LEVEL_LINE: f32 = 1.0;
+const LEVEL_DASH: f32 = 3.0;
+const LEVEL_GAP: f32 = 3.0;
+const LEVEL_INK: f32 = 0.7;
 
 /// How squarely a face must face the eye to be drawn: the cosine of the
 /// angle between its outward way and the way back to the eye.
@@ -363,13 +370,15 @@ fn mix(from: Color, to: Color, share: f32) -> Color32 {
     )
 }
 
-/// Draws the level line across the picture with `painter`, at the angle
-/// `shown` says the horizon runs: where the true horizon is, where the file
-/// says what focal length it was taken at, and through the middle where it
-/// does not; from one edge of the picture to the other, with a short square
-/// mark at the point nearest the middle pointing up. A horizon that falls
-/// outside the picture is a mark at the edge pointing the way it lies.
-/// Nothing where the lens pointed too steeply for a horizon.
+/// Draws the line across the picture with `painter` at the angle `shown`
+/// says the horizon runs, from one edge of the picture to the other, with a
+/// short square mark pointing up. Where the file says what focal length it
+/// was taken at and the true horizon falls on the picture, that is the line
+/// drawn, in full, with a dot where it passes nearest the middle. Otherwise
+/// the line through the middle is drawn, lighter, saying only which way is
+/// level — and where the horizon falls outside the picture, a chevron at the
+/// edge points the way it lies. Nothing where the lens pointed too steeply
+/// for a horizon.
 pub(super) fn level_line(pass: &Pass, painter: &egui::Painter, current: &Current, shown: &Shown) {
     let Some(horizon) = shown.horizon else {
         return;
@@ -382,42 +391,70 @@ pub(super) fn level_line(pass: &Pass, painter: &egui::Painter, current: &Current
         pos2(x / scale, y / scale)
     };
     let middle = [size[0] / 2.0, size[1] / 2.0];
+    let (sin, cos) = (horizon as f32).to_radians().sin_cos();
+    let accent: Color32 = pass.theme.accent.into();
+    let grid = pass.grid;
+    let line = |width: f32, ink: Color32, dash: f32, gap: f32, from: [f32; 2], to: [f32; 2]| {
+        let ends = [screen(from), screen(to)];
+        // A dark band under the dashes, so they are seen on a bright sky too.
+        let under = Stroke::new(width + 2.0, Color32::from_black_alpha(90));
+        let ink = Stroke::new(width, ink);
+        painter.line_segment(ends, under);
+        painter.extend(egui::Shape::dashed_line(&ends, ink, dash, gap));
+        (under, ink)
+    };
+    // Which side of the line is up, from the point on it at `at`.
+    let tick = |at: Pos2, (under, ink): (Stroke, Stroke)| {
+        let up = vec2(sin, -cos) * 10.0;
+        painter.line_segment([at, at + up], under);
+        painter.line_segment([at, at + up], ink);
+    };
+
     let offset = shown
         .horizon_through(size.map(f64::from), current.exif.focal_equivalent)
-        .map_or([0.0, 0.0], |offset| offset.map(|value| value as f32));
-    let foot = [middle[0] + offset[0], middle[1] + offset[1]];
-    let (sin, cos) = (horizon as f32).to_radians().sin_cos();
-    let grid = pass.grid;
-    let accent: Color32 = pass.theme.accent.into();
-    let width = grid.line_width(LEVEL_LINE);
-    // A dark band under the dashes, so they are seen on a bright sky too.
-    let under = Stroke::new(width + 2.0, Color32::from_black_alpha(90));
-    let ink = Stroke::new(width, accent);
-
-    let Some([from, to]) = across(foot, [cos, sin], size) else {
-        // Off the picture: a chevron at the edge, on the way from the
-        // middle to the horizon, pointing out toward it.
+        .map(|offset| offset.map(|value| value as f32));
+    if let Some(offset) = offset {
+        let foot = [middle[0] + offset[0], middle[1] + offset[1]];
+        if let Some([from, to]) = across(foot, [cos, sin], size) {
+            let width = grid.line_width(HORIZON_LINE);
+            let strokes = line(width, accent, DASH, GAP, from, to);
+            let at = screen(foot);
+            tick(at, strokes);
+            painter.circle_filled(at, width * 1.5, accent);
+            return;
+        }
+    }
+    let Some([from, to]) = across(middle, [cos, sin], size) else {
+        return;
+    };
+    let strokes = line(
+        grid.line_width(LEVEL_LINE),
+        accent.gamma_multiply(LEVEL_INK),
+        LEVEL_DASH,
+        LEVEL_GAP,
+        from,
+        to,
+    );
+    tick(screen(middle), strokes);
+    // The horizon off the picture: a chevron at the edge, on the way from
+    // the middle to it, pointing out toward it.
+    if let Some(offset) = offset {
         let reach = edge_reach(offset, middle);
         let at = screen([middle[0] + offset[0] * reach, middle[1] + offset[1] * reach]);
-        let out = (screen(foot) - screen(middle)).normalized();
+        let out =
+            (screen([middle[0] + offset[0], middle[1] + offset[1]]) - screen(middle)).normalized();
         let side = out.rot90() * CHEVRON;
         let tip = at - out * 2.0;
         let back = tip - out * CHEVRON;
-        for stroke in [under, ink] {
+        let width = grid.line_width(HORIZON_LINE);
+        for stroke in [
+            Stroke::new(width + 2.0, Color32::from_black_alpha(90)),
+            Stroke::new(width, accent),
+        ] {
             painter.line_segment([back + side, tip], stroke);
             painter.line_segment([tip, back - side], stroke);
         }
-        return;
-    };
-    let ends = [screen(from), screen(to)];
-    painter.line_segment(ends, under);
-    painter.extend(egui::Shape::dashed_line(&ends, ink, DASH, GAP));
-    // The point nearest the middle, and which side of the line is up.
-    let at = screen(foot);
-    let up = vec2(sin, -cos) * 10.0;
-    painter.line_segment([at, at + up], under);
-    painter.line_segment([at, at + up], ink);
-    painter.circle_filled(at, width * 1.5, accent);
+    }
 }
 
 /// How far the chevron marking a horizon off the picture runs back and

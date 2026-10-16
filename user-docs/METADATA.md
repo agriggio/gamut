@@ -165,13 +165,14 @@ System; or a DJI drone, from its gimbal. Nikon records it too, but in a form
 that is not read. A drawing shows the
 camera from behind, pitched and turned as it was over a level floor, with a
 dashed line along where the lens pointed. Rest the pointer anywhere on the
-section to draw the level line across the picture, along the true
-horizontal, with a short tick on the side that is up. Where the file records
-the focal length as its 35 mm equivalent, the line is drawn where the true
-horizon falls — above the middle when the lens pointed down, below it when it
-pointed up — and a horizon outside the frame is a chevron at the edge
-pointing toward it. Where it does not, the line runs through the middle and
-shows only which way is level. A crop made after the picture was taken, or a
+section to draw a line across the picture along the true horizontal, with a
+short tick on the side that is up. Where the file records the focal length
+as its 35 mm equivalent and the horizon falls inside the picture, the line is
+the horizon itself — above the middle when the lens pointed down, below it
+when it pointed up — drawn in full, with a dot where it passes nearest the
+middle. Otherwise a thinner, lighter line runs through the middle and shows
+only which way is level; when the horizon is outside the frame, a chevron at
+the edge points toward it. A crop made after the picture was taken, or a
 wide lens's distortion, moves the true horizon away from where it is drawn.
 
 | Field | What it says |
