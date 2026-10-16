@@ -396,8 +396,9 @@ pub(super) fn level_line(pass: &Pass, painter: &egui::Painter, current: &Current
     let grid = pass.grid;
     let line = |width: f32, ink: Color32, dash: f32, gap: f32, from: [f32; 2], to: [f32; 2]| {
         let ends = [screen(from), screen(to)];
-        // A dark band under the dashes, so they are seen on a bright sky too.
-        let under = Stroke::new(width + 2.0, Color32::from_black_alpha(90));
+        // A solid band under the dashes, so they stand out from whatever
+        // the picture is behind them.
+        let under = Stroke::new(width + 2.0, UNDER);
         let ink = Stroke::new(width, ink);
         painter.line_segment(ends, under);
         painter.extend(egui::Shape::dashed_line(&ends, ink, dash, gap));
@@ -447,15 +448,15 @@ pub(super) fn level_line(pass: &Pass, painter: &egui::Painter, current: &Current
         let tip = at - out * 2.0;
         let back = tip - out * CHEVRON;
         let width = grid.line_width(HORIZON_LINE);
-        for stroke in [
-            Stroke::new(width + 2.0, Color32::from_black_alpha(90)),
-            Stroke::new(width, accent),
-        ] {
+        for stroke in [Stroke::new(width + 2.0, UNDER), Stroke::new(width, accent)] {
             painter.line_segment([back + side, tip], stroke);
             painter.line_segment([tip, back - side], stroke);
         }
     }
 }
+
+/// The band under the lines and the chevron drawn across the picture.
+const UNDER: Color32 = Color32::WHITE;
 
 /// How far the chevron marking a horizon off the picture runs back and
 /// out to either side.
