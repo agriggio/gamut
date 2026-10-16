@@ -580,6 +580,19 @@ pub(super) const AXIS_3D: &[Mark] = &[
     Mark::Line([13.5, 10.5], [15.0, 9.0]),
 ];
 
+/// Lucide's `move-3d`: three axes from one corner, two of them ending in
+/// arrowheads — which way the camera faced, at the head of the section
+/// that says so.
+pub(super) const MOVE_3D: &[Mark] = &[
+    Mark::Line([5.0, 3.0], [5.0, 19.0]),
+    Mark::Line([5.0, 19.0], [21.0, 19.0]),
+    Mark::Line([5.0, 19.0], [11.0, 13.0]),
+    Mark::Line([2.0, 6.0], [5.0, 3.0]),
+    Mark::Line([5.0, 3.0], [8.0, 6.0]),
+    Mark::Line([18.0, 16.0], [21.0, 19.0]),
+    Mark::Line([21.0, 19.0], [18.0, 22.0]),
+];
+
 /// Lucide's `sun`: a disc's outline with eight short rays round it — light
 /// above white, for the toggle that shows the gain map.
 pub(super) const SUN: &[Mark] = &[
@@ -1305,7 +1318,7 @@ mod tests {
 
     /// Every icon in the table, so that a new one is held to the same
     /// promises as the rest.
-    const ICONS: [&[Mark]; 47] = [
+    const ICONS: [&[Mark]; 48] = [
         CHART_AREA,
         INFO,
         CIRCLE_QUESTION_MARK,
@@ -1348,6 +1361,7 @@ mod tests {
         ARROW_LEFT,
         ARROW_RIGHT,
         AXIS_3D,
+        MOVE_3D,
         SUN,
         SPLINE,
         EYE,

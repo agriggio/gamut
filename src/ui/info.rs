@@ -22,12 +22,16 @@ use egui::{
 };
 
 use crate::clock;
+use ::image::metadata::Orientation;
+
 use crate::image::AlphaMode;
+use crate::image::attitude::{Attitude, Shown, Source};
 use crate::image::auxiliary::{Auxiliary, Showing};
 use crate::image::decode::{Reading, Rendering};
 use crate::image::depth::{Accuracy, Quantity};
 use crate::image::exif::{self, Group, ShownRegion};
 use crate::image::gain_map::{GainMap, Lift};
+use crate::image::level::Maker;
 use crate::image::metadata_region::Placed;
 use crate::image::orient;
 use crate::image::sequence::{Loops, Sequence};
@@ -36,6 +40,7 @@ use crate::render::Color;
 use super::Rect;
 use crate::theme::Theme;
 
+use super::attitude;
 use super::chrome::{ICON_SIDE, Pass, measure};
 use super::control::Control;
 use super::icon;
@@ -47,6 +52,8 @@ use super::{Current, PANEL_INSET, PANEL_RADIUS, RULE_WIDTH, TEXT_SIZE, rule};
 
 /// The heading of the regions the metadata marks out on the picture.
 const REGIONS: &str = "Regions";
+/// The heading of which way the camera faced.
+const ORIENTATION: &str = "Orientation";
 /// The heading of the depth map the picture carries.
 const DEPTH_MAP: &str = "Depth map";
 /// The heading of the gain map the picture carries.
@@ -191,6 +198,10 @@ enum Face {
     /// or what each is and where, each drawn on the picture while the
     /// pointer is on its row — see [`regions_section`].
     Regions,
+    /// Which way the camera faced: the camera drawn, its pitch and its
+    /// horizon, and the level line drawn on the picture while the pointer is
+    /// on any of it — see [`orientation_section`].
+    Orientation,
 }
 
 /// One section of the column: its name, how it is drawn, and its fields.
@@ -201,6 +212,9 @@ struct Section {
     /// For [`Face::Regions`], each region a fact is the row of, in the same
     /// order; empty for every other face.
     regions: Vec<ShownRegion>,
+    /// For [`Face::Orientation`], which way the camera faced in the picture
+    /// as shown, and that picture's size; `None` for every other face.
+    attitude: Option<(Shown, [f32; 2])>,
     /// Whether what the section describes is on screen, which a pill at the
     /// end of its heading says: the picture's, or the gain map's or the
     /// depth map's while it is shown in its place.
@@ -215,6 +229,7 @@ impl Section {
             face,
             facts,
             regions: Vec::new(),
+            attitude: None,
             showing: false,
         }
     }
@@ -528,6 +543,9 @@ fn column(pass: &mut Pass, ui: &mut egui::Ui, current: &Current, picture: &egui:
                     Face::Regions => {
                         regions_section(pass, ui, current, picture, place, section, index, width)
                     }
+                    Face::Orientation => orientation_section(
+                        pass, ui, current, picture, place, section, index, width,
+                    ),
                 }
                 index += section.facts.len();
             }
@@ -934,6 +952,90 @@ fn regions_section(
             mark_regions(pass, picture, current, std::slice::from_ref(region));
         }
     }
+}
+
+/// Which way the camera faced, under its heading: the camera drawn over a
+/// level floor, and under it the pitch, the horizon and what the file read
+/// them from, as a table. While the pointer is anywhere on it, the level
+/// line is drawn across the picture. A click on the drawing copies the
+/// section, as one on the heading does.
+#[allow(clippy::too_many_arguments)]
+fn orientation_section(
+    pass: &mut Pass,
+    ui: &mut egui::Ui,
+    current: &Current,
+    picture: &egui::Painter,
+    place: usize,
+    section: &Section,
+    first: usize,
+    width: f32,
+) {
+    let Some((shown, size)) = section.attitude else {
+        return;
+    };
+    let left = ui.cursor().min.x;
+    let top = ui.cursor().min.y;
+    marked_heading(pass, ui, place, section, width, icon::MOVE_3D);
+    ui.add_space(HEAD_GAP);
+    let (theme, grid) = (pass.theme, pass.grid);
+    block(pass, ui, Copyable::Section(place), width, |ui| {
+        let (rect, _) = ui.allocate_exact_size(vec2(width, attitude::HEIGHT), Sense::HOVER);
+        attitude::diagram(theme, grid, ui.painter(), rect, &shown, size);
+    });
+    ui.add_space(HEAD_GAP);
+    table(pass, ui, (first..).zip(&section.facts), width);
+    let whole = egui::Rect::from_x_y_ranges(left..=left + width, top..=ui.cursor().min.y);
+    if ui.rect_contains_pointer(whole) {
+        attitude::level_line(pass, picture, current, &shown);
+    }
+}
+
+/// An angle as the section says it, to a tenth of a degree, the way it
+/// leans named in words: `up` or `down`, `clockwise` or
+/// `counterclockwise`; and `level` where it comes to nothing at that.
+fn leaning(degrees: f64, positive: &str, negative: &str) -> String {
+    let tenths = (degrees * 10.0).round() / 10.0;
+    if tenths == 0.0 {
+        return "level".to_string();
+    }
+    let way = if tenths > 0.0 { positive } else { negative };
+    format!("{:.1}\u{00b0} {way}", tenths.abs())
+}
+
+/// The section's rows: how far the lens pointed above or below level, how
+/// far the horizon runs from the picture's across, and what the file holds
+/// as it wrote it — three numbers in the sensor's axes, or a level's angles.
+fn orientation_facts(attitude: &Attitude, shown: &Shown) -> Vec<(&'static str, String)> {
+    let numbers = |reading: [f64; 3]| reading.map(|value| format!("{value:.3}")).join(", ");
+    let (name, reading) = match attitude.source {
+        Source::Apple(reading) => ("Accelerometer", format!("{} g", numbers(reading))),
+        Source::GoPro(reading) => ("Gravity", numbers(reading)),
+        // The angles as the level wrote them, before the orientation tag:
+        // the roll clockwise as seen from behind the camera.
+        Source::Level(level) => {
+            let mut angles = vec![
+                format!("roll {:.1}\u{00b0}", level.roll),
+                format!("pitch {:.1}\u{00b0}", level.pitch),
+            ];
+            angles.extend(level.yaw.map(|yaw| format!("yaw {yaw:.1}\u{00b0}")));
+            let name = match level.maker {
+                Maker::Dji => "Gimbal",
+                _ => "Level",
+            };
+            (name, angles.join(", "))
+        }
+    };
+    vec![
+        ("Pitch", leaning(shown.pitch, "up", "down")),
+        (
+            "Horizon",
+            shown
+                .horizon
+                .map(|degrees| leaning(degrees, "clockwise", "counterclockwise"))
+                .unwrap_or_default(),
+        ),
+        (name, reading),
+    ]
 }
 
 /// A region's four numbers as the table writes them: its top left corner
@@ -1414,6 +1516,25 @@ fn contents(current: &Current) -> Contents {
             .into_iter()
             .map(|section| metadata_section(exif, section)),
     );
+    // Which way the camera faced, worked out in the picture as shown, which
+    // the turn in force decides as it does for the regions.
+    if let Some(attitude) = &exif.attitude {
+        let face = current.picture_face();
+        let size = current.turn.size([face.image.width, face.image.height]);
+        let shown = attitude.shown(
+            exif.orientation.unwrap_or(Orientation::NoTransforms),
+            current.turn,
+            size,
+        );
+        sections.push(Section {
+            attitude: Some((shown, size.map(|side| side as f32))),
+            ..Section::new(
+                ORIENTATION,
+                Face::Orientation,
+                fields(orientation_facts(attitude, &shown)),
+            )
+        });
+    }
     // The regions are written out here rather than with the rest, since
     // where each is depends on the turn in force.
     // Each is copied as its row of the table, which is never empty, so the

@@ -6,6 +6,7 @@
 //! geometry is — and what was pressed comes back as commands, so that a
 //! frame can be built and driven with no application behind it.
 
+mod attitude;
 pub mod chooser;
 pub mod chrome;
 pub mod control;

@@ -29,7 +29,9 @@ use std::path::Path;
 use ::image::metadata::Orientation;
 use exif::{Context, In, Rational, Tag, Value};
 
+use super::attitude::{self, Attitude};
 use super::decode::{Opened, ReadSeek};
+use super::level::{self, Level};
 use super::metadata_region::{MetadataRegion, Placed};
 use super::orient::Turn;
 use super::xmp::{self, Xmp};
@@ -139,6 +141,10 @@ pub struct Exif {
     /// The turn the EXIF orientation tag asks for, which the regions were
     /// marked out before. `None` where the file does not say.
     pub orientation: Option<Orientation>,
+    /// Which way the camera faced, where something on it read gravity: an
+    /// iPhone's accelerometer, a GoPro's gravity vector. `None` where the
+    /// file does not say.
+    pub attitude: Option<Attitude>,
     /// How the pixels are compressed, for a TIFF: its own directory says,
     /// and the info panel's `Image` section shows it. `None` for every other
     /// file — a raw's directory is about the preview in front of it, and
@@ -184,6 +190,19 @@ impl Exif {
             None => Xmp::read_from(path, opened.as_deref_mut()),
         };
         let mut exif = Self::assemble(block.as_ref(), &xmp);
+        // A GoPro keeps which way it faced outside the EXIF, in a segment
+        // of its own, and a CR3 keeps its maker note, and the level in it,
+        // in a box the block is not made from.
+        if exif.attitude.is_none()
+            && let Some(opened) = opened.as_deref_mut()
+            && let Ok(source) = opened.source()
+        {
+            exif.attitude = attitude::in_jpeg(source).or_else(|| {
+                let note = enclosed::cr3_maker_note(source)?;
+                let level = level::in_canon_tiff(&note)?;
+                Attitude::level(level, exif.orientation.unwrap_or(Orientation::NoTransforms))
+            });
+        }
         // A raw has a second reader of its header, the library that will
         // develop it. What it made of the camera and the exposure fills in
         // whatever the EXIF left out, a row at a time — all of it, for a
@@ -388,6 +407,8 @@ impl Exif {
                 position: None,
                 regions,
                 orientation: None,
+                attitude: level::dji(xmp)
+                    .and_then(|level| Attitude::level(level, Orientation::NoTransforms)),
                 compression: None,
             };
         };
@@ -419,6 +440,10 @@ impl Exif {
             position: position(exif),
             regions,
             orientation,
+            attitude: apple_attitude(exif).or_else(|| {
+                let level = level_of(exif).or_else(|| level::dji(xmp))?;
+                Attitude::level(level, orientation.unwrap_or(Orientation::NoTransforms))
+            }),
             compression: primary(exif, Tag::Compression)
                 .map(|field| display(exif, field))
                 .filter(|value| !value.is_empty()),
@@ -490,6 +515,34 @@ const DESCRIBED: [Described; 6] = [
         property: Some((xmp::DC, "rights")),
     },
 ];
+
+/// Which way an iPhone or an iPad faced, from the accelerometer's reading
+/// in its maker note; the front camera's picture is told apart by the lens
+/// it names.
+fn apple_attitude(exif: &exif::Exif) -> Option<Attitude> {
+    let Value::Undefined(note, _) = &primary(exif, Tag::MakerNote)?.value else {
+        return None;
+    };
+    let front = primary(exif, Tag::LensModel)
+        .map(|field| display(exif, field).to_lowercase())
+        .is_some_and(|lens| lens.contains("front"));
+    Attitude::apple(note, front)
+}
+
+/// A camera's electronic level, from its maker note.
+fn level_of(exif: &exif::Exif) -> Option<Level> {
+    let words = |tag: Tag| {
+        primary(exif, tag)
+            .map(|field| display(exif, field))
+            .unwrap_or_default()
+    };
+    level::in_block(
+        exif.buf(),
+        exif.little_endian(),
+        &words(Tag::Make),
+        &words(Tag::Model),
+    )
+}
 
 /// The XMP packet a TIFF keeps in its own directory, under tag 700, as the
 /// parser hands it over: a run of bytes, typed as bytes or as undefined

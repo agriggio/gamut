@@ -8,6 +8,16 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
 
 ### Added
 
+- An *Orientation* section in the information panel, for a picture whose
+  camera recorded which way it faced — an iPhone's or iPad's
+  accelerometer, a GoPro's gravity vector, the electronic level of a
+  Canon mirrorless, Panasonic, Pentax, Olympus or OM System camera, or a
+  DJI drone's gimbal. It draws the camera in three
+  dimensions as it was pitched and turned over a level floor, and says how
+  far the lens pointed up or down and how far the horizon runs from level
+  in the picture as shown. Resting the pointer on the section draws the
+  level line across the picture.
+
 - A camera raw with a color filter over its sensor can be shown as its
   mosaic: what the sensor counted, one value to a photosite, each in its
   filter's color and running from the black level to white, before the
@@ -208,6 +218,12 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
   setting. The shared scale cuts off a dominating spike instead. A
   `log_counts` line, or a `keys.interface.log-counts` line, in the
   configuration file is passed over.
+
+### Fixed
+
+- An iPhone's maker note holding an entry of a type TIFF does not define
+  is read rather than passed over whole, so such a file's gain map has the
+  headroom the note gives it.
 
 ## 0.11.0 - 2026-10-10
 

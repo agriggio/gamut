@@ -6,12 +6,11 @@
 //! picture — the headroom, the ratio of the brightest white to SDR white —
 //! is worked out from two numbers in the maker note, by the piecewise
 //! formula Apple gives in "Applying Apple HDR effect to your photos". The
-//! maker note is Apple's own directory inside the EXIF: `Apple iOS\0`,
-//! two bytes of version, the byte order, then a TIFF directory whose
-//! offsets count from the note's first byte. Tags 33 and 48 are the two,
-//! each a signed rational.
+//! maker note is Apple's own directory inside the EXIF, which
+//! [`apple_note`] reads; tags 33 and 48 are the two, each a signed
+//! rational.
 
-use crate::image::tiff::{self, Order};
+use crate::image::apple_note;
 
 /// The auxiliary type of the map.
 pub(super) const GAIN_MAP: &str = "urn:com:apple:photo:2020:aux:hdrgainmap";
@@ -55,31 +54,12 @@ fn maker_note(exif_item: &[u8]) -> Option<Vec<u8>> {
     }
 }
 
-/// One of the note's signed rationals, by tag. The directory is a TIFF's,
-/// read as one; only its header is Apple's.
+/// One of the note's signed rationals, by tag, where the entry holds one.
 fn tag(note: &[u8], wanted: u16) -> Option<f32> {
-    if !note.starts_with(b"Apple iOS\0") {
-        return None;
+    match apple_note::rationals(note, wanted)?.as_slice() {
+        [value] => Some(*value as f32),
+        _ => None,
     }
-    let order = match note.get(12..14)? {
-        b"MM" => Order::Big,
-        b"II" => Order::Little,
-        _ => return None,
-    };
-    const DIRECTORY: usize = 14;
-    const SRATIONAL: u16 = 10;
-    let entry = tiff::entries_at(note, order, DIRECTORY, &[])?
-        .into_iter()
-        .find(|entry| entry.tag == wanted)?;
-    if entry.kind != SRATIONAL || entry.count != 1 {
-        return None;
-    }
-    let numerator = order.read_u32(note, entry.offset)? as i32;
-    let denominator = order.read_u32(note, entry.offset + 4)? as i32;
-    if denominator == 0 {
-        return None;
-    }
-    Some(numerator as f32 / denominator as f32)
 }
 
 #[cfg(test)]
