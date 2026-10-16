@@ -461,31 +461,54 @@ impl<'a> Canvas<'a> {
         (self.screen)(point)
     }
 
-    /// The solid band under every line, so that it stands out from
-    /// whatever the picture is behind it; and the line's own stroke.
-    fn strokes(&self, ink: Color32) -> (Stroke, Stroke) {
-        (
-            Stroke::new(self.width + 2.0, UNDER),
-            Stroke::new(self.width, ink),
-        )
+    /// The stroke every line is drawn in, in `ink`.
+    fn stroke(&self, ink: Color32) -> Stroke {
+        Stroke::new(self.width, ink)
     }
 
-    /// A dashed line from `from` to `to`, on its band.
+    /// A dashed line from `from` to `to`.
     fn dashed(&self, ink: Color32, dash: f32, gap: f32, from: [f32; 2], to: [f32; 2]) {
         let ends = [self.screen(from), self.screen(to)];
-        let (under, ink) = self.strokes(ink);
-        self.painter.line_segment(ends, under);
         self.painter
-            .extend(egui::Shape::dashed_line(&ends, ink, dash, gap));
+            .extend(egui::Shape::dashed_line(&ends, self.stroke(ink), dash, gap));
     }
 
     /// A short square mark from `at` on a line running `cos, sin`, pointing
     /// to the side of it that is up.
     fn tick(&self, at: Pos2, [cos, sin]: [f32; 2], ink: Color32) {
         let up = vec2(sin, -cos) * 10.0;
-        let (under, ink) = self.strokes(ink);
-        self.painter.line_segment([at, at + up], under);
-        self.painter.line_segment([at, at + up], ink);
+        self.painter.line_segment([at, at + up], self.stroke(ink));
+    }
+
+    /// The painter cut to the picture on screen, for what is drawn as a
+    /// curve and so cannot be cut to it point by point.
+    fn clipped(&self) -> egui::Painter {
+        let corners = [self.screen([0.0, 0.0]), self.screen(self.size)];
+        let picture = egui::Rect::from_two_pos(corners[0], corners[1]);
+        self.painter
+            .with_clip_rect(picture.intersect(self.painter.clip_rect()))
+    }
+
+    /// Every way `elevation` degrees above level, seen on the picture: the
+    /// curve a cone of ways round the camera comes out as through a lens,
+    /// a degree round at a time, in runs broken where it goes behind the
+    /// lens.
+    fn level_curve(&self, current: &Current, shown: &Shown, elevation: f64) -> Vec<Vec<Pos2>> {
+        let size = self.size;
+        let picture = size.map(f64::from);
+        let focal = current.exif.focal_equivalent;
+        let mut runs: Vec<Vec<Pos2>> = vec![Vec::new()];
+        for degree in -CURVE_REACH..=CURVE_REACH {
+            match shown.toward(picture, focal, f64::from(degree), elevation) {
+                Some([x, y]) => runs
+                    .last_mut()
+                    .expect("never empty")
+                    .push(self.screen([size[0] / 2.0 + x as f32, size[1] / 2.0 + y as f32])),
+                None => runs.push(Vec::new()),
+            }
+        }
+        runs.retain(|run| run.len() > 1);
+        runs
     }
 }
 
@@ -546,19 +569,36 @@ pub(super) fn paint(
                 labels.push((canvas.screen(crossing), compass(bearing)));
             }
         }
+        // And the level curves, the same `step` apart above and below the
+        // horizon, which is the one at nothing.
+        let clipped = canvas.clipped();
+        let mut elevation = step;
+        while elevation < 90.0 {
+            for signed in [elevation, -elevation] {
+                for run in canvas.level_curve(current, shown, signed) {
+                    clipped.extend(egui::Shape::dashed_line(
+                        &run,
+                        canvas.stroke(level),
+                        LEVEL_DASH,
+                        LEVEL_GAP,
+                    ));
+                }
+            }
+            elevation += step;
+        }
         canvas.dashed(accent, DASH, GAP, from, to);
         let at = canvas.screen(foot);
         canvas.tick(at, [cos, sin], accent);
         painter.circle_filled(at, canvas.width * 1.5, accent);
         // Each bearing over the horizon where its upright crosses it,
-        // above the dashes, on the band's white.
+        // above the dashes, on a tag of its own.
         let font = egui::FontId::proportional(BEARING_SIZE);
         let up = vec2(sin, -cos);
         for (at, words) in labels {
             let galley = painter.layout_no_wrap(words, font.clone(), Color32::PLACEHOLDER);
             let middle = at + up * (BEARING_RISE + galley.size().y / 2.0);
             let rect = egui::Rect::from_center_size(middle, galley.size() + vec2(6.0, 2.0));
-            painter.rect_filled(rect, 3.0, UNDER);
+            painter.rect_filled(rect, 3.0, LABEL_GROUND);
             painter.galley(rect.center() - galley.size() / 2.0, galley, accent);
         }
         return;
@@ -578,11 +618,9 @@ pub(super) fn paint(
         let side = out.rot90() * CHEVRON;
         let tip = at - out * 2.0;
         let back = tip - out * CHEVRON;
-        let (under, ink) = canvas.strokes(accent);
-        for stroke in [under, ink] {
-            painter.line_segment([back + side, tip], stroke);
-            painter.line_segment([tip, back - side], stroke);
-        }
+        let stroke = canvas.stroke(accent);
+        painter.line_segment([back + side, tip], stroke);
+        painter.line_segment([tip, back - side], stroke);
     }
 }
 
@@ -656,29 +694,12 @@ pub(super) fn pointer(
     let Some(azimuth) = way.azimuth else {
         return;
     };
-    let corners = [canvas.screen([0.0, 0.0]), canvas.screen(size)];
-    let clip = egui::Rect::from_two_pos(corners[0], corners[1]).intersect(painter.clip_rect());
-    let painter = painter.with_clip_rect(clip);
-    let (under, ink) = canvas.strokes(canvas.accent);
+    let painter = canvas.clipped();
+    let ink = canvas.stroke(canvas.accent);
     if let Some(([from, to], _)) = upright(current, shown, azimuth) {
-        let ends = [canvas.screen(from), canvas.screen(to)];
-        painter.line_segment(ends, under);
-        painter.line_segment(ends, ink);
+        painter.line_segment([canvas.screen(from), canvas.screen(to)], ink);
     }
-    // The curve, a degree round at a time, broken where it goes behind
-    // the lens.
-    let mut runs: Vec<Vec<Pos2>> = vec![Vec::new()];
-    for degree in -CURVE_REACH..=CURVE_REACH {
-        match shown.toward(picture, focal, f64::from(degree), way.elevation) {
-            Some([x, y]) => runs
-                .last_mut()
-                .expect("never empty")
-                .push(canvas.screen([size[0] / 2.0 + x as f32, size[1] / 2.0 + y as f32])),
-            None => runs.push(Vec::new()),
-        }
-    }
-    for run in runs.into_iter().filter(|run| run.len() > 1) {
-        painter.add(egui::Shape::line(run.clone(), under));
+    for run in canvas.level_curve(current, shown, way.elevation) {
         painter.add(egui::Shape::line(run, ink));
     }
 }
@@ -706,8 +727,9 @@ impl Line {
     }
 }
 
-/// The band under the lines and the chevron drawn across the picture.
-const UNDER: Color32 = Color32::WHITE;
+/// The tag a bearing is written on over the horizon, so that it can be
+/// read whatever the picture is behind it.
+const LABEL_GROUND: Color32 = Color32::WHITE;
 
 /// The size a bearing is written at, and how far above the horizon.
 const BEARING_SIZE: f32 = 11.0;

@@ -924,7 +924,9 @@ picture whose camera recorded which way it faced — see the *Orientation*
 section in [METADATA.md](METADATA.md#orientation). It draws the true horizon
 across the picture, and upright lines a set number of degrees apart round the
 camera, each running toward the point where everything upright in the scene
-meets. Where the file records which way the lens pointed on the compass, the
+meets. Curves the same number of degrees apart above and below the horizon
+cross them, each through everything that far above or below eye level, so the
+grid reads as degrees both ways. Where the file records which way the lens pointed on the compass, the
 uprights fall on round bearings and each is labeled with its bearing over the
 horizon. While the pointer is on the picture, two solid lines go through it:
 the upright it stands on, and the curve of everything as far above or below

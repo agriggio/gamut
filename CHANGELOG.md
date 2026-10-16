@@ -23,7 +23,8 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
 - A *horizon grid*, `b` or the compass button after the pixel grid's, for a
   picture that records which way its camera faced and its focal length: the
   true horizon, and upright lines 5, 10, 15 or 30 degrees apart round the
-  camera (`B` steps through them), converging as the scene's uprights do and
+  camera (`B` steps through them), crossed by curves as far apart above and
+  below the horizon, converging as the scene's uprights do and
   labeled with their compass bearings where the file records a heading. The
   upright and the level curve through the pointer follow it, and the
   pointer's readout gains a *Direction* coordinate — bearing and elevation —

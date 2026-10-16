@@ -1407,9 +1407,11 @@ through where its way crosses the horizon; the half beyond that point is the
 way behind the camera and is cut off. The uprights are spaced in degrees
 round, `Panels::horizon_step` apart, and fall on round bearings where the
 GPS directory gives the lens's heading. A level circle — every way at one
-elevation — is a cone, which a rectilinear lens shows as a conic: the curve
-through the pointer is sampled a degree of azimuth at a time rather than
-drawn as a line. The readout follows the toggle in and out only from and to
+elevation — is a cone, which a rectilinear lens shows as a conic: the grid's
+level curves, the same step apart above and below the horizon, and the curve
+through the pointer are sampled a degree of azimuth at a time
+(`Canvas::level_curve`) and drawn on a painter cut to the picture, rather
+than as lines. The readout follows the toggle in and out only from and to
 the pixel's own coordinate, so a reading chosen by hand is never taken away.
 
 The panel is also the one part of the interface that is read out rather than
