@@ -466,18 +466,48 @@ impl<'a> Canvas<'a> {
         Stroke::new(self.width, ink)
     }
 
-    /// A dashed line from `from` to `to`.
+    /// The white just wider than the stroke drawn under a line, so that
+    /// it is seen on whatever the picture is behind it.
+    fn halo(&self) -> Stroke {
+        Stroke::new(self.width + HALO, HALO_INK)
+    }
+
+    /// A dashed line from `from` to `to`, each dash on its own halo.
     fn dashed(&self, ink: Color32, dash: f32, gap: f32, from: [f32; 2], to: [f32; 2]) {
-        let ends = [self.screen(from), self.screen(to)];
-        self.painter
-            .extend(egui::Shape::dashed_line(&ends, self.stroke(ink), dash, gap));
+        self.dashed_along(
+            self.painter,
+            &[self.screen(from), self.screen(to)],
+            ink,
+            dash,
+            gap,
+        );
+    }
+
+    /// A dashed line along `path` on screen with `painter`, each dash on its
+    /// own halo, the gaps left clear.
+    fn dashed_along(
+        &self,
+        painter: &egui::Painter,
+        path: &[Pos2],
+        ink: Color32,
+        dash: f32,
+        gap: f32,
+    ) {
+        painter.extend(egui::Shape::dashed_line(path, self.halo(), dash, gap));
+        painter.extend(egui::Shape::dashed_line(path, self.stroke(ink), dash, gap));
+    }
+
+    /// A solid line along `path` on screen with `painter`, on its halo.
+    fn solid(&self, painter: &egui::Painter, path: Vec<Pos2>, ink: Color32) {
+        painter.add(egui::Shape::line(path.clone(), self.halo()));
+        painter.add(egui::Shape::line(path, self.stroke(ink)));
     }
 
     /// A short square mark from `at` on a line running `cos, sin`, pointing
     /// to the side of it that is up.
     fn tick(&self, at: Pos2, [cos, sin]: [f32; 2], ink: Color32) {
         let up = vec2(sin, -cos) * 10.0;
-        self.painter.line_segment([at, at + up], self.stroke(ink));
+        self.solid(self.painter, vec![at, at + up], ink);
     }
 
     /// The painter cut to the picture on screen, for what is drawn as a
@@ -576,17 +606,21 @@ pub(super) fn paint(
         while elevation < 90.0 {
             for signed in [elevation, -elevation] {
                 for run in canvas.level_curve(current, shown, signed) {
-                    clipped.extend(egui::Shape::dashed_line(
-                        &run,
-                        canvas.stroke(level),
-                        LEVEL_DASH,
-                        LEVEL_GAP,
-                    ));
+                    canvas.dashed_along(&clipped, &run, level, LEVEL_DASH, LEVEL_GAP);
                 }
             }
             elevation += step;
         }
-        canvas.dashed(accent, DASH, GAP, from, to);
+        // The horizon on a halo the whole way along, the gaps too: the
+        // one line the grid is read from.
+        let ends = [canvas.screen(from), canvas.screen(to)];
+        painter.line_segment(ends, canvas.halo());
+        painter.extend(egui::Shape::dashed_line(
+            &ends,
+            canvas.stroke(accent),
+            DASH,
+            GAP,
+        ));
         let at = canvas.screen(foot);
         canvas.tick(at, [cos, sin], accent);
         painter.circle_filled(at, canvas.width * 1.5, accent);
@@ -618,9 +652,7 @@ pub(super) fn paint(
         let side = out.rot90() * CHEVRON;
         let tip = at - out * 2.0;
         let back = tip - out * CHEVRON;
-        let stroke = canvas.stroke(accent);
-        painter.line_segment([back + side, tip], stroke);
-        painter.line_segment([tip, back - side], stroke);
+        canvas.solid(painter, vec![back + side, tip, back - side], accent);
     }
 }
 
@@ -695,12 +727,16 @@ pub(super) fn pointer(
         return;
     };
     let painter = canvas.clipped();
-    let ink = canvas.stroke(canvas.accent);
+    let accent = canvas.accent;
     if let Some(([from, to], _)) = upright(current, shown, azimuth) {
-        painter.line_segment([canvas.screen(from), canvas.screen(to)], ink);
+        canvas.solid(
+            &painter,
+            vec![canvas.screen(from), canvas.screen(to)],
+            accent,
+        );
     }
     for run in canvas.level_curve(current, shown, way.elevation) {
-        painter.add(egui::Shape::line(run, ink));
+        canvas.solid(&painter, run, accent);
     }
 }
 
@@ -726,6 +762,11 @@ impl Line {
         }
     }
 }
+
+/// How much wider than its stroke the white under a line is: a hair
+/// either side, enough to part it from the picture without boxing it in.
+const HALO: f32 = 1.0;
+const HALO_INK: Color32 = Color32::WHITE;
 
 /// The tag a bearing is written on over the horizon, so that it can be
 /// read whatever the picture is behind it.

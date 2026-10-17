@@ -3149,9 +3149,10 @@ fn the_horizon_grid_follows_the_pointer() {
     };
     let without = curves(&mut harness);
     harness.state_mut().input.pointer = Some([2, 1]);
-    assert!(curves(&mut harness) > without);
+    let with = curves(&mut harness);
+    assert!(with > without);
     harness.state_mut().panels.horizon_grid = false;
-    assert_eq!(curves(&mut harness), without);
+    assert!(curves(&mut harness) < without);
 }
 
 /// The pointer's readout in the ways the pixels look: the bearing where the
