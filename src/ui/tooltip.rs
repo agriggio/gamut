@@ -191,7 +191,7 @@ pub const NO_GAIN_MAP: &str = "This image has no gain map.";
 /// keeps its mosaic, which is as seldom heard as [`NO_DEPTH_MAP`] for the
 /// same reason.
 pub const NO_MOSAIC: &str = "This image has no raw mosaic.";
-pub const NO_ORIENTATION: &str = "This image does not record which way the camera faced.";
+pub const NO_ORIENTATION: &str = "Image orientation data not available";
 
 /// What the gain map's toggle says under its name on a raw whose profile
 /// says how it should look: where the map it shows comes from, there being

@@ -201,7 +201,7 @@ pub fn describe_coordinates(format: CoordinateFormat) -> &'static str {
         CoordinateFormat::Pixel => "Column and row of the pixel",
         CoordinateFormat::Projected => "Coordinates in the file's own system",
         CoordinateFormat::Geographic => "Latitude and longitude on WGS 84",
-        CoordinateFormat::Direction => "Bearing and elevation the pixel looks along",
+        CoordinateFormat::Direction => "Azimuth and elevation toward the pixel",
     }
 }
 

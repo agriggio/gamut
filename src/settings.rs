@@ -513,7 +513,7 @@ const KEPT: [Kept; 11] = [
     },
     Kept {
         name: "coordinate_format",
-        get: |state| state.coordinate_format.label().to_ascii_lowercase(),
+        get: |state| state.coordinate_format.word().to_string(),
         set: |state, value| {
             if let Some(format) = CoordinateFormat::parse(value) {
                 state.coordinate_format = format;

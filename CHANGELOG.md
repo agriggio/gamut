@@ -28,7 +28,7 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
   below the horizon, converging as the scene's uprights do and
   labeled with their compass bearings where the file records a heading. The
   upright and the level curve through the pointer follow it, and the
-  pointer's readout gains a *Direction* coordinate — bearing and elevation —
+  pointer's readout gains an *Azimuth/Elevation* coordinate — bearing and elevation —
   which the grid turns on. Resting on the information panel's *Orientation*
   section previews it. A file that does not give its focal length as a
   35 mm equivalent, as a Canon's does not, has it worked out from the

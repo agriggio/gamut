@@ -989,7 +989,7 @@ pub static ROWS: &[Row] = &[
     Row {
         section: Section::Interface,
         when: Some(When::Orientation),
-        help: "Cycle the horizon grid's spacing: 5, 10, 15, 30 degrees",
+        help: "Cycle the horizon grid's spacing: 5°, 10°, 15°, 30°",
         keys: one!("interface.horizon-step", CycleHorizonStep, [key('B')]),
     },
     Row {

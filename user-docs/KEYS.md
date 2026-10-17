@@ -831,7 +831,7 @@ where all of it is set.
 | `m` | Show or hide the minimap | `interface.minimap` |
 | `g` | Show or hide the grid over the image | `interface.grid` |
 | `b` | Show or hide the horizon grid, for a picture that records which way the camera faced | `interface.horizon-grid` |
-| `B` | Cycle the horizon grid's spacing: 5, 10, 15 or 30 degrees | `interface.horizon-step` |
+| `B` | Cycle the horizon grid's spacing: 5°, 10°, 15° or 30° | `interface.horizon-step` |
 | `l` | Show or hide the loupe | `interface.loupe` |
 | `Shift+L` | Cycle the loupe's magnification: 2, 4, 8 or 16 times | `interface.loupe-magnification` |
 | `Ctrl+=`, `Ctrl++` | Increase interface scale; the picture is not affected | `interface.scale.up` |

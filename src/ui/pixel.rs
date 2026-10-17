@@ -172,16 +172,26 @@ impl CoordinateFormat {
             CoordinateFormat::Pixel => "Pixel",
             CoordinateFormat::Projected => "Projected",
             CoordinateFormat::Geographic => "Geographic",
-            CoordinateFormat::Direction => "Direction",
+            CoordinateFormat::Direction => "Azimuth/Elevation",
         }
     }
 
-    /// The format a word names, as the configuration file writes it: the
-    /// label, in any case.
+    /// The word the state file writes the format as: a single one, which
+    /// the label of the direction is not.
+    pub fn word(self) -> &'static str {
+        match self {
+            CoordinateFormat::Pixel => "pixel",
+            CoordinateFormat::Projected => "projected",
+            CoordinateFormat::Geographic => "geographic",
+            CoordinateFormat::Direction => "direction",
+        }
+    }
+
+    /// The format a word names, as the state file writes it, in any case.
     pub fn parse(value: &str) -> Option<Self> {
         Self::ALL
             .into_iter()
-            .find(|format| format.label().eq_ignore_ascii_case(value))
+            .find(|format| format.word().eq_ignore_ascii_case(value))
     }
 
     /// Whether the file whose `answers` these are can answer this format.
