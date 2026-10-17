@@ -19,6 +19,7 @@ use crate::render::Color;
 use super::Current;
 use super::chrome::Pass;
 use super::icon;
+use super::{loupe, minimap};
 use crate::theme::Theme;
 
 /// The diagram's height in the column.
@@ -431,29 +432,89 @@ fn foot(current: &Current, shown: &Shown) -> Option<[f32; 2]> {
     Some([size[0] / 2.0 + x as f32, size[1] / 2.0 + y as f32])
 }
 
-/// Where the picture is on screen, and the strokes drawn over it.
+/// What the horizon grid leaves clear inside the content area: the
+/// loupe's glass and the minimap's thumbnail, which the image layer draws
+/// under the whole interface, as the pixel grid does.
+#[derive(Clone, Copy)]
+enum Hole {
+    Glass(Pos2, f32),
+    Thumbnail(egui::Rect),
+}
+
+impl Hole {
+    /// How far along the segment from `from` by `along` the hole covers,
+    /// as shares of it: `None` where it misses it.
+    fn covers(self, from: Pos2, along: egui::Vec2) -> Option<(f32, f32)> {
+        match self {
+            Hole::Glass(center, radius) => {
+                let offset = from - center;
+                let a = along.length_sq();
+                let b = offset.dot(along);
+                let c = offset.length_sq() - radius * radius;
+                let root = (b * b - a * c).sqrt();
+                (root.is_finite() && root > 0.0).then(|| ((-b - root) / a, (-b + root) / a))
+            }
+            Hole::Thumbnail(rect) => {
+                let start = from - rect.min;
+                span([start.x, start.y], [along.x, along.y], rect.size().into())
+            }
+        }
+    }
+
+    /// Whether the hole reaches into `rect`.
+    fn touches(self, rect: egui::Rect) -> bool {
+        match self {
+            Hole::Glass(center, radius) => rect.distance_sq_to_pos(center) < radius * radius,
+            Hole::Thumbnail(thumbnail) => thumbnail.intersects(rect),
+        }
+    }
+}
+
+/// Where the picture is on screen, and the strokes drawn over it: with a
+/// painter cut to the content area, so that a picture zoomed past it does
+/// not carry the grid over the bars, and the holes the strokes are broken
+/// around.
 struct Canvas<'a> {
-    painter: &'a egui::Painter,
+    painter: egui::Painter,
     screen: Box<dyn Fn([f32; 2]) -> Pos2 + 'a>,
     size: [f32; 2],
     accent: Color32,
     width: f32,
+    holes: Vec<Hole>,
 }
 
 impl<'a> Canvas<'a> {
-    fn new(pass: &'a Pass, painter: &'a egui::Painter, current: &Current) -> Self {
+    fn new(pass: &'a Pass, painter: &egui::Painter, current: &Current) -> Self {
         let size = current.size();
         let placement = pass.view.placement(size, pass.input.viewport);
         let scale = pass.input.scale;
+        let content = egui::Rect::from(pass.content);
+        let width = pass.grid.line_width(HORIZON_LINE);
+        // Each hole a halo's half-width wider, so that no stroke's edge
+        // reaches into it.
+        let margin = (width + HALO) / 2.0;
+        let glass = pass.input.loupe.map(|loupe| {
+            Hole::Glass(
+                pos2(loupe.glass[0], loupe.glass[1]),
+                loupe::GLASS_RADIUS + margin,
+            )
+        });
+        let thumbnail = pass
+            .input
+            .minimap_on_screen
+            .then(|| minimap::thumbnail(pass.content, size))
+            .flatten()
+            .map(|rect| Hole::Thumbnail(egui::Rect::from(rect).expand(margin)));
         Canvas {
-            painter,
+            painter: painter.with_clip_rect(content.intersect(painter.clip_rect())),
             screen: Box::new(move |[x, y]| {
                 let [x, y] = placement.screen_point([x, y]);
                 pos2(x / scale, y / scale)
             }),
             size,
             accent: pass.theme.accent.into(),
-            width: pass.grid.line_width(HORIZON_LINE),
+            width,
+            holes: glass.into_iter().chain(thumbnail).collect(),
         }
     }
 
@@ -475,7 +536,7 @@ impl<'a> Canvas<'a> {
     /// A dashed line from `from` to `to`, each dash on its own halo.
     fn dashed(&self, ink: Color32, dash: f32, gap: f32, from: [f32; 2], to: [f32; 2]) {
         self.dashed_along(
-            self.painter,
+            &self.painter,
             &[self.screen(from), self.screen(to)],
             ink,
             dash,
@@ -497,11 +558,49 @@ impl<'a> Canvas<'a> {
         painter.extend(self.dashes(painter, path, self.stroke(ink), dash, gap));
     }
 
+    /// The strokes along `path` on screen in `stroke` that `painter` can
+    /// show, dashed `dash` and `gap` long where those are given: only the
+    /// stretches inside its clip and out of the holes are drawn, since a
+    /// curve running far off the picture would otherwise be millions of
+    /// dashes, each stretch begun where its dash began, so that the dashes
+    /// keep their places along the path however much of it is in view.
+    fn strokes(
+        &self,
+        painter: &egui::Painter,
+        path: &[Pos2],
+        stroke: Stroke,
+        dashes: Option<(f32, f32)>,
+    ) -> Vec<egui::Shape> {
+        let rect = painter.clip_rect().expand(stroke.width);
+        let Some((dash, gap)) = dashes else {
+            return visible(path, rect, &self.holes, None)
+                .into_iter()
+                .map(|run| egui::Shape::line(run, stroke))
+                .collect();
+        };
+        // Dashed first and the dashes cut round the holes after: a stretch
+        // begun back where its dash began would otherwise begin inside the
+        // hole it came out of.
+        let mut dashed = Vec::new();
+        for run in visible(path, rect, &[], Some(dash + gap)) {
+            egui::Shape::dashed_line_many(&run, stroke, dash, gap, &mut dashed);
+        }
+        if self.holes.is_empty() {
+            return dashed;
+        }
+        let mut shapes = Vec::new();
+        for shape in dashed {
+            if let egui::Shape::LineSegment { points, stroke } = shape {
+                for piece in visible(&points, rect, &self.holes, None) {
+                    shapes.push(egui::Shape::line_segment([piece[0], piece[1]], stroke));
+                }
+            }
+        }
+        shapes
+    }
+
     /// The dashes along `path` on screen in `stroke` that `painter` can
-    /// show: only the stretches inside its clip are dashed, since a curve
-    /// running far off the picture would otherwise be millions of them,
-    /// each stretch begun where its dash began, so that the dashes keep
-    /// their places along the path however much of it is in view.
+    /// show; see [`Canvas::strokes`].
     fn dashes(
         &self,
         painter: &egui::Painter,
@@ -510,25 +609,26 @@ impl<'a> Canvas<'a> {
         dash: f32,
         gap: f32,
     ) -> Vec<egui::Shape> {
-        let rect = painter.clip_rect().expand(stroke.width);
-        let mut shapes = Vec::new();
-        for run in visible(path, rect, dash + gap) {
-            egui::Shape::dashed_line_many(&run, stroke, dash, gap, &mut shapes);
-        }
-        shapes
+        self.strokes(painter, path, stroke, Some((dash, gap)))
     }
 
     /// A solid line along `path` on screen with `painter`, on its halo.
     fn solid(&self, painter: &egui::Painter, path: Vec<Pos2>, ink: Color32) {
-        painter.add(egui::Shape::line(path.clone(), self.halo()));
-        painter.add(egui::Shape::line(path, self.stroke(ink)));
+        painter.extend(self.strokes(painter, &path, self.halo(), None));
+        painter.extend(self.strokes(painter, &path, self.stroke(ink), None));
     }
 
     /// A short square mark from `at` on a line running `cos, sin`, pointing
     /// to the side of it that is up.
     fn tick(&self, at: Pos2, [cos, sin]: [f32; 2], ink: Color32) {
         let up = vec2(sin, -cos) * 10.0;
-        self.solid(self.painter, vec![at, at + up], ink);
+        self.solid(&self.painter, vec![at, at + up], ink);
+    }
+
+    /// Whether any hole reaches into `rect`, for what is drawn whole or
+    /// not at all.
+    fn in_hole(&self, rect: egui::Rect) -> bool {
+        self.holes.iter().any(|hole| hole.touches(rect))
     }
 
     /// The painter cut to the picture on screen, for what is drawn as a
@@ -634,12 +734,16 @@ pub(super) fn paint(
         }
         // The horizon on a halo the whole way along, the gaps too: the
         // one line the grid is read from.
+        let painter = &canvas.painter;
         let ends = [canvas.screen(from), canvas.screen(to)];
-        painter.line_segment(ends, canvas.halo());
+        painter.extend(canvas.strokes(painter, &ends, canvas.halo(), None));
         painter.extend(canvas.dashes(painter, &ends, canvas.stroke(accent), DASH, GAP));
         let at = canvas.screen(foot);
         canvas.tick(at, [cos, sin], accent);
-        painter.circle_filled(at, canvas.width * 1.5, accent);
+        let dot = canvas.width * 1.5;
+        if !canvas.in_hole(egui::Rect::from_center_size(at, vec2(dot, dot) * 2.0)) {
+            painter.circle_filled(at, dot, accent);
+        }
         // Each bearing over the horizon where its upright crosses it,
         // above the dashes, on a tag of its own.
         let font = egui::FontId::proportional(BEARING_SIZE);
@@ -648,6 +752,9 @@ pub(super) fn paint(
             let galley = painter.layout_no_wrap(words, font.clone(), Color32::PLACEHOLDER);
             let middle = at + up * (BEARING_RISE + galley.size().y / 2.0);
             let rect = egui::Rect::from_center_size(middle, galley.size() + vec2(6.0, 2.0));
+            if canvas.in_hole(rect) {
+                continue;
+            }
             painter.rect_filled(rect, 3.0, LABEL_GROUND);
             painter.galley(rect.center() - galley.size() / 2.0, galley, accent);
         }
@@ -668,7 +775,7 @@ pub(super) fn paint(
         let side = out.rot90() * CHEVRON;
         let tip = at - out * 2.0;
         let back = tip - out * CHEVRON;
-        canvas.solid(painter, vec![back + side, tip, back - side], accent);
+        canvas.solid(&canvas.painter, vec![back + side, tip, back - side], accent);
     }
 }
 
@@ -835,10 +942,12 @@ fn span(point: [f32; 2], direction: [f32; 2], size: [f32; 2]) -> Option<(f32, f3
     (enter < leave).then_some((enter, leave))
 }
 
-/// The stretches of `path` inside `rect`, each begun as far back along
-/// its first segment as the dash it enters in began, `period` being a dash
-/// and a gap: where the path runs out of `rect` and back, a stretch apiece.
-fn visible(path: &[Pos2], rect: egui::Rect, period: f32) -> Vec<Vec<Pos2>> {
+/// The stretches of `path` inside `rect` and out of the `holes`: where the
+/// path runs out of `rect` or into a hole and back, a stretch apiece. With
+/// a `period`, a dash and a gap, each stretch is begun as far back along
+/// its first segment as the dash it enters in began — which, out of a hole,
+/// is back inside it, so a path to be dashed is cut to `rect` alone.
+fn visible(path: &[Pos2], rect: egui::Rect, holes: &[Hole], period: Option<f32>) -> Vec<Vec<Pos2>> {
     let mut runs = Vec::new();
     let mut run: Option<Vec<Pos2>> = None;
     let mut travelled = 0.0;
@@ -850,26 +959,41 @@ fn visible(path: &[Pos2], rect: egui::Rect, period: f32) -> Vec<Vec<Pos2>> {
             continue;
         }
         let start = from - rect.min;
-        let cut = span([start.x, start.y], [along.x, along.y], rect.size().into())
-            .map(|(enter, leave)| (enter.max(0.0), leave.min(1.0)))
-            .filter(|(enter, leave)| enter < leave);
-        match cut {
-            Some((enter, leave)) => {
-                let end = from + along * leave;
-                match &mut run {
-                    Some(points) if enter == 0.0 => points.push(end),
-                    _ => {
-                        runs.extend(run.take());
-                        let back = (travelled + length * enter).rem_euclid(period);
-                        let begin = from + along * enter - along / length * back;
-                        run = Some(vec![begin, end]);
-                    }
-                }
-                if leave < 1.0 {
+        let mut shown: Vec<(f32, f32)> =
+            span([start.x, start.y], [along.x, along.y], rect.size().into())
+                .map(|(enter, leave)| (enter.max(0.0), leave.min(1.0)))
+                .into_iter()
+                .collect();
+        for hole in holes {
+            if let Some((into, out)) = hole.covers(from, along) {
+                shown = shown
+                    .into_iter()
+                    .flat_map(|(enter, leave)| [(enter, leave.min(into)), (enter.max(out), leave)])
+                    .collect();
+            }
+            shown.retain(|(enter, leave)| enter < leave);
+        }
+        shown.retain(|(enter, leave)| enter < leave);
+        shown.sort_by(|a, b| a.0.total_cmp(&b.0));
+        if shown.first().is_none_or(|&(enter, _)| enter > 0.0) {
+            runs.extend(run.take());
+        }
+        for (enter, leave) in shown {
+            let end = from + along * leave;
+            match &mut run {
+                Some(points) if enter == 0.0 => points.push(end),
+                _ => {
                     runs.extend(run.take());
+                    let back = period.map_or(0.0, |period| {
+                        (travelled + length * enter).rem_euclid(period)
+                    });
+                    let begin = from + along * enter - along / length * back;
+                    run = Some(vec![begin, end]);
                 }
             }
-            None => runs.extend(run.take()),
+            if leave < 1.0 {
+                runs.extend(run.take());
+            }
         }
         travelled += length;
     }
@@ -919,7 +1043,7 @@ mod tests {
             pos2(50.0, 1.0e6),
             pos2(50.0, 1.0e6 + 7.0),
         ];
-        let runs = visible(&path, rect, 6.0);
+        let runs = visible(&path, rect, &[], Some(6.0));
         assert_eq!(runs.len(), 1);
         let run = &runs[0];
         assert_eq!(run.len(), 3);
@@ -928,7 +1052,42 @@ mod tests {
         assert!((run[0].x + 4.0).abs() < 0.1 && run[0].y == 50.0);
         assert_eq!(run[1], pos2(50.0, 50.0));
         assert_eq!(run[2], pos2(50.0, 100.0));
-        assert!(visible(&[pos2(-10.0, -10.0), pos2(-10.0, 200.0)], rect, 6.0).is_empty());
+        assert!(
+            visible(
+                &[pos2(-10.0, -10.0), pos2(-10.0, 200.0)],
+                rect,
+                &[],
+                Some(6.0)
+            )
+            .is_empty()
+        );
+    }
+
+    /// A line across the loupe's glass and the minimap's thumbnail is
+    /// broken around both, and what lies wholly inside one is not drawn.
+    #[test]
+    fn the_glass_and_the_thumbnail_are_left_clear() {
+        let rect = egui::Rect::from_min_max(pos2(0.0, 0.0), pos2(400.0, 100.0));
+        let holes = [
+            Hole::Glass(pos2(100.0, 50.0), 20.0),
+            Hole::Thumbnail(egui::Rect::from_min_max(
+                pos2(250.0, 0.0),
+                pos2(300.0, 100.0),
+            )),
+        ];
+        let path = [pos2(0.0, 50.0), pos2(400.0, 50.0)];
+        let runs = visible(&path, rect, &holes, None);
+        let ends: Vec<[f32; 2]> = runs
+            .iter()
+            .map(|run| [run[0].x, run[run.len() - 1].x])
+            .collect();
+        let expected = [[0.0, 80.0], [120.0, 250.0], [300.0, 400.0]];
+        assert_eq!(ends.len(), expected.len());
+        for (got, want) in ends.iter().flatten().zip(expected.iter().flatten()) {
+            assert!((got - want).abs() < 1e-3, "{ends:?}");
+        }
+        let inside = [pos2(95.0, 50.0), pos2(105.0, 50.0)];
+        assert!(visible(&inside, rect, &holes, None).is_empty());
     }
 
     /// The edge is reached along the way to a horizon off the picture.

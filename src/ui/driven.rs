@@ -3155,6 +3155,63 @@ fn the_horizon_grid_follows_the_pointer() {
     assert!(curves(&mut harness) < without);
 }
 
+/// Zoomed in until the picture runs past the content area, the horizon
+/// grid keeps to the content area rather than crossing the bars, and
+/// leaves the loupe's glass clear for what the glass shows.
+#[test]
+fn the_horizon_grid_keeps_off_the_bars_and_the_glass() {
+    let mut on = panels();
+    on.horizon_grid = true;
+    let mut harness = build(WINDOW, 1, on);
+    let content = egui::Rect::from(chrome::content_area(WINDOW, true, chrome::Parts::NONE));
+    let glass = content.center();
+    let state = harness.state_mut();
+    let current = pitched();
+    let viewport = state.input.viewport;
+    state
+        .view
+        .set_zoom_at(400.0, [500.0, 350.0], current.size(), viewport);
+    state.current = Some(current);
+    state.input.loupe = Some(super::loupe::Loupe {
+        eye: [glass.x - 150.0, glass.y + 150.0],
+        glass: [glass.x, glass.y],
+        magnification: 2.0,
+    });
+    harness.run();
+    harness.run();
+    // The grid's strokes are the ones laid on a white halo.
+    let mut halos = 0;
+    for clipped in &harness.output().shapes {
+        let points = match &clipped.shape {
+            egui::Shape::LineSegment { points, stroke } if stroke.color == egui::Color32::WHITE => {
+                points.to_vec()
+            }
+            egui::Shape::Path(path)
+                if !path.closed
+                    && path.stroke.color
+                        == egui::epaint::ColorMode::Solid(egui::Color32::WHITE) =>
+            {
+                path.points.clone()
+            }
+            _ => continue,
+        };
+        halos += 1;
+        assert!(
+            content.expand(0.5).contains_rect(clipped.clip_rect),
+            "{:?} reaches past {content:?}",
+            clipped.clip_rect
+        );
+        let midpoints = points.windows(2).map(|pair| pair[0].lerp(pair[1], 0.5));
+        for point in points.iter().copied().chain(midpoints) {
+            assert!(
+                point.distance(glass) > super::loupe::GLASS_RADIUS - 0.5,
+                "{point:?} is inside the glass"
+            );
+        }
+    }
+    assert!(halos > 0, "the grid was drawn");
+}
+
 /// The pointer's readout in the ways the pixels look: the bearing where the
 /// file says which way the lens pointed, and how far round from that where
 /// it does not, then the elevation — padded in the bar, bare in a copy.
