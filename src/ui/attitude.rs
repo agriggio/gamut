@@ -155,17 +155,27 @@ pub(super) fn diagram(
         [aspect, 1.0]
     };
     let short = half[0].min(half[1]);
-    let mut faces = cuboid([0.0, 0.0, 0.0], [half[0], half[1], BODY_DEPTH / 2.0]);
-    // The button on top says which way is up: the camera's top is its -y.
-    faces.extend(cuboid(
-        [BUTTON_ALONG * half[0], -half[1] - BUTTON[1] / 2.0, 0.0],
-        [BUTTON[0] / 2.0 * short, BUTTON[1] / 2.0, BUTTON[2] / 2.0],
-    ));
-    faces.extend(cylinder(
-        BODY_DEPTH / 2.0,
-        BODY_DEPTH / 2.0 + LENS_LENGTH * short,
-        LENS_RADIUS * short,
-    ));
+    let body = cuboid([0.0, 0.0, 0.0], [half[0], half[1], BODY_DEPTH / 2.0]);
+    // The parts that stand on the body, each with the way the face it
+    // stands on looks out. The button on top says which way is up: the
+    // camera's top is its -y.
+    let parts = [
+        (
+            [0.0, -1.0, 0.0],
+            cuboid(
+                [BUTTON_ALONG * half[0], -half[1] - BUTTON[1] / 2.0, 0.0],
+                [BUTTON[0] / 2.0 * short, BUTTON[1] / 2.0, BUTTON[2] / 2.0],
+            ),
+        ),
+        (
+            [0.0, 0.0, 1.0],
+            cylinder(
+                BODY_DEPTH / 2.0,
+                BODY_DEPTH / 2.0 + LENS_LENGTH * short,
+                LENS_RADIUS * short,
+            ),
+        ),
+    ];
     let world = |point: Point| carry(axes, point);
     // The screen's corners clockwise from its top left as the eye behind
     // the camera sees them: the picture's left is the camera's -x and its
@@ -181,32 +191,52 @@ pub(super) fn diagram(
 
     let accent: Color32 = theme.accent.into();
     let edge = Stroke::new(grid.line_width(EDGE), accent);
-    let mut drawn: Vec<(f32, Vec<Pos2>, Color32, bool)> = faces
-        .iter()
-        .filter_map(|face| {
-            let corners: Vec<Point> = face.corners.iter().map(|&point| world(point)).collect();
+    // Facing away from the eye, which looks along +z, or so nearly edge-on
+    // that it is a sliver, whose sharp corners would be stroked as spikes.
+    let facing = |outward: Point| view(world(outward))[2] < -EDGE_ON;
+    let depth = |faces: &[Face]| {
+        let corners = faces.iter().flat_map(|face| &face.corners);
+        corners
+            .clone()
+            .map(|&point| eye(world(point))[2])
+            .sum::<f32>()
+            / corners.count() as f32
+    };
+    // Each solid is convex, so of its own faces only those facing the eye
+    // are drawn and none of them covers another. Between solids, a part
+    // stands on the far side of its face's plane from the body, so it is
+    // in front of the body where that face is toward the eye and behind it
+    // where the face is away: ordering by where the faces' middles are
+    // would draw a small part over the body it is hidden by.
+    let (mut front, mut behind): (Vec<_>, Vec<_>) =
+        parts.iter().partition(|(stands_on, _)| facing(*stands_on));
+    behind.sort_by(|a, b| depth(&b.1).total_cmp(&depth(&a.1)));
+    front.sort_by(|a, b| depth(&b.1).total_cmp(&depth(&a.1)));
+    let solids = behind
+        .into_iter()
+        .map(|(_, faces)| (faces, false))
+        .chain(std::iter::once((&body, true)))
+        .chain(front.into_iter().map(|(_, faces)| (faces, false)));
+    let drawn: Vec<(Vec<Pos2>, Color32, bool)> = solids
+        .flat_map(|(faces, is_body)| faces.iter().map(move |face| (face, is_body)))
+        .filter(|(face, _)| facing(face.outward))
+        .map(|(face, is_body)| {
             let normal = world(face.outward);
-            let seen = view(normal);
-            // Facing away from the eye, which looks along +z, or so nearly
-            // edge-on that it is a sliver, whose sharp corners would be
-            // stroked as spikes.
-            if seen[2] >= -EDGE_ON {
-                return None;
-            }
-            let depth =
-                corners.iter().map(|&point| eye(point)[2]).sum::<f32>() / corners.len() as f32;
             let light = dot(normal, LIGHT).max(0.0);
             let fill = mix(theme.bar_background, theme.accent, 0.12 + 0.5 * light);
-            let mut points: Vec<Pos2> = corners.into_iter().map(screen).collect();
+            let mut points: Vec<Pos2> = face
+                .corners
+                .iter()
+                .map(|&point| screen(world(point)))
+                .collect();
             // Clockwise on screen, which is the way round the painter
             // feathers a polygon's edge outward.
             if signed_area(&points) < 0.0 {
                 points.reverse();
             }
-            Some((depth, points, fill, face.outward == BACK))
+            (points, fill, is_body && face.outward == BACK)
         })
         .collect();
-    drawn.sort_by(|a, b| b.0.total_cmp(&a.0));
     // The line the lens looks along, behind the camera where it is behind
     // it and in front where it is in front: drawn first, and the solids
     // over it.
@@ -216,7 +246,7 @@ pub(super) fn diagram(
         screen(world([0.0, 0.0, lens_front + SIGHT])),
     ];
     painter.extend(egui::Shape::dashed_line(&sight, edge, DASH, GAP));
-    for (_, points, fill, back) in drawn {
+    for (points, fill, back) in drawn {
         // The back wears a screen, which says which side of the box the
         // eye is looking at.
         let screen = back.then(|| {
