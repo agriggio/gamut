@@ -773,6 +773,8 @@ impl App {
                 mark_clipped: false,
                 show_minimap: config.show_minimap,
                 show_grid: false,
+                horizon_grid: false,
+                horizon_step: kept_state.horizon_step,
                 show_loupe: false,
                 loupe_magnification: kept_state.loupe_magnification,
                 pixel_format: kept_state.pixel_format,
@@ -1232,6 +1234,11 @@ impl App {
                 self.thumbs.touch(shown);
             }
         }
+        // And the file on screen's, which the camera in the info panel
+        // wears.
+        if let Some(shown) = self.files.shown_path() {
+            self.thumbs.touch(shown);
+        }
         self.thumbs.insert(path, copies);
     }
 
@@ -1667,6 +1674,7 @@ impl App {
         State {
             filmstrip_width: self.filmstrip.slot(),
             loupe_magnification: self.panels.loupe_magnification,
+            horizon_step: self.panels.horizon_step,
             ui_scale: self.ui_scale,
             order: self.filmstrip.order(),
             camera_jpeg: self.rendering == Rendering::CameraJpeg,
@@ -2118,6 +2126,10 @@ impl App {
                 .map(folder::name),
             picking: self.picking,
             standin,
+            thumb: self
+                .files
+                .shown_path()
+                .and_then(|path| self.thumbs.get(path)),
             waiting: self.replacing().is_some(),
         }
     }

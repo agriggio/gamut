@@ -1370,11 +1370,57 @@ angle. Its axes in the world come from gravity alone, with the lens's
 heading fixed straight ahead, since nothing in either source says which way
 the camera pointed across the ground. The eye is behind the camera, so that
 a turn of the picture clockwise on screen is a turn of the drawing clockwise
-too. The level line is the line through the picture's center that is square
-to gravity's part across the picture: it is the image of a level line in the
-scene square to the lens, which is why no focal length is needed to draw it.
-It is painted as the regions are, on the picture's layer while the pointer
-is anywhere on the section.
+too. The screen on its back wears the file's thumbnail, the one the
+thumbnailer made for the file list (`FrameInput::thumb`), as an egui mesh of
+two triangles: the projection is parallel, so the back is a parallelogram on
+screen and an affine map of the texture onto it is exact. Its corners come
+from the camera's own axes rather than the drawn face, whose order the
+sorting loses, and its texture coordinates go through the turn in force by
+`standin::uvs`, the stand-in's own, since the thumbnail is of the picture as
+the file holds it; a picture further from square than the body's 2 : 1 is
+cropped to the body rather than squeezed. The level line runs square to gravity's part across the picture, and
+where the file gives a 35 mm equivalent focal length it is the true horizon:
+through a rectilinear lens with its axis at the picture's center, the pixel
+`(x, y)` from the center looks along `(x, y, f)`, so the directions square
+to gravity are the line `gx·x + gy·y + gz·f = 0`, `f·|gz| / (gx² + gy²)`
+from the center (`Shown::horizon_through`). `f` in pixels is the equivalent
+over a full frame's diagonal, times the picture's diagonal, since the
+equivalent is defined by the diagonal and is the one focal length that does
+not need the sensor's size to be known. A file that leaves the equivalent
+out — a Canon's — has it made in `exif.rs::focal_equivalent` from the lens's
+focal length and the sensor's size, `PixelX/YDimension` over
+`FocalPlaneX/YResolution`: EXIF's own pixel count rather than the decoded
+picture's, since the resolution is stated against it. A sensor that comes
+out at no size a camera has is taken for the nonsense some programs write
+there, and gives nothing. Without it, or where the horizon misses
+the picture, a lighter line goes through the center instead, the image of
+the level line square to the lens and so right in angle though not in place,
+with a chevron at the edge on the way to a horizon that has a place. The two
+lines are always parallel, so they are never drawn together; the style says
+which one is up, the full one only ever meaning the horizon itself.
+
+That line and what goes with it are the horizon grid (`attitude::paint`),
+which the section previews while the pointer is anywhere on it and the
+compass toggle in the bottom bar keeps up (`Panels::horizon_grid`), drawn
+from `Pass::overlays` over the pixel grid and under the region. Everything in
+it is one map between a way round the camera and a pixel. The ground's axes
+in the picture's are gravity, ahead — the lens's axis with gravity's share
+taken out — and right, `g × ahead`; the way `azimuth` round and `elevation`
+up is `cos e·(cos a·ahead + sin a·right) − sin e·g`, seen at `f·(dx, dy)/dz`
+(`Shown::toward`), and `Shown::direction` is its inverse, which the
+pointer's readout writes out as `CoordinateFormat::Direction`. An upright in
+the scene is a vertical plane through the camera, so it is seen on the line
+from the point gravity is seen at (`Shown::vanishing`, `f·(gx, gy)/gz`)
+through where its way crosses the horizon; the half beyond that point is the
+way behind the camera and is cut off. The uprights are spaced in degrees
+round, `Panels::horizon_step` apart, and fall on round bearings where the
+GPS directory gives the lens's heading. A level circle — every way at one
+elevation — is a cone, which a rectilinear lens shows as a conic: the grid's
+level curves, the same step apart above and below the horizon, and the curve
+through the pointer are sampled a degree of azimuth at a time
+(`Canvas::level_curve`) and drawn on a painter cut to the picture, rather
+than as lines. The readout follows the toggle in and out only from and to
+the pixel's own coordinate, so a reading chosen by hand is never taken away.
 
 The panel is also the one part of the interface that is read out rather than
 merely read. A click on a field copies it, a click on a heading copies the

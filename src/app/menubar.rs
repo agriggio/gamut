@@ -39,6 +39,8 @@ enum Does {
     Control(Control),
     /// The loupe's magnification, set outright where its key steps it.
     Magnification(f32),
+    /// The horizon grid's spacing, likewise.
+    HorizonStep(f32),
 }
 
 /// The menu bar as installed, and what each of its tags does.
@@ -85,7 +87,7 @@ fn waits(keys: &Keymap, tags: &[Does]) -> Vec<Option<When>> {
             let action = match does {
                 Does::Action(action) => Some(*action),
                 Does::Control(control) => action_of(Tip::Control(*control)),
-                Does::Magnification(_) => None,
+                Does::Magnification(_) | Does::HorizonStep(_) => None,
             };
             action
                 .and_then(|action| keys.row_for(action))
@@ -293,6 +295,17 @@ fn view(b: &mut Builder) -> Vec<Node> {
             )
         })
         .collect();
+    let spacings = ui::attitude::STEPS
+        .iter()
+        .map(|step| {
+            b.item(
+                &ui::attitude::label(*step),
+                Does::HorizonStep(*step),
+                None,
+                None,
+            )
+        })
+        .collect();
     let formats = PixelFormat::ALL
         .iter()
         .map(|format| b.control(format.label(), Control::Format(*format), None))
@@ -331,6 +344,8 @@ fn view(b: &mut Builder) -> Vec<Node> {
         b.button("Histogram", Control::Histogram),
         b.button("Info", Control::Info),
         b.button("Grid", Control::Grid),
+        b.button("Horizon Grid", Control::HorizonGrid),
+        b.submenu("Horizon Grid Spacing", None, spacings),
         b.button("Loupe", Control::Loupe),
         b.submenu("Loupe Magnification", None, magnifications),
         Node::Separator,
@@ -650,6 +665,10 @@ impl App {
                 self.panels.loupe_magnification = times;
                 Effect::Redraw
             }
+            Does::HorizonStep(step) => {
+                self.panels.horizon_step = step;
+                Effect::Redraw
+            }
         }
     }
 
@@ -664,16 +683,14 @@ impl App {
                     && met
                     && !(conditions.nothing_open && about_picture(does))
                     && match control {
-                        Control::Coordinates(format) => format.offered(
-                            self.current
-                                .as_ref()
-                                .and_then(|current| current.exif.georeference.as_ref()),
-                        ),
+                        Control::Coordinates(format) => {
+                            format.offered(ui::pixel::Answers::of(self.current.as_ref()))
+                        }
                         _ => true,
                     }
             }
             Does::Action(_) => met && !(conditions.nothing_open && about_picture(does)),
-            Does::Magnification(_) => true,
+            Does::Magnification(_) | Does::HorizonStep(_) => true,
         }
     }
 
@@ -686,6 +703,7 @@ impl App {
             Does::Action(Action::ToggleInterface) => panels.show_ui,
             Does::Action(_) => false,
             Does::Magnification(times) => panels.loupe_magnification == times,
+            Does::HorizonStep(step) => panels.horizon_step == step,
             Does::Control(control) => match control {
                 // The toggles that are one flag of the panels, and the two
                 // choosing what the side panel holds, read through the one
@@ -695,6 +713,7 @@ impl App {
                 | Control::Histogram
                 | Control::Info
                 | Control::Grid
+                | Control::HorizonGrid
                 | Control::Loupe
                 | Control::Marks => panels.lit(control),
                 Control::Depth => current

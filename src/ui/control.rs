@@ -83,6 +83,11 @@ controls! {
     Histogram,
     Info,
     Grid,
+    /// The toggle after the grid's in the bottom bar: the horizon grid, the
+    /// horizon and the uprights round the camera drawn over the picture,
+    /// with the two lines through the pointer. Dead for a file that does
+    /// not say which way its camera faced.
+    HorizonGrid,
     /// The toggle beside the grid's in the bottom bar: the loupe, a circle
     /// around the pointer shown magnified beside it. Holding a button on the
     /// picture whose hold slot is the loupe puts it up as well, while the
@@ -299,6 +304,7 @@ impl Control {
             Control::Histogram => "Histogram".to_string(),
             Control::Info => "Information".to_string(),
             Control::Grid => "Grid".to_string(),
+            Control::HorizonGrid => "Horizon grid".to_string(),
             Control::Loupe => "Loupe".to_string(),
             Control::Zoom => "Zoom".to_string(),
             Control::Maximize => "Maximize".to_string(),

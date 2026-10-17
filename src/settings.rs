@@ -34,7 +34,7 @@ use anyhow::{Context, Result};
 use crate::app::keymap::{Chord, Keymap};
 use crate::gestures::{Behavior, Gestures, Slot};
 use crate::ui::{CoordinateFormat, GeographicFormat, PixelFormat};
-use crate::ui::{filmstrip, loupe, scale};
+use crate::ui::{attitude, filmstrip, loupe, scale};
 use crate::{PROGRAM, shown_path, xdg};
 
 /// The configuration: which panels the window opens with, and what the keys
@@ -374,6 +374,9 @@ pub struct State {
     pub filmstrip_width: f32,
     /// One of [`loupe::MAGNIFICATIONS`].
     pub loupe_magnification: f32,
+    /// One of [`attitude::STEPS`]: how far apart the horizon grid's
+    /// uprights are, in degrees round the camera.
+    pub horizon_step: f32,
     /// How large the interface is drawn, on top of the monitor's own scale.
     pub ui_scale: f32,
     /// What the file list was last sorted by, and which way.
@@ -397,6 +400,7 @@ impl Default for State {
         Self {
             filmstrip_width: filmstrip::SLOT_DEFAULT,
             loupe_magnification: loupe::DEFAULT_MAGNIFICATION,
+            horizon_step: attitude::DEFAULT_STEP,
             ui_scale: scale::DEFAULT,
             order: filmstrip::Order::default(),
             camera_jpeg: false,
@@ -420,7 +424,7 @@ struct Kept {
 }
 
 /// Every line of the state file, in the order it is written.
-const KEPT: [Kept; 10] = [
+const KEPT: [Kept; 11] = [
     Kept {
         name: "filmstrip_width",
         get: |state| state.filmstrip_width.to_string(),
@@ -440,6 +444,17 @@ const KEPT: [Kept; 10] = [
                 && loupe::MAGNIFICATIONS.contains(&number)
             {
                 state.loupe_magnification = number;
+            }
+        },
+    },
+    Kept {
+        name: "horizon_step",
+        get: |state| state.horizon_step.to_string(),
+        set: |state, value| {
+            if let Ok(number) = value.parse::<f32>()
+                && attitude::STEPS.contains(&number)
+            {
+                state.horizon_step = number;
             }
         },
     },
@@ -498,7 +513,7 @@ const KEPT: [Kept; 10] = [
     },
     Kept {
         name: "coordinate_format",
-        get: |state| state.coordinate_format.label().to_ascii_lowercase(),
+        get: |state| state.coordinate_format.word().to_string(),
         set: |state, value| {
             if let Some(format) = CoordinateFormat::parse(value) {
                 state.coordinate_format = format;
@@ -806,7 +821,7 @@ mod tests {
             .lines()
             .filter(|line| line.starts_with("gesture."))
             .count();
-        assert_eq!(keys, 102, "{uncommented}");
+        assert_eq!(keys, 104, "{uncommented}");
         // A Mac's three more: the scroll, the scroll with Command, and the
         // pinch.
         let slots = if cfg!(target_os = "macos") { 13 } else { 10 };
@@ -954,6 +969,7 @@ mod tests {
         let state = State {
             filmstrip_width: 212.0,
             loupe_magnification: 8.0,
+            horizon_step: 15.0,
             ui_scale: 1.5,
             order: filmstrip::Order {
                 sort: filmstrip::Sort::Date,
@@ -1007,6 +1023,7 @@ mod tests {
         let state = State::parse(
             "filmstrip_width = 100000\n\
              loupe_magnification = 3\n\
+             horizon_step = 7\n\
              ui_scale = 9\n\
              sort = shoe size\n\
              sort_direction = sideways\n\

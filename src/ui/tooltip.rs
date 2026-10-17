@@ -114,9 +114,10 @@ pub const COPY_REGION: &str = "Copy the region as displayed";
 pub const PIXEL_CYCLE: &str = "Cycle pixel format: hex, decimal, mapped, depth";
 pub const PIXEL_COPY_VALUE: &str = "Copy pixel value under pointer";
 pub const PIXEL_COPY_COORDINATE: &str = "Copy coordinate of pixel under pointer";
-/// And, for a georeferenced file only, the two keys that change how the
+/// And, for a file with more than the pixel to say, the two keys that change how the
 /// coordinate is written — the second only where it can be a latitude.
-pub const PIXEL_COORDINATE_CYCLE: &str = "Cycle coordinate: pixel, projected, geographic";
+pub const PIXEL_COORDINATE_CYCLE: &str =
+    "Cycle coordinate: pixel, projected, geographic, direction";
 pub const PIXEL_GEOGRAPHIC_CYCLE: &str = "Switch latitude and longitude: decimal, DMS";
 
 /// What a toggle says when the content area has no room for the panel it
@@ -190,6 +191,7 @@ pub const NO_GAIN_MAP: &str = "This image has no gain map.";
 /// keeps its mosaic, which is as seldom heard as [`NO_DEPTH_MAP`] for the
 /// same reason.
 pub const NO_MOSAIC: &str = "This image has no raw mosaic.";
+pub const NO_ORIENTATION: &str = "Image orientation data not available";
 
 /// What the gain map's toggle says under its name on a raw whose profile
 /// says how it should look: where the map it shows comes from, there being
@@ -277,9 +279,13 @@ pub struct Conditions {
     pub visited_before: bool,
     pub visited_after: bool,
     /// Whether the file on screen offers a coordinate other than the
-    /// pixel's, and whether one of them is a latitude.
-    pub georeferenced: bool,
+    /// pixel's — on the ground, or the way the pixel looks — and whether
+    /// one of them is a latitude.
+    pub coordinates: bool,
     pub geographic: bool,
+    /// Whether the file on screen says which way its camera faced, which
+    /// is what the horizon grid needs.
+    pub orientation: bool,
     /// Whether the window has room for each of what the side panel holds,
     /// and for the help popup.
     pub room: Room,
@@ -339,8 +345,9 @@ impl Default for Conditions {
             undoable: false,
             visited_before: false,
             visited_after: false,
-            georeferenced: false,
+            coordinates: false,
             geographic: false,
+            orientation: false,
             room: Room {
                 histogram: false,
                 info: false,
@@ -384,8 +391,9 @@ impl Conditions {
         undoable: false,
         visited_before: true,
         visited_after: true,
-        georeferenced: false,
+        coordinates: false,
         geographic: false,
+        orientation: true,
         room: Room {
             histogram: true,
             info: true,
@@ -453,6 +461,7 @@ pub fn disabled(tip: Tip, conditions: Conditions) -> Option<Refused> {
         gain_map,
         mosaic,
         profile,
+        orientation,
         ..
     } = conditions;
     let said = |said| Some(Refused { said, hint: None });
@@ -480,6 +489,9 @@ pub fn disabled(tip: Tip, conditions: Conditions) -> Option<Refused> {
     }
     if matches!(tip, Tip::Control(Control::Mosaic | Control::ShowMosaic)) && !mosaic {
         return said(NO_MOSAIC);
+    }
+    if tip == Tip::Control(Control::HorizonGrid) && !orientation {
+        return said(NO_ORIENTATION);
     }
     if tip == Tip::Control(Control::Profile) && !profile {
         return said(NO_PROFILE);
@@ -655,6 +667,7 @@ pub fn words(tip: Tip) -> Option<String> {
         Tip::Control(Control::Remove) => "Remove the current file from the file list",
         Tip::Control(Control::Filmstrip) => "Toggle the file list",
         Tip::Control(Control::Grid) => "Toggle the pixel grid",
+        Tip::Control(Control::HorizonGrid) => "Toggle the horizon grid",
         Tip::Control(Control::Region) => "Draw a region",
         Tip::Control(Control::Output) => "Toggle HDR output, when monitor is capable",
         Tip::Control(Control::Maximize) => "Toggle the UI",

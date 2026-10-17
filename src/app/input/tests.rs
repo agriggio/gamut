@@ -525,9 +525,9 @@ fn each_condition_is_met_by_its_own_reading() {
             },
         ),
         (
-            When::Georeferenced,
+            When::Coordinates,
             Conditions {
-                georeferenced: true,
+                coordinates: true,
                 ..none
             },
         ),
@@ -535,6 +535,13 @@ fn each_condition_is_met_by_its_own_reading() {
             When::Geographic,
             Conditions {
                 geographic: true,
+                ..none
+            },
+        ),
+        (
+            When::Orientation,
+            Conditions {
+                orientation: true,
                 ..none
             },
         ),
@@ -757,7 +764,7 @@ fn the_pixel_readout_names_its_key_and_the_copies_that_have_none() {
     // the key that writes it, each after the format's own.
     let map = Namer {
         conditions: Conditions {
-            georeferenced: true,
+            coordinates: true,
             geographic: true,
             ..Conditions::ALIVE
         },
@@ -770,7 +777,7 @@ fn the_pixel_readout_names_its_key_and_the_copies_that_have_none() {
         tooltip.hints,
         [
             spelled_here("Cycle pixel format: hex, decimal, mapped, depth (.)"),
-            spelled_here("Cycle coordinate: pixel, projected, geographic (,)"),
+            spelled_here("Cycle coordinate: pixel, projected, geographic, direction (,)"),
             spelled_here("Switch latitude and longitude: decimal, DMS (<)"),
             spelled_here("Copy pixel value under pointer (Ctrl+.)"),
             spelled_here("Copy coordinate of pixel under pointer (Ctrl+>)"),

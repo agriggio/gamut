@@ -106,6 +106,8 @@ pub(super) fn panels() -> Panels {
         mark_clipped: false,
         show_minimap: true,
         show_grid: false,
+        horizon_grid: false,
+        horizon_step: super::attitude::DEFAULT_STEP,
         show_loupe: false,
         loupe_magnification: super::loupe::DEFAULT_MAGNIFICATION,
         pixel_format: PixelFormat::default(),
@@ -160,6 +162,7 @@ pub(super) fn input(logical: [f32; 2], count: usize) -> FrameInput {
         folder: None,
         picking: false,
         standin: None,
+        thumb: None,
         waiting: false,
     }
 }
@@ -380,6 +383,7 @@ fn a_toggle_in_the_chrome_hands_back_its_press() {
         ("Information", Control::Info),
         ("Minimap", Control::Minimap),
         ("Grid", Control::Grid),
+        ("Horizon grid", Control::HorizonGrid),
         ("Loupe", Control::Loupe),
         ("Maximize", Control::Maximize),
         ("Region", Control::Region),
@@ -826,6 +830,59 @@ fn a_regions_row_marks_it_on_the_picture() {
     assert!(marked(&harness));
 }
 
+/// A thumbnail `width` by `height` held by the harness's egui: red in its
+/// top left quarter, so that which way up it was drawn can be seen, and a
+/// gray ramp across the rest.
+fn thumb_of(harness: &Harness<'static, State>, width: usize, height: usize) -> super::Thumb {
+    let pixels = (0..width * height)
+        .map(|at| {
+            let (x, y) = (at % width, at / width);
+            if x < width / 2 && y < height / 2 {
+                egui::Color32::RED
+            } else {
+                egui::Color32::from_gray((255 * x / width) as u8)
+            }
+        })
+        .collect();
+    let image = egui::ColorImage::new([width, height], pixels);
+    let texture = harness
+        .ctx
+        .load_texture("thumbnail", image, egui::TextureOptions::LINEAR);
+    // Held by egui's manager past this handle, as the application's are
+    // past a frame.
+    let sized = egui::load::SizedTexture::from_handle(&texture);
+    std::mem::forget(texture);
+    super::Thumb { copies: [sized; 3] }
+}
+
+/// The camera in the Orientation section wears the file's thumbnail on its
+/// screen, once there is one.
+#[test]
+fn the_camera_wears_the_picture_on_its_screen() {
+    use super::side::Side;
+    use crate::image::attitude::Attitude;
+
+    let mut with_info = panels();
+    with_info.side = Some(Side::Info);
+    let mut harness = open(WINDOW, 1, with_info);
+    let mut current = photograph();
+    current.exif.attitude = Attitude::gopro([-0.0377, 0.9992, -0.0092]);
+    harness.state_mut().current = Some(current);
+    harness.run();
+    let thumb = thumb_of(&harness, 64, 48);
+    let id = thumb.copies[0].id;
+    let worn =
+        |harness: &Harness<'static, State>| {
+            harness.output().shapes.iter().any(
+                |shape| matches!(&shape.shape, egui::Shape::Mesh(mesh) if mesh.texture_id == id),
+            )
+        };
+    assert!(!worn(&harness));
+    harness.state_mut().input.thumb = Some(thumb);
+    harness.run();
+    assert!(worn(&harness));
+}
+
 /// A file that says which way its camera faced has an Orientation section,
 /// and one that does not has none; while the pointer is on the section the
 /// level line is drawn across the picture, beside the panel.
@@ -867,6 +924,69 @@ fn the_orientation_section_draws_the_level_line_on_the_picture() {
     harness.get_by_label("Orientation").hover();
     harness.run();
     assert!(segments(&harness) > before + 10);
+    // On the heading, its end is the button that copies the section; on
+    // the rest of the section, the pill there names the line drawn.
+    let said = |harness: &Harness<'static, State>, word: &str| {
+        harness.output().shapes.iter().any(
+            |shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == word),
+        )
+    };
+    assert!(!said(&harness, "Level"));
+    harness.get_by_label("Pitch").hover();
+    harness.run();
+    assert!(said(&harness, "Level"));
+    // With the grid up, the pill says so wherever the pointer is.
+    harness.get_by_label("Samples").hover();
+    harness.run();
+    assert!(!said(&harness, "Level"));
+    harness.state_mut().panels.horizon_grid = true;
+    harness.run();
+    assert!(said(&harness, "Level"));
+    harness.state_mut().panels.horizon_grid = false;
+    harness.get_by_label("Pitch").hover();
+    harness.run();
+
+    // Only the true horizon wears a dot, and only a file that says its
+    // focal length has one placed; pitched far enough down, it is off the
+    // picture and the lighter level line is drawn instead.
+    let dots = |harness: &Harness<'static, State>| {
+        harness
+            .output()
+            .shapes
+            .iter()
+            .filter(|shape| {
+                matches!(&shape.shape, egui::Shape::Circle(circle)
+                    if circle.center.x < side.min.x)
+            })
+            .count()
+    };
+    let unplaced = dots(&harness);
+    for (gravity, placed) in [([-0.0377, 0.9992, -0.0092], 1), ([0.0, 0.8, 0.6], 0)] {
+        let mut current = photograph();
+        current.exif.attitude = Attitude::gopro(gravity);
+        current.exif.focal_equivalent = Some(26.0);
+        harness.state_mut().current = Some(current);
+        harness.run();
+        assert_eq!(dots(&harness), unplaced + placed, "{gravity:?}");
+        let word = if placed == 1 { "Horizon" } else { "Level" };
+        assert!(said(&harness, word), "{gravity:?}");
+        assert!(segments(&harness) > before + 10, "{gravity:?}");
+    }
+
+    // With the bearing the lens pointed at, the uprights are on the round
+    // bearings and say which: none without it.
+    for heading in [None, Some(212.0)] {
+        let mut current = photograph();
+        current.exif.attitude = Attitude::gopro([-0.0377, 0.9992, -0.0092]);
+        current.exif.focal_equivalent = Some(26.0);
+        current.exif.heading = heading;
+        harness.state_mut().current = Some(current);
+        harness.run();
+        assert_eq!(said(&harness, "210\u{00b0}"), heading.is_some());
+    }
+    assert!(said(&harness, "210\u{00b0}"));
+    assert!(said(&harness, "220\u{00b0}"));
+    assert!(!said(&harness, "212\u{00b0}"));
 }
 
 /// The side panel is laid out where the chrome's geometry says, between
@@ -3061,4 +3181,123 @@ fn the_output_band_wears_chevrons_past_white_only_on_a_surface_with_room() {
     for [top, ..] in chevrons {
         assert!(top.x >= white.min.x, "{top:?} left of {white:?}");
     }
+}
+
+/// A picture pitched down a fifth of a right angle, taken at a 26 mm
+/// equivalent: what the horizon grid has to go on.
+fn pitched() -> Current {
+    use crate::image::attitude::Attitude;
+    let mut current = picture(5, 3);
+    let (sin, cos) = 20f64.to_radians().sin_cos();
+    current.exif.attitude = Attitude::gopro([0.0, cos, sin]);
+    current.exif.focal_equivalent = Some(26.0);
+    current
+}
+
+/// With the horizon grid on, the grid is drawn over the picture, and the
+/// curve through the pointer with it while the pointer is on the picture.
+#[test]
+fn the_horizon_grid_follows_the_pointer() {
+    let mut on = panels();
+    on.horizon_grid = true;
+    let mut harness = open(WINDOW, 1, on);
+    harness.state_mut().current = Some(pitched());
+    let curves = |harness: &mut Harness<'static, State>| {
+        harness.run();
+        harness
+            .output()
+            .shapes
+            .iter()
+            .filter(|shape| matches!(&shape.shape, egui::Shape::Path(path) if !path.closed))
+            .count()
+    };
+    let without = curves(&mut harness);
+    harness.state_mut().input.pointer = Some([2, 1]);
+    let with = curves(&mut harness);
+    assert!(with > without);
+    harness.state_mut().panels.horizon_grid = false;
+    assert!(curves(&mut harness) < without);
+}
+
+/// Zoomed in until the picture runs past the content area, the horizon
+/// grid keeps to the content area rather than crossing the bars, and
+/// leaves the loupe's glass clear for what the glass shows.
+#[test]
+fn the_horizon_grid_keeps_off_the_bars_and_the_glass() {
+    let mut on = panels();
+    on.horizon_grid = true;
+    let mut harness = build(WINDOW, 1, on);
+    let content = egui::Rect::from(chrome::content_area(WINDOW, true, chrome::Parts::NONE));
+    let glass = content.center();
+    let state = harness.state_mut();
+    let current = pitched();
+    let viewport = state.input.viewport;
+    state
+        .view
+        .set_zoom_at(400.0, [500.0, 350.0], current.size(), viewport);
+    state.current = Some(current);
+    state.input.loupe = Some(super::loupe::Loupe {
+        eye: [glass.x - 150.0, glass.y + 150.0],
+        glass: [glass.x, glass.y],
+        magnification: 2.0,
+    });
+    harness.run();
+    harness.run();
+    // The grid's strokes are the ones laid on a white halo.
+    let mut halos = 0;
+    for clipped in &harness.output().shapes {
+        let points = match &clipped.shape {
+            egui::Shape::LineSegment { points, stroke } if stroke.color == egui::Color32::WHITE => {
+                points.to_vec()
+            }
+            egui::Shape::Path(path)
+                if !path.closed
+                    && path.stroke.color
+                        == egui::epaint::ColorMode::Solid(egui::Color32::WHITE) =>
+            {
+                path.points.clone()
+            }
+            _ => continue,
+        };
+        halos += 1;
+        assert!(
+            content.expand(0.5).contains_rect(clipped.clip_rect),
+            "{:?} reaches past {content:?}",
+            clipped.clip_rect
+        );
+        let midpoints = points.windows(2).map(|pair| pair[0].lerp(pair[1], 0.5));
+        for point in points.iter().copied().chain(midpoints) {
+            assert!(
+                point.distance(glass) > super::loupe::GLASS_RADIUS - 0.5,
+                "{point:?} is inside the glass"
+            );
+        }
+    }
+    assert!(halos > 0, "the grid was drawn");
+}
+
+/// The pointer's readout in the ways the pixels look: the bearing where the
+/// file says which way the lens pointed, and how far round from that where
+/// it does not, then the elevation — padded in the bar, bare in a copy.
+#[test]
+fn the_readout_says_which_way_a_pixel_looks() {
+    use super::pixel::{CoordinateFormat, GeographicFormat, place};
+    let mut current = pitched();
+    let write = |current: &Current, padded| {
+        place(
+            current,
+            [2, 1],
+            CoordinateFormat::Direction,
+            GeographicFormat::Decimal,
+            padded,
+        )
+    };
+    assert_eq!(write(&current, true), "( +0.0\u{00b0}, -20.0\u{00b0})");
+    current.exif.heading = Some(212.0);
+    assert_eq!(write(&current, true), "(212.0\u{00b0}, -20.0\u{00b0})");
+    assert_eq!(write(&current, false), "212.0,-20.0");
+    // Without a focal length there is no way to tell, and the pixel's own
+    // place is written instead.
+    current.exif.focal_equivalent = None;
+    assert_eq!(write(&current, false), "2,1");
 }

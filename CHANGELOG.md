@@ -13,10 +13,26 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
   accelerometer, a GoPro's gravity vector, the electronic level of a
   Canon mirrorless, Panasonic, Pentax, Olympus or OM System camera, or a
   DJI drone's gimbal. It draws the camera in three
-  dimensions as it was pitched and turned over a level floor, and says how
+  dimensions as it was pitched and turned over a level floor, the picture on
+  its screen, and says how
   far the lens pointed up or down and how far the horizon runs from level
   in the picture as shown. Resting the pointer on the section draws the
-  level line across the picture.
+  true horizon across the picture, for a file that records its 35 mm
+  equivalent focal length, and otherwise — or with the horizon out of
+  frame, which a chevron at the edge points to — a lighter level line
+  through the middle.
+- A *horizon grid*, `b` or the compass button after the pixel grid's, for a
+  picture that records which way its camera faced and its focal length: the
+  true horizon, and upright lines 5, 10, 15 or 30 degrees apart round the
+  camera (`B` steps through them), crossed by curves as far apart above and
+  below the horizon, converging as the scene's uprights do and
+  labeled with their compass bearings where the file records a heading. The
+  upright and the level curve through the pointer follow it, and the
+  pointer's readout gains an *Azimuth/Elevation* coordinate — bearing and elevation —
+  which the grid turns on. Resting on the information panel's *Orientation*
+  section previews it. A file that does not give its focal length as a
+  35 mm equivalent, as a Canon's does not, has it worked out from the
+  lens's focal length and the sensor's size.
 
 - A camera raw with a color filter over its sensor can be shown as its
   mosaic: what the sensor counted, one value to a photosite, each in its

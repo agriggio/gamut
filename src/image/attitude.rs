@@ -40,6 +40,10 @@ const ACCELERATION: u16 = 8;
 /// turn about the vertical, which gravity cannot see.
 pub const STEEPEST: f64 = 80.0;
 
+/// The diagonal of a 35 mm frame, 36 by 24 mm, which a focal length said
+/// as its 35 mm equivalent is measured against.
+pub(crate) const FULL_FRAME_DIAGONAL: f64 = 43.266_615_305_567_87;
+
 /// What a file says about which way its camera faced.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Attitude {
@@ -185,6 +189,141 @@ impl Attitude {
             gravity,
         }
     }
+}
+
+impl Shown {
+    /// Where the true horizon runs in a picture `size` pixels across and
+    /// down, taken with a lens of `equivalent` mm on a 35 mm frame: the
+    /// point of it nearest the picture's middle, as an offset from the
+    /// middle in pixels. `None` where there is no horizon to draw, or no
+    /// focal length to place it by.
+    ///
+    /// The horizon is where everything level and far away is seen: the
+    /// directions square to gravity. Through a lens that keeps straight
+    /// lines straight, with the middle of the picture on its axis, a pixel
+    /// `(x, y)` from the middle looks along `(x, y, f)`, `f` the focal
+    /// length in pixels, so the horizon is the line on which
+    /// `gx·x + gy·y + gz·f` is nothing. It runs at [`Shown::horizon`]'s
+    /// angle, as far from the middle as `f·gz` is against gravity's
+    /// share across the picture: above the middle with the lens pointed
+    /// down, below it pointed up.
+    pub fn horizon_through(&self, size: [f64; 2], equivalent: Option<f64>) -> Option<[f64; 2]> {
+        self.horizon?;
+        let focal = focal(size, equivalent)?;
+        let [x, y, z] = self.gravity;
+        let across = x * x + y * y;
+        let along = -z * focal / across;
+        Some([x * along, y * along])
+    }
+
+    /// Where every upright line in the scene meets in the same picture: the
+    /// point straight below the camera with the lens pointed down, straight
+    /// above it pointed up, as an offset from the middle in pixels — the
+    /// pixel looking along gravity, `f·(gx, gy) / gz`. `None` with the lens
+    /// level, when the uprights are parallel and run along `(gx, gy)`, or
+    /// with no focal length to place it by.
+    pub fn vanishing(&self, size: [f64; 2], equivalent: Option<f64>) -> Option<[f64; 2]> {
+        let focal = focal(size, equivalent)?;
+        let [x, y, z] = self.gravity;
+        (z.abs() > 1e-6).then(|| [focal * x / z, focal * y / z])
+    }
+}
+
+impl Shown {
+    /// Where the uprights standing `azimuth` degrees to the right of where
+    /// the lens pointed, across the ground, cross the horizon, in the same
+    /// picture: an offset from the middle in pixels. Every upright that way,
+    /// near or far, is seen on the line from [`Shown::vanishing`] through
+    /// it. `None` where there is no horizon, no focal length, or the way
+    /// is behind the lens.
+    pub fn bearing(
+        &self,
+        size: [f64; 2],
+        equivalent: Option<f64>,
+        azimuth: f64,
+    ) -> Option<[f64; 2]> {
+        self.toward(size, equivalent, azimuth, 0.0)
+    }
+
+    /// Where the way `azimuth` degrees to the right of where the lens
+    /// pointed and `elevation` degrees above level is seen, as an offset
+    /// from the middle in pixels: at `f·(dx, dy) / dz`, the way being `d`.
+    /// `None` where there is no horizon, no focal length, or the way is
+    /// behind the lens.
+    pub fn toward(
+        &self,
+        size: [f64; 2],
+        equivalent: Option<f64>,
+        azimuth: f64,
+        elevation: f64,
+    ) -> Option<[f64; 2]> {
+        let focal = focal(size, equivalent)?;
+        let [ahead, right] = self.ground()?;
+        let g = self.gravity;
+        let (sin, cos) = azimuth.to_radians().sin_cos();
+        let (rise, level) = elevation.to_radians().sin_cos();
+        let way: [f64; 3] = std::array::from_fn(|axis| {
+            level * (cos * ahead[axis] + sin * right[axis]) - rise * g[axis]
+        });
+        (way[2] > 1e-3).then(|| [focal * way[0] / way[2], focal * way[1] / way[2]])
+    }
+
+    /// The way the pixel `offset` pixels from the middle of a picture
+    /// `size` pixels across and down looks along — the inverse of
+    /// [`Shown::toward`]. `None` with no focal length to place it by.
+    pub fn direction(
+        &self,
+        size: [f64; 2],
+        equivalent: Option<f64>,
+        offset: [f64; 2],
+    ) -> Option<Direction> {
+        let focal = focal(size, equivalent)?;
+        let length = offset[0].hypot(offset[1]).hypot(focal);
+        let way = [offset[0] / length, offset[1] / length, focal / length];
+        let along = |axis: [f64; 3]| (0..3).map(|at| way[at] * axis[at]).sum::<f64>();
+        let elevation = (-along(self.gravity)).clamp(-1.0, 1.0).asin().to_degrees();
+        let azimuth = self
+            .ground()
+            .map(|[ahead, right]| along(right).atan2(along(ahead)).to_degrees());
+        Some(Direction { azimuth, elevation })
+    }
+
+    /// The ground's own axes in the picture's: ahead, the lens's axis with
+    /// gravity's share taken out, and right, `g × ahead`, as the picture's
+    /// right is its down by its ahead. `None` where the lens pointed too
+    /// steeply for a horizon, ahead being nowhere in particular then.
+    fn ground(&self) -> Option<[[f64; 3]; 2]> {
+        self.horizon?;
+        let g = self.gravity;
+        let level = (1.0 - g[2] * g[2]).max(0.0).sqrt();
+        let ahead = [
+            -g[2] * g[0] / level,
+            -g[2] * g[1] / level,
+            (1.0 - g[2] * g[2]) / level,
+        ];
+        let right = [
+            g[1] * ahead[2] - g[2] * ahead[1],
+            g[2] * ahead[0] - g[0] * ahead[2],
+            g[0] * ahead[1] - g[1] * ahead[0],
+        ];
+        Some([ahead, right])
+    }
+}
+
+/// The way one pixel looks along: degrees to the right of where the lens
+/// pointed, across the ground — `None` where the lens pointed too steeply
+/// for that to be told — and degrees above level.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Direction {
+    pub azimuth: Option<f64>,
+    pub elevation: f64,
+}
+
+/// The focal length in pixels of a picture `size` pixels across and down,
+/// taken with a lens of `equivalent` mm on a 35 mm frame.
+fn focal(size: [f64; 2], equivalent: Option<f64>) -> Option<f64> {
+    let equivalent = equivalent.filter(|mm| mm.is_finite() && *mm > 0.0)?;
+    Some(equivalent / FULL_FRAME_DIAGONAL * size[0].hypot(size[1]))
 }
 
 /// A direction across the picture carried through `orientation`: the part
@@ -401,6 +540,85 @@ mod tests {
             .unwrap()
             .shown(Orientation::NoTransforms, Turn::NONE, [4000, 3000]);
         assert!((shown.horizon.unwrap() + 3.8).abs() < 1e-9);
+    }
+
+    /// Pointed down, the horizon is above the middle, as far as the focal
+    /// length makes the pitch; pointed up, below it; level, through it.
+    /// Without a focal length it has no place.
+    #[test]
+    fn the_horizon_is_placed_by_the_pitch_and_the_focal_length() {
+        use super::super::level::Maker;
+        let at = |pitch: f64, roll: f64| Level {
+            roll,
+            pitch,
+            yaw: None,
+            maker: Maker::Panasonic,
+        };
+        let size = [4000.0, 3000.0];
+        // 43.27 mm on a 35 mm frame is a focal length as long as the
+        // frame's diagonal, 5000 pixels here.
+        let normal = Some(FULL_FRAME_DIAGONAL);
+        for (pitch, sign) in [(-20.0, -1.0), (15.0, 1.0)] {
+            let shown = Attitude::level(at(pitch, 0.0), Orientation::NoTransforms)
+                .unwrap()
+                .shown(Orientation::NoTransforms, Turn::NONE, [4000, 3000]);
+            let [x, y] = shown.horizon_through(size, normal).unwrap();
+            let expected = 5000.0 * f64::tan(pitch.abs().to_radians());
+            assert!(x.abs() < 1e-6, "{pitch}: {x}");
+            assert!((y - sign * expected).abs() < 1e-6, "{pitch}: {y}");
+            assert_eq!(shown.horizon_through(size, None), None);
+        }
+        let level = Attitude::level(at(0.0, 10.0), Orientation::NoTransforms)
+            .unwrap()
+            .shown(Orientation::NoTransforms, Turn::NONE, [4000, 3000]);
+        let [x, y] = level.horizon_through(size, normal).unwrap();
+        assert!(x.hypot(y) < 1e-6);
+        // Rolled, the offset is square to the line, still on the up side.
+        let rolled = Attitude::level(at(-20.0, 10.0), Orientation::NoTransforms)
+            .unwrap()
+            .shown(Orientation::NoTransforms, Turn::NONE, [4000, 3000]);
+        let [x, y] = rolled.horizon_through(size, normal).unwrap();
+        let (sin, cos) = rolled.horizon.unwrap().to_radians().sin_cos();
+        assert!((x * cos + y * sin).abs() < 1e-6);
+        assert!(y < 0.0);
+        // Every upright meets below the middle with the lens pointed down,
+        // on the far side of the horizon from it.
+        let [x, y] = rolled.vanishing(size, normal).unwrap();
+        let (sin, cos) = rolled.horizon.unwrap().to_radians().sin_cos();
+        assert!((x * cos + y * sin).abs() < 1e-6 && y > 0.0);
+        assert!((x.hypot(y) - 5000.0 / f64::tan(20f64.to_radians())).abs() < 1e-6);
+        assert_eq!(level.vanishing(size, normal), None);
+        // Straight ahead is where the horizon passes nearest the middle,
+        // and a way to the right is to the right along it, on it.
+        let ahead = rolled.bearing(size, normal, 0.0).unwrap();
+        let through = rolled.horizon_through(size, normal).unwrap();
+        assert!((ahead[0] - through[0]).abs() < 1e-6 && (ahead[1] - through[1]).abs() < 1e-6);
+        let [x, y] = rolled.bearing(size, normal, 30.0).unwrap();
+        let along = (x - through[0]) * cos + (y - through[1]) * sin;
+        let off = (x - through[0]) * -sin + (y - through[1]) * cos;
+        assert!(along > 0.0 && off.abs() < 1e-6, "{along} {off}");
+        // Level, 45 degrees to the right is a focal length to the right.
+        let [x, y] = level.bearing(size, normal, 45.0).unwrap();
+        let (sin, cos) = level.horizon.unwrap().to_radians().sin_cos();
+        assert!((x * cos + y * sin - 5000.0).abs() < 1e-6);
+        assert_eq!(level.bearing(size, normal, 120.0), None);
+        // A pixel's way is the way it was placed from, whichever it was.
+        for (azimuth, elevation) in [(0.0, 0.0), (25.0, 10.0), (-40.0, -15.0)] {
+            let at = rolled.toward(size, normal, azimuth, elevation).unwrap();
+            let way = rolled.direction(size, normal, at).unwrap();
+            assert!((way.azimuth.unwrap() - azimuth).abs() < 1e-9, "{way:?}");
+            assert!((way.elevation - elevation).abs() < 1e-9, "{way:?}");
+        }
+        // The middle looks along the lens, pitched down.
+        let middle = rolled.direction(size, normal, [0.0, 0.0]).unwrap();
+        assert!((middle.elevation + 20.0).abs() < 1e-9);
+        assert!(middle.azimuth.unwrap().abs() < 1e-9);
+        assert_eq!(rolled.direction(size, None, [0.0, 0.0]), None);
+        // Too steep for a horizon, nothing is placed.
+        let steep = Attitude::level(at(-85.0, 0.0), Orientation::NoTransforms)
+            .unwrap()
+            .shown(Orientation::NoTransforms, Turn::NONE, [4000, 3000]);
+        assert_eq!(steep.horizon_through(size, normal), None);
     }
 
     #[test]
