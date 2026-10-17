@@ -493,8 +493,29 @@ impl<'a> Canvas<'a> {
         dash: f32,
         gap: f32,
     ) {
-        painter.extend(egui::Shape::dashed_line(path, self.halo(), dash, gap));
-        painter.extend(egui::Shape::dashed_line(path, self.stroke(ink), dash, gap));
+        painter.extend(self.dashes(painter, path, self.halo(), dash, gap));
+        painter.extend(self.dashes(painter, path, self.stroke(ink), dash, gap));
+    }
+
+    /// The dashes along `path` on screen in `stroke` that `painter` can
+    /// show: only the stretches inside its clip are dashed, since a curve
+    /// running far off the picture would otherwise be millions of them,
+    /// each stretch begun where its dash began, so that the dashes keep
+    /// their places along the path however much of it is in view.
+    fn dashes(
+        &self,
+        painter: &egui::Painter,
+        path: &[Pos2],
+        stroke: Stroke,
+        dash: f32,
+        gap: f32,
+    ) -> Vec<egui::Shape> {
+        let rect = painter.clip_rect().expand(stroke.width);
+        let mut shapes = Vec::new();
+        for run in visible(path, rect, dash + gap) {
+            egui::Shape::dashed_line_many(&run, stroke, dash, gap, &mut shapes);
+        }
+        shapes
     }
 
     /// A solid line along `path` on screen with `painter`, on its halo.
@@ -615,12 +636,7 @@ pub(super) fn paint(
         // one line the grid is read from.
         let ends = [canvas.screen(from), canvas.screen(to)];
         painter.line_segment(ends, canvas.halo());
-        painter.extend(egui::Shape::dashed_line(
-            &ends,
-            canvas.stroke(accent),
-            DASH,
-            GAP,
-        ));
+        painter.extend(canvas.dashes(painter, &ends, canvas.stroke(accent), DASH, GAP));
         let at = canvas.screen(foot);
         canvas.tick(at, [cos, sin], accent);
         painter.circle_filled(at, canvas.width * 1.5, accent);
@@ -819,6 +835,48 @@ fn span(point: [f32; 2], direction: [f32; 2], size: [f32; 2]) -> Option<(f32, f3
     (enter < leave).then_some((enter, leave))
 }
 
+/// The stretches of `path` inside `rect`, each begun as far back along
+/// its first segment as the dash it enters in began, `period` being a dash
+/// and a gap: where the path runs out of `rect` and back, a stretch apiece.
+fn visible(path: &[Pos2], rect: egui::Rect, period: f32) -> Vec<Vec<Pos2>> {
+    let mut runs = Vec::new();
+    let mut run: Option<Vec<Pos2>> = None;
+    let mut travelled = 0.0;
+    for pair in path.windows(2) {
+        let (from, to) = (pair[0], pair[1]);
+        let along = to - from;
+        let length = along.length();
+        if length <= 0.0 {
+            continue;
+        }
+        let start = from - rect.min;
+        let cut = span([start.x, start.y], [along.x, along.y], rect.size().into())
+            .map(|(enter, leave)| (enter.max(0.0), leave.min(1.0)))
+            .filter(|(enter, leave)| enter < leave);
+        match cut {
+            Some((enter, leave)) => {
+                let end = from + along * leave;
+                match &mut run {
+                    Some(points) if enter == 0.0 => points.push(end),
+                    _ => {
+                        runs.extend(run.take());
+                        let back = (travelled + length * enter).rem_euclid(period);
+                        let begin = from + along * enter - along / length * back;
+                        run = Some(vec![begin, end]);
+                    }
+                }
+                if leave < 1.0 {
+                    runs.extend(run.take());
+                }
+            }
+            None => runs.extend(run.take()),
+        }
+        travelled += length;
+    }
+    runs.extend(run);
+    runs
+}
+
 /// The share of `offset` from the middle that reaches the picture's edge,
 /// `middle` being half the picture each way.
 fn edge_reach(offset: [f32; 2], middle: [f32; 2]) -> f32 {
@@ -848,6 +906,29 @@ mod tests {
         let [from, to] = across([200.0, 150.0], [cos, sin], size).unwrap();
         assert!(from[0].abs() < 1e-3 && (to[0] - 400.0).abs() < 1e-3);
         assert_eq!(across([200.0, -400.0], [cos, sin], size), None);
+    }
+
+    /// A path running far out of view is dashed only where it is in view,
+    /// each stretch starting where a dash along the whole path would.
+    #[test]
+    fn only_what_is_in_view_is_dashed() {
+        let rect = egui::Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 100.0));
+        let path = [
+            pos2(-1.0e6, 50.0),
+            pos2(50.0, 50.0),
+            pos2(50.0, 1.0e6),
+            pos2(50.0, 1.0e6 + 7.0),
+        ];
+        let runs = visible(&path, rect, 6.0);
+        assert_eq!(runs.len(), 1);
+        let run = &runs[0];
+        assert_eq!(run.len(), 3);
+        // A million and one from the start is 6·166 666 and 4 on, so the
+        // dash it enters in began 4 back from the edge.
+        assert!((run[0].x + 4.0).abs() < 0.1 && run[0].y == 50.0);
+        assert_eq!(run[1], pos2(50.0, 50.0));
+        assert_eq!(run[2], pos2(50.0, 100.0));
+        assert!(visible(&[pos2(-10.0, -10.0), pos2(-10.0, 200.0)], rect, 6.0).is_empty());
     }
 
     /// The edge is reached along the way to a horizon off the picture.
