@@ -163,8 +163,8 @@ iPad, from its accelerometer; a GoPro; a camera with an electronic level —
 recent Canon mirrorless bodies, Panasonic Lumix, Pentax, and Olympus and OM
 System; or a DJI drone, from its gimbal. Nikon records it too, but in a form
 that is not read. A drawing shows the
-camera from behind, pitched and turned as it was over a level floor, with a
-dashed line along where the lens pointed. Rest the pointer anywhere on the
+camera from behind, pitched and turned as it was over a level floor, with the
+picture on its screen and a dashed line along where the lens pointed. Rest the pointer anywhere on the
 section to see the horizon grid on the picture for as long as it stays there
 — the grid `b` keeps up, described under [the interface](KEYS.md#the-interface).
 Its line along the true horizontal has a short tick on the side that is up.

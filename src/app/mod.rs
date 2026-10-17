@@ -1234,6 +1234,11 @@ impl App {
                 self.thumbs.touch(shown);
             }
         }
+        // And the file on screen's, which the camera in the info panel
+        // wears.
+        if let Some(shown) = self.files.shown_path() {
+            self.thumbs.touch(shown);
+        }
         self.thumbs.insert(path, copies);
     }
 
@@ -2121,6 +2126,10 @@ impl App {
                 .map(folder::name),
             picking: self.picking,
             standin,
+            thumb: self
+                .files
+                .shown_path()
+                .and_then(|path| self.thumbs.get(path)),
             waiting: self.replacing().is_some(),
         }
     }

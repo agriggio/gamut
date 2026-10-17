@@ -42,7 +42,7 @@ pub fn paint(painter: &egui::Painter, standin: &Standin, scale: f32) {
         .thumb
         .for_side(placement.width.max(placement.height));
     let mut mesh = egui::Mesh::with_texture(texture.id);
-    for (corner, uv) in corners(rect).into_iter().zip(uvs(standin.turn)) {
+    for (corner, uv) in corners(rect).into_iter().zip(uvs(standin.turn, WHOLE)) {
         mesh.vertices.push(egui::epaint::Vertex {
             pos: corner,
             uv,
@@ -64,14 +64,16 @@ fn corners(rect: egui::Rect) -> [egui::Pos2; 4] {
     ]
 }
 
-/// The texture coordinate at each of [`corners`] under `turn`: a quarter
-/// clockwise brings the thumbnail's bottom left corner to the top left of
-/// the screen, and each corner after it follows round.
-fn uvs(turn: Turn) -> [egui::Pos2; 4] {
-    let stored = corners(egui::Rect::from_min_max(
-        egui::Pos2::ZERO,
-        egui::pos2(1.0, 1.0),
-    ));
+/// The whole of a texture, in its own coordinates.
+pub(super) const WHOLE: egui::Rect =
+    egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0));
+
+/// The texture coordinate at each of [`corners`] under `turn`, for the
+/// part `within` of the thumbnail: a quarter clockwise brings its bottom
+/// left corner to the top left of the screen, and each corner after it
+/// follows round.
+pub(super) fn uvs(turn: Turn, within: egui::Rect) -> [egui::Pos2; 4] {
+    let stored = corners(within);
     let quarters = turn.quarters() as usize;
     std::array::from_fn(|corner| stored[(corner + 4 - quarters) % 4])
 }
@@ -87,19 +89,19 @@ mod tests {
     fn the_thumbnail_is_read_through_the_turn() {
         let at = |x: f32, y: f32| egui::pos2(x, y);
         assert_eq!(
-            uvs(Turn::NONE),
+            uvs(Turn::NONE, WHOLE),
             [at(0.0, 0.0), at(1.0, 0.0), at(1.0, 1.0), at(0.0, 1.0)]
         );
         assert_eq!(
-            uvs(Turn::NONE.clockwise()),
+            uvs(Turn::NONE.clockwise(), WHOLE),
             [at(0.0, 1.0), at(0.0, 0.0), at(1.0, 0.0), at(1.0, 1.0)]
         );
         assert_eq!(
-            uvs(Turn::NONE.clockwise().clockwise()),
+            uvs(Turn::NONE.clockwise().clockwise(), WHOLE),
             [at(1.0, 1.0), at(0.0, 1.0), at(0.0, 0.0), at(1.0, 0.0)]
         );
         assert_eq!(
-            uvs(Turn::NONE.counterclockwise()),
+            uvs(Turn::NONE.counterclockwise(), WHOLE),
             [at(1.0, 0.0), at(1.0, 1.0), at(0.0, 1.0), at(0.0, 0.0)]
         );
     }

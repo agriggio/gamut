@@ -747,6 +747,10 @@ pub struct FrameInput {
     /// picture — the grid, the region, the loupe's rings — is drawn over
     /// the picture it marks, and stays off while this is up.
     pub standin: Option<Standin>,
+    /// The thumbnail of the file on screen, once the thumbnailer has made
+    /// it: what the camera in the info panel's Orientation section wears on
+    /// its screen.
+    pub thumb: Option<Thumb>,
     /// Whether another file's read has been slow enough to say so: the
     /// panels about the file on screen stop saying it, since it is on its
     /// way out, and wait for the file coming in.

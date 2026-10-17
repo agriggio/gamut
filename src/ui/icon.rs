@@ -868,6 +868,11 @@ impl Grid {
 
     /// A stroke `thickness` logical pixels thick, as the nearest whole
     /// number of device pixels and never fewer than one.
+    /// Device pixels to the logical one.
+    pub(super) fn scale(self) -> f32 {
+        self.scale
+    }
+
     pub(super) fn line_width(self, thickness: f32) -> f32 {
         if self.usable() {
             (thickness * self.scale).round().max(1.0) / self.scale

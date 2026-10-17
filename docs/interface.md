@@ -1370,7 +1370,15 @@ angle. Its axes in the world come from gravity alone, with the lens's
 heading fixed straight ahead, since nothing in either source says which way
 the camera pointed across the ground. The eye is behind the camera, so that
 a turn of the picture clockwise on screen is a turn of the drawing clockwise
-too. The level line runs square to gravity's part across the picture, and
+too. The screen on its back wears the file's thumbnail, the one the
+thumbnailer made for the file list (`FrameInput::thumb`), as an egui mesh of
+two triangles: the projection is parallel, so the back is a parallelogram on
+screen and an affine map of the texture onto it is exact. Its corners come
+from the camera's own axes rather than the drawn face, whose order the
+sorting loses, and its texture coordinates go through the turn in force by
+`standin::uvs`, the stand-in's own, since the thumbnail is of the picture as
+the file holds it; a picture further from square than the body's 2 : 1 is
+cropped to the body rather than squeezed. The level line runs square to gravity's part across the picture, and
 where the file gives a 35 mm equivalent focal length it is the true horizon:
 through a rectilinear lens with its axis at the picture's center, the pixel
 `(x, y)` from the center looks along `(x, y, f)`, so the directions square

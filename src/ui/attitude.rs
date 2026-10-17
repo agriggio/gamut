@@ -16,9 +16,11 @@ use egui::{Color32, Pos2, Stroke, pos2, vec2};
 use crate::image::attitude::Shown;
 use crate::render::Color;
 
-use super::Current;
+use crate::image::orient::Turn;
+
 use super::chrome::Pass;
 use super::icon;
+use super::{Current, Thumb, standin};
 use super::{loupe, minimap};
 use crate::theme::Theme;
 
@@ -53,6 +55,9 @@ const BUTTON_ALONG: f32 = 0.55;
 const BACK: Point = [0.0, 0.0, -1.0];
 /// The screen on the back, as a share of the back's size.
 const SCREEN: f32 = 0.72;
+/// What the picture on the screen is multiplied by, so that it sits back
+/// on the shaded body a little rather than glaring out of it.
+const SCREEN_TINT: Color32 = Color32::from_gray(220);
 
 /// How far ahead of the lens the line it looks along runs.
 const SIGHT: f32 = 1.6;
@@ -95,7 +100,9 @@ struct Face {
 }
 
 /// Draws the camera as `shown` says it faced into `rect`, its body the
-/// shape of a picture `size` pixels across and down.
+/// shape of a picture `size` pixels across and down, and on its screen
+/// `thumb`, the file's thumbnail read through the turn in force, where
+/// there is one.
 pub(super) fn diagram(
     theme: &Theme,
     grid: icon::Grid,
@@ -103,6 +110,7 @@ pub(super) fn diagram(
     rect: egui::Rect,
     shown: &Shown,
     size: [f32; 2],
+    thumb: Option<(Thumb, Turn)>,
 ) {
     let axes = camera_axes(shown.gravity);
     let scale = rect.width().min(rect.height() * 1.4) / SCENE_SPAN;
@@ -159,6 +167,17 @@ pub(super) fn diagram(
         LENS_RADIUS * short,
     ));
     let world = |point: Point| carry(axes, point);
+    // The screen's corners clockwise from its top left as the eye behind
+    // the camera sees them: the picture's left is the camera's -x and its
+    // top the camera's -y, as the back is seen from behind.
+    let glass_corners: [Pos2; 4] =
+        [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)].map(|(x, y)| {
+            screen(world([
+                x * SCREEN * half[0],
+                y * SCREEN * half[1],
+                -BODY_DEPTH / 2.0,
+            ]))
+        });
 
     let accent: Color32 = theme.accent.into();
     let edge = Stroke::new(grid.line_width(EDGE), accent);
@@ -223,9 +242,55 @@ pub(super) fn diagram(
                 glass,
                 Stroke::NONE,
             ));
+            if let Some((thumb, turn)) = thumb {
+                painter.add(picture_on_screen(
+                    &thumb,
+                    turn,
+                    size,
+                    aspect,
+                    glass_corners,
+                    grid.scale(),
+                ));
+            }
             outline(painter, &screen, Stroke::new(edge.width, dim));
         }
     }
+}
+
+/// `thumb` laid on the camera's screen at `corners`, clockwise from its top
+/// left, read through `turn` as the picture on screen is. The body is no
+/// further from square than [`MAX_ASPECT`], so a picture `size` across and
+/// down that is, drawn `aspect` wide to its height, gives up its ends.
+fn picture_on_screen(
+    thumb: &Thumb,
+    turn: Turn,
+    size: [f32; 2],
+    aspect: f32,
+    corners: [Pos2; 4],
+    scale: f32,
+) -> egui::Mesh {
+    let side = corners
+        .iter()
+        .flat_map(|a| corners.iter().map(move |b| a.distance(*b)))
+        .fold(0.0, f32::max);
+    let texture = thumb.for_side(side * scale);
+    // The share of the picture kept each way as it is shown, then in the
+    // thumbnail's own axes, which a quarter turn swaps.
+    let picture = size[0] / size[1].max(1.0);
+    let kept = [(aspect / picture).min(1.0), (picture / aspect).min(1.0)];
+    let kept = turn.size(kept);
+    let within = egui::Rect::from_center_size(pos2(0.5, 0.5), vec2(kept[0], kept[1]));
+    let mut mesh = egui::Mesh::with_texture(texture.id);
+    for (pos, uv) in corners.into_iter().zip(standin::uvs(turn, within)) {
+        mesh.vertices.push(egui::epaint::Vertex {
+            pos,
+            uv,
+            color: SCREEN_TINT,
+        });
+    }
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(0, 2, 3);
+    mesh
 }
 
 /// Strokes round `points` edge by edge, each corner rounded. A closed
