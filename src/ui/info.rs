@@ -989,8 +989,10 @@ fn orientation_section(
     table(pass, ui, (first..).zip(&section.facts), width);
     let whole = egui::Rect::from_x_y_ranges(left..=left + width, top..=ui.cursor().min.y);
     // Which line is drawn on the picture is said at the heading's end, as
-    // the pill a section on screen wears — except while the pointer is on
-    // the heading, whose end is the button that copies the section.
+    // the pill a section on screen wears, for as long as it is drawn —
+    // the grid up, or the pointer on the section — except while the
+    // pointer is on the heading, whose end is the button that copies the
+    // section.
     // The section is a preview of the horizon grid: while the pointer is
     // on it the grid is drawn, as the toggle would — unless the toggle has
     // it up already.
@@ -998,7 +1000,7 @@ fn orientation_section(
     if pointed && !pass.panels.horizon_grid {
         attitude::paint(pass, picture, current, &shown, pass.panels.horizon_step);
     }
-    if pointed
+    if (pointed || pass.panels.horizon_grid)
         && let Some(line) = attitude::line(current, &shown)
         && !ui.rect_contains_pointer(heading)
     {

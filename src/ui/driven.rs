@@ -935,6 +935,16 @@ fn the_orientation_section_draws_the_level_line_on_the_picture() {
     harness.get_by_label("Pitch").hover();
     harness.run();
     assert!(said(&harness, "Level"));
+    // With the grid up, the pill says so wherever the pointer is.
+    harness.get_by_label("Samples").hover();
+    harness.run();
+    assert!(!said(&harness, "Level"));
+    harness.state_mut().panels.horizon_grid = true;
+    harness.run();
+    assert!(said(&harness, "Level"));
+    harness.state_mut().panels.horizon_grid = false;
+    harness.get_by_label("Pitch").hover();
+    harness.run();
 
     // Only the true horizon wears a dot, and only a file that says its
     // focal length has one placed; pitched far enough down, it is off the
