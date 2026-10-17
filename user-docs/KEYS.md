@@ -50,9 +50,10 @@ renames on a Mac too, which on a laptop is Fn-`F2` unless the function keys
 are set to act as function keys. `Return` plays an animation, as `Enter` does
 on Linux.
 
-The mouse differs as well. Two fingers on a trackpad, or the wheel of a
-mouse, pan the picture, as they do in every Mac program that shows one; a
-pinch zooms about the pointer, and so does the wheel with `⌘` held. The
+The mouse differs as well. Two fingers on a trackpad, or a mouse that
+scrolls smoothly, pan the picture, as they do in every Mac program that shows
+one; a pinch zooms about the pointer, and so does the scroll with `⌘` held,
+and a mouse's wheel that turns in notches. The
 right button's hold is the loupe, as on Linux: a two-finger click, or
 `⌃`-click, where there is no right button.
 
@@ -1031,7 +1032,7 @@ region behind: it belongs to the picture it was drawn on.
 | Double-click | Actual size, and from actual size back to the whole image | `gesture.image.left.double-click` |
 | `Space`+Drag | Zoom to the box dragged out, wherever the drag begins | |
 | Wheel | Zoom about the pointer | `gesture.image.wheel` |
-| Trackpad scroll | The same, by fractions of a notch | `gesture.image.wheel` |
+| Trackpad scroll | The same, by fractions of a notch | `gesture.image.scroll`, or where it has none, `gesture.image.wheel` |
 | Click a panel button | Show or hide the histogram, the file information, or the minimap | |
 | Press the minimap | Center the view on the point pressed, as near as the image's edges allow, the moment the button goes down | `gesture.minimap.left.drag` |
 | Drag the minimap | Move the view with the pointer, keeping the marked-out part of the map under it | `gesture.minimap.left.drag` |

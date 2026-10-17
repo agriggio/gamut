@@ -97,6 +97,11 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
 
 ### Changed
 
+- On a Mac, a mouse's notched wheel zooms about the pointer, while two
+  fingers on a trackpad, or a mouse that scrolls smoothly, still pan. The
+  two are separate slots now: `gesture.image.wheel` for a wheel that turns
+  in notches and `gesture.image.scroll` for a smooth scroll, which does what
+  the wheel's slot does wherever it has none of its own.
 - The histogram's Image section plots each channel as the file stores it,
   the channels over one another on one plot, each in its own ink and as
   tall as its own share of its pixels, and no longer plots a luminance

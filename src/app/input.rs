@@ -2810,13 +2810,14 @@ impl App {
     ///
     /// A wheel's notch is a step asked for by name, and a zoom or a pan on
     /// it is animated as a key's would be; a trackpad's scroll is the hand
-    /// on the view, as a drag is, and goes where the fingers put it. A wheel
+    /// on the view, as a drag is, and goes where the fingers put it, and is
+    /// looked up as a scroll before it is as the wheel. A wheel
     /// turned with a chord no slot names does nothing: Ctrl with the wheel
     /// is a compositor's gesture unless the configuration says otherwise.
     fn wheel(&mut self, delta: [f32; 2], notched: bool, held: Option<Button>) -> Effect {
-        let Some(action) = self
-            .gestures
-            .wheel(Surface::Image, self.pointer.modifiers, held)
+        let Some(action) =
+            self.gestures
+                .wheel(Surface::Image, self.pointer.modifiers, held, !notched)
         else {
             return Effect::Nothing;
         };
