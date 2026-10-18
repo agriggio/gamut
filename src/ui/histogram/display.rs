@@ -309,7 +309,7 @@ pub(super) fn pixel_mark(current: &Current, headroom: Headroom, x: u32, y: u32) 
         .into_iter()
         .map(|plane| {
             let (value, bin) = match plane.quantity() {
-                Quantity::Luminance => (stats::luminance_of(&sample), luma),
+                Quantity::Luminance => (stats::luminance_of(&current.image, &sample), luma),
                 Quantity::Channel(channel) => {
                     let value = sample.linear()[channel];
                     (value, stats.plot.bin_at(axis.place(value)))

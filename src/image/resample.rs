@@ -63,6 +63,8 @@ pub fn downscale(image: &DecodedImage, side: u32) -> Cow<'_, DecodedImage> {
         gain_map: None,
         depth: None,
         sensor: None,
+        // A photosite averaged with its neighbors is no longer one plane's.
+        mosaic: false,
         ..*image
     })
 }

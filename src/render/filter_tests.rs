@@ -200,6 +200,7 @@ fn gray(width: u32, height: u32, samples: Samples) -> DecodedImage {
         depth: None,
         opens_on: None,
         sensor: None,
+        mosaic: false,
     }
 }
 
@@ -549,6 +550,7 @@ fn a_transparent_texel_does_not_bleed_its_color() {
         depth: None,
         opens_on: None,
         sensor: None,
+        mosaic: false,
     };
 
     let placement = Placement {
@@ -1198,6 +1200,7 @@ fn rgb_f32_row(pixels: &[[f32; 3]], primaries: Primaries) -> DecodedImage {
         depth: None,
         opens_on: None,
         sensor: None,
+        mosaic: false,
     }
 }
 

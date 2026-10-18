@@ -276,7 +276,7 @@ pub(super) fn pixel_mark(
         .into_iter()
         .map(|plane| {
             let value = match plane.quantity() {
-                Quantity::Luminance => stats::luminance_of(&sample),
+                Quantity::Luminance => stats::luminance_of(&current.image, &sample),
                 Quantity::Channel(channel) => sample.linear()[channel],
             };
             let bin = match plane.quantity() {

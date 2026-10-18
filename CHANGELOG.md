@@ -251,6 +251,12 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
 
 ### Fixed
 
+- While a raw's mosaic is shown, the Display and Output histograms' gray
+  plane plots each photosite's count, and the window the mosaic opens on is
+  set from those counts. It was the counts weighted as luminance, which put a
+  red photosite at a fifth of a green one at the same count and left nothing
+  above 72% of white, so the window clipped green while red and blue stayed
+  dim.
 - An iPhone's maker note holding an entry of a type TIFF does not define
   is read rather than passed over whole, so such a file's gain map has the
   headroom the note gives it.
