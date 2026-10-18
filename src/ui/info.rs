@@ -982,8 +982,19 @@ fn orientation_section(
     let (theme, grid) = (pass.theme, pass.grid);
     let thumb = pass.input.thumb.map(|thumb| (thumb, current.turn));
     block(pass, ui, Copyable::Section(place), width, |ui| {
-        let (rect, _) = ui.allocate_exact_size(vec2(width, attitude::HEIGHT), Sense::HOVER);
-        attitude::diagram(theme, grid, ui.painter(), rect, &shown, size, thumb);
+        let heading = current.exif.heading;
+        let height = attitude::HEIGHT + heading.map_or(0.0, |_| attitude::BEARING_ROOM);
+        let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::HOVER);
+        attitude::diagram(
+            theme,
+            grid,
+            ui.painter(),
+            rect,
+            &shown,
+            size,
+            thumb,
+            heading,
+        );
     });
     ui.add_space(HEAD_GAP);
     table(pass, ui, (first..).zip(&section.facts), width);

@@ -26,6 +26,10 @@ use crate::theme::Theme;
 
 /// The diagram's height in the column.
 pub(super) const HEIGHT: f32 = 132.0;
+/// What the diagram grows by where the floor wears the arrows to where the
+/// lens pointed and to north: enough for the floor's near corner and the
+/// words at the end of an arrow toward the eye.
+pub(super) const BEARING_ROOM: f32 = 48.0;
 
 /// The world is the camera's own axes held level: x across to the right,
 /// y down and z ahead. The eye looks at it from behind the camera and to its
@@ -61,6 +65,17 @@ const SCREEN_TINT: Color32 = Color32::from_gray(220);
 
 /// How far ahead of the lens the line it looks along runs.
 const SIGHT: f32 = 1.6;
+
+/// How far across the floor the arrow to where the lens pointed runs, and
+/// the one to north, shorter, so that the two are told apart where they lie
+/// close; the arrowheads' length and half their width; the weight of their
+/// shafts; and the gap between a tip and the words beyond it, in logical
+/// pixels.
+const HEADING_REACH: f32 = 2.0;
+const NORTH_REACH: f32 = 1.3;
+const ARROW_HEAD: [f32; 2] = [0.32, 0.14];
+const ARROW_LINE: f32 = 1.5;
+const ARROW_GAP: f32 = 3.0;
 
 /// The most a picture's sides are drawn apart, so a panorama is still a
 /// camera rather than a plank.
@@ -102,7 +117,10 @@ struct Face {
 /// Draws the camera as `shown` says it faced into `rect`, its body the
 /// shape of a picture `size` pixels across and down, and on its screen
 /// `thumb`, the file's thumbnail read through the turn in force, where
-/// there is one.
+/// there is one. Where the file says the bearing the lens pointed on,
+/// `heading`, the floor wears an arrow along that way, written with the
+/// bearing, and another to north.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn diagram(
     theme: &Theme,
     grid: icon::Grid,
@@ -111,10 +129,14 @@ pub(super) fn diagram(
     shown: &Shown,
     size: [f32; 2],
     thumb: Option<(Thumb, Turn)>,
+    heading: Option<f64>,
 ) {
     let axes = camera_axes(shown.gravity);
-    let scale = rect.width().min(rect.height() * 1.4) / SCENE_SPAN;
-    let center = rect.center() + vec2(-0.3 * scale, -0.35 * scale);
+    // Placed from the top by the height without the arrows, so that the
+    // camera is drawn the same size and in the same place with them.
+    let scale = rect.width().min(HEIGHT * 1.4) / SCENE_SPAN;
+    let center =
+        pos2(rect.center().x, rect.top() + HEIGHT / 2.0) + vec2(-0.3 * scale, -0.35 * scale);
     let eye = |point: Point| view(point);
     let screen = |point: Point| {
         let [x, y, _] = eye(point);
@@ -146,6 +168,36 @@ pub(super) fn diagram(
         DASH / 2.0,
         GAP / 2.0,
     ));
+    let accent: Color32 = theme.accent.into();
+    // Where the lens pointed and where north is, out from gravity's foot
+    // across the floor. The lens points along +z as far as it points
+    // anywhere level, and bearings run clockwise seen from above, toward
+    // +x; north is the lens's bearing back from it.
+    if let Some(heading) = heading {
+        let stroke = |ink| Stroke::new(grid.line_width(ARROW_LINE), ink);
+        let north = (-heading as f32).to_radians();
+        let bearing = format!("{}\u{00b0}", heading.round() as u32 % 360);
+        // North over the lens's way, whose arrow runs out past its words
+        // where the two lie close.
+        floor_arrow(
+            painter,
+            &screen,
+            0.0,
+            HEADING_REACH,
+            &bearing,
+            stroke(accent),
+            theme.bar_background.into(),
+        );
+        floor_arrow(
+            painter,
+            &screen,
+            north,
+            NORTH_REACH,
+            "N",
+            stroke(theme.text_primary.into()),
+            theme.bar_background.into(),
+        );
+    }
 
     // The solids, in the camera's axes and then carried into the world's.
     let aspect = (size[0] / size[1].max(1.0)).clamp(1.0 / MAX_ASPECT, MAX_ASPECT);
@@ -189,7 +241,6 @@ pub(super) fn diagram(
             ]))
         });
 
-    let accent: Color32 = theme.accent.into();
     let edge = Stroke::new(grid.line_width(EDGE), accent);
     // Facing away from the eye, which looks along +z, or so nearly edge-on
     // that it is a sliver, whose sharp corners would be stroked as spikes.
@@ -285,6 +336,63 @@ pub(super) fn diagram(
             outline(painter, &screen, Stroke::new(edge.width, dim));
         }
     }
+}
+
+/// An arrow on the floor from under the camera out `reach` along the way
+/// `angle` radians clockwise from the lens's, seen from above, in
+/// `stroke`, and `words` beyond its tip on a patch of `ground`, the
+/// panel's, so that the other arrow passing under them leaves them clear.
+fn floor_arrow(
+    painter: &egui::Painter,
+    screen: &impl Fn(Point) -> Pos2,
+    angle: f32,
+    reach: f32,
+    words: &str,
+    stroke: Stroke,
+    ground: Color32,
+) {
+    let (sin, cos) = angle.sin_cos();
+    // `along` out the way and `aside` square to it, to its right.
+    let at = |along: f32, aside: f32| {
+        screen([
+            along * sin + aside * cos,
+            FLOOR_DROP,
+            along * cos - aside * sin,
+        ])
+    };
+    let [length, half] = ARROW_HEAD;
+    painter.line_segment([at(0.0, 0.0), at(reach - length, 0.0)], stroke);
+    let mut head = vec![
+        at(reach, 0.0),
+        at(reach - length, half),
+        at(reach - length, -half),
+    ];
+    if signed_area(&head) < 0.0 {
+        head.reverse();
+    }
+    painter.add(egui::Shape::convex_polygon(
+        head,
+        stroke.color,
+        Stroke::NONE,
+    ));
+    // The words beyond the tip, their middle as far out along the arrow
+    // as keeps the whole of them clear of it.
+    let tip = at(reach, 0.0);
+    let out = (tip - at(reach - length, 0.0)).normalized();
+    let galley = painter.layout_no_wrap(
+        words.to_string(),
+        egui::FontId::proportional(BEARING_SIZE),
+        Color32::PLACEHOLDER,
+    );
+    let extent = galley.size();
+    let clear = (out.x.abs() * extent.x + out.y.abs() * extent.y) / 2.0;
+    let middle = tip + out * (ARROW_GAP + clear);
+    painter.rect_filled(
+        egui::Rect::from_center_size(middle, extent + vec2(2.0, 0.0)),
+        2.0,
+        ground,
+    );
+    painter.galley(middle - extent / 2.0, galley, stroke.color);
 }
 
 /// `thumb` laid on the camera's screen at `corners`, clockwise from its top

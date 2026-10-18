@@ -14,7 +14,9 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
   Canon mirrorless, Panasonic, Pentax, Olympus or OM System camera, or a
   DJI drone's gimbal. It draws the camera in three
   dimensions as it was pitched and turned over a level floor, the picture on
-  its screen, and says how
+  its screen — and, for a file that records the compass bearing the lens
+  pointed on, an arrow across the floor that way, labeled with the bearing,
+  beside one to north — and says how
   far the lens pointed up or down and how far the horizon runs from level
   in the picture as shown. Resting the pointer on the section draws the
   true horizon across the picture, for a file that records its 35 mm
