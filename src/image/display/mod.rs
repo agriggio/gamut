@@ -757,6 +757,7 @@ mod tests {
             depth: None,
             opens_on: None,
             sensor: None,
+            mosaic: false,
         }
     }
 
@@ -788,6 +789,7 @@ mod tests {
             depth: None,
             opens_on: None,
             sensor: None,
+            mosaic: false,
         }
     }
 
@@ -871,6 +873,7 @@ mod tests {
             depth: None,
             opens_on: None,
             sensor: None,
+            mosaic: false,
         };
         let p3 = red(Primaries::DisplayP3);
         let stats = Stats::scan(&p3);
@@ -1011,6 +1014,7 @@ mod tests {
             depth: None,
             opens_on: None,
             sensor: None,
+            mosaic: false,
         };
         let sample = image.sample(0, 0, None).expect("inside");
 

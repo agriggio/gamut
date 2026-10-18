@@ -342,6 +342,7 @@ impl Sensor {
             AlphaMode::Opaque,
         );
         image.referred = Referred::Measured;
+        image.mosaic = !mono;
         Some(image)
     }
 }
@@ -444,6 +445,46 @@ mod tests {
         assert_eq!(pixel(0, 1), [0, 0, code(2000.0)]);
         assert_eq!(pixel(0, 2), [0, 0, 0]);
         assert_eq!(pixel(1, 3), [0, 65535, 0]);
+    }
+
+    /// The mosaic's one value a pixel is its photosite's count, whichever
+    /// plane it is under: a sensor clipped everywhere is at white in every
+    /// pixel, where BT.709's weights would put its red at a fifth of it,
+    /// its blue at a fourteenth and nothing above its green's 0.7152.
+    #[test]
+    fn the_mosaic_is_measured_on_its_photosites() {
+        let mosaic = Mosaic {
+            width: 2,
+            height: 2,
+            counts: vec![4110; 4],
+            pattern: rggb(),
+        };
+        let stored = Arc::new(mosaic.tally(4110.0));
+        let sensor = Sensor {
+            layout: Layout::Mosaic(mosaic),
+            turned: orient::from_tag(None),
+            white: 4110.0,
+            black: vec![15.0; 3],
+            stored,
+            development: Development {
+                demosaic: Demosaic::Ahd,
+                balance: [1.0; 3],
+                kelvin: None,
+            },
+        };
+        let image = sensor.mosaic_image().expect("a mosaic");
+        assert!(image.mosaic);
+        let stats = crate::image::stats::Stats::scan(&image);
+        assert_eq!((stats.min, stats.max), (1.0, 1.0));
+        assert_eq!(stats.percentile(0.5), 1.0);
+        for (x, y) in [(0, 0), (1, 0), (1, 1)] {
+            let sample = image.sample(x, y, None).expect("a pixel");
+            assert_eq!(
+                crate::image::stats::luminance_of(&image, &sample),
+                1.0,
+                "({x}, {y})"
+            );
+        }
     }
 
     /// A 4 by 2 mosaic, turned a quarter turn as the camera was held: the

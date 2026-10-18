@@ -118,7 +118,7 @@ impl Axis {
     /// for a value the scan would have thrown out as nodata. See
     /// [`Plot::bin_of`] for why it is read from [`Sample::linear`].
     pub fn place_of(self, image: &DecodedImage, sample: &Sample) -> Option<f32> {
-        let value = luminance(sample.linear(), sample.channels);
+        let value = luminance(sample.linear(), sample.channels, image.mosaic);
         if !value.is_finite() || image.nodata.is_some_and(|sentinel| value == sentinel) {
             return None;
         }
@@ -1452,7 +1452,7 @@ impl<R: Raw> Visit<R> for Counting<'_> {
                         tallies.peak = tallies.peak.max(value);
                     }
                 }
-                let value = luminance(shown, pass.channels);
+                let value = luminance(shown, pass.channels, pass.image.mosaic);
                 if pass.is_data(value) {
                     tallies.counted += 1;
                     tallies.min = tallies.min.min(value);
@@ -1557,7 +1557,7 @@ impl<R: Raw> Visit<R> for Binning<'_> {
             }
         }
         if let Some(bins) = self.luma.as_mut() {
-            let value = luminance(shown, pass.channels);
+            let value = luminance(shown, pass.channels, pass.image.mosaic);
             if pass.is_data(value)
                 && let Some(bin) = Self::bin(self.range, axis.place(value))
             {
@@ -2021,17 +2021,24 @@ enum Placed {
     Linear,
 }
 
-/// The luminance of one pixel read back, in linear light, as the scan
-/// works it out: what [`Stats::rank`] ranks for [`Quantity::Luminance`].
-pub fn luminance_of(sample: &Sample) -> f32 {
-    luminance(sample.linear(), sample.channels)
+/// The luminance of one pixel of `image` read back, in linear light, as
+/// the scan works it out: what [`Stats::rank`] ranks for
+/// [`Quantity::Luminance`].
+pub fn luminance_of(image: &DecodedImage, sample: &Sample) -> f32 {
+    luminance(sample.linear(), sample.channels, image.mosaic)
 }
 
 /// Gray uses its one channel; color collapses to relative luminance,
-/// weighted for the BT.709 primaries the working space uses.
-fn luminance(pixel: &[f32], channels: Channels) -> f32 {
+/// weighted for the BT.709 primaries the working space uses. A pixel of a
+/// `mosaic` is one photosite, lit in its own plane with the others at
+/// nothing, and its value is that plane's: weighted, a red photosite would
+/// read a fifth of what a green one at the same count does, and the plot
+/// would be the three planes' counts squeezed under three different ends.
+fn luminance(pixel: &[f32], channels: Channels, mosaic: bool) -> f32 {
     if channels.is_gray() {
         pixel[0]
+    } else if mosaic {
+        pixel[0].max(pixel[1]).max(pixel[2])
     } else {
         0.2126 * pixel[0] + 0.7152 * pixel[1] + 0.0722 * pixel[2]
     }
@@ -2340,6 +2347,7 @@ mod tests {
             depth: None,
             opens_on: None,
             sensor: None,
+            mosaic: false,
         }
     }
 
@@ -2441,6 +2449,7 @@ mod tests {
             depth: None,
             opens_on: None,
             sensor: None,
+            mosaic: false,
         };
         let key = Stats::scan(&element).key.unwrap();
         assert!((key - 0.5).abs() < 1e-3, "{key}");
@@ -2481,6 +2490,7 @@ mod tests {
             depth: None,
             opens_on: None,
             sensor: None,
+            mosaic: false,
         }
     }
 
@@ -2564,6 +2574,7 @@ mod tests {
             depth: None,
             opens_on: None,
             sensor: None,
+            mosaic: false,
         }
     }
 
@@ -2674,6 +2685,7 @@ mod tests {
                                 depth: None,
                                 opens_on: None,
                                 sensor: None,
+                                mosaic: false,
                             };
                             let table = lifted.then(|| {
                                 let map = GainMap {
@@ -2703,7 +2715,7 @@ mod tests {
                                 for x in 0..width {
                                     let sample = image.sample(x, y, table.as_ref()).unwrap();
                                     let linear = sample.linear();
-                                    let value = luminance(linear, channels);
+                                    let value = luminance(linear, channels, false);
                                     min = min.min(value);
                                     max = max.max(value);
                                     lumas.push(value);
@@ -2897,6 +2909,7 @@ mod tests {
             depth: None,
             opens_on: None,
             sensor: None,
+            mosaic: false,
         };
 
         let p3 = Stats::scan(&red(Primaries::DisplayP3));
@@ -2965,6 +2978,7 @@ mod tests {
             depth: None,
             opens_on: None,
             sensor: None,
+            mosaic: false,
         };
         let stats = Stats::scan(&image);
         let plot = &stats.plot;
@@ -3014,6 +3028,7 @@ mod tests {
             depth: None,
             opens_on: None,
             sensor: None,
+            mosaic: false,
         };
         // BT.709 luminance weights green at 0.7152.
         assert!((Stats::scan(&green).max - 0.7152).abs() < 1e-4);
@@ -3036,6 +3051,7 @@ mod tests {
             depth: None,
             opens_on: None,
             sensor: None,
+            mosaic: false,
         }
     }
 
@@ -3217,6 +3233,7 @@ mod tests {
             depth: None,
             opens_on: None,
             sensor: None,
+            mosaic: false,
         }
     }
 
@@ -3469,6 +3486,7 @@ mod tests {
             depth: None,
             opens_on: None,
             sensor: None,
+            mosaic: false,
         };
         let stats = Stats::scan(&image);
         assert!((stats.min - 0.25).abs() < 1e-6);

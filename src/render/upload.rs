@@ -551,6 +551,7 @@ mod tests {
             depth: None,
             opens_on: None,
             sensor: None,
+            mosaic: false,
         }
     }
 
@@ -771,6 +772,7 @@ mod tests {
                     depth: None,
                     opens_on: None,
                     sensor: None,
+                    mosaic: false,
                 };
                 let plan = plan(&decoded, capabilities);
                 assert_eq!(

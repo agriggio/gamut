@@ -62,7 +62,13 @@ counts rather than plotting the mosaic's samples (`counts_of` in
 with the other two channels at nothing, and a plot of its samples would be
 the same counts rescaled under three spikes at zero. The Develop section is
 left out, its plots being of the developed picture, which is not up; the
-photosites at the Image section's foot stay where they are.
+photosites at the Image section's foot stay where they are. The Display
+and Output sections' luminance plane is the photosite's count, the one
+channel the pixel has lit (`DecodedImage::mosaic`, read by
+`stats::luminance`): BT.709's weights would put a red photosite at a fifth
+of a green one at the same count, and the plane would be the three planes'
+counts squeezed under three different ends. The window the mosaic opens on
+is the percentile window read from those counts.
 
 Every section is a fixed height (`Section::height`), and the column is as
 tall as its sections, whatever the window. The two exceptions are both the

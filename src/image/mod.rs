@@ -377,6 +377,12 @@ pub struct DecodedImage {
     /// raw, and the Develop section says what was done to. `None` for a
     /// picture that is what its file holds. See [`sensor`].
     pub sensor: Option<sensor::Shared>,
+    /// Whether each pixel is one photosite of a raw's mosaic, lit in its
+    /// own plane alone with the other two at nothing: see
+    /// [`sensor::Sensor::mosaic_image`]. Such a pixel's one value is the
+    /// plane it has, not a luminance weighting it among two that measured
+    /// nothing — see [`stats::luminance_of`].
+    pub mosaic: bool,
 }
 
 impl DecodedImage {
@@ -403,6 +409,7 @@ impl DecodedImage {
             depth: None,
             opens_on: None,
             sensor: None,
+            mosaic: false,
         }
     }
 
@@ -790,6 +797,7 @@ mod tests {
             depth: None,
             opens_on: None,
             sensor: None,
+            mosaic: false,
         }
     }
 
@@ -861,6 +869,7 @@ mod tests {
             depth: None,
             opens_on: None,
             sensor: None,
+            mosaic: false,
         };
 
         let sample = image.sample(0, 0, None).expect("inside the image");
