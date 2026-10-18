@@ -64,40 +64,6 @@ is shown in its place. Its heading wears a *Showing* pill while the picture is o
 | Exposure applied | Radiance HDR only: the multiplier the file says was already applied. |
 | Holds | For an animation, how many frames and how it loops; for a file of pages, how many and which one this is. |
 
-## Gain map
-
-Only for a picture that carries a gain map: an HDR photograph from a recent
-phone, as a JPEG or a HEIC. It describes the map whether the picture or the
-map is on screen; while the map is shown in the picture's place, its heading
-wears a *Showing* pill.
-
-| Field | What it says |
-| --- | --- |
-| Resolution | The map's own size, usually a quarter of the picture's or less. |
-| Samples | *8-bit luminance* for a map that brightens all three colors alike, *8-bit RGB* for one with a channel for each. |
-| Precision | Only while the map is shown, and only when the GPU could not hold it at full precision, and why. |
-| Described by | Whose description of the map the file gives: ISO 21496-1, the standard Android phones and recent iPhones write, or Apple, an older iPhone's own. |
-| HDR headroom | How far above SDR white the HDR version of the photograph reaches, in stops. Each stop is twice as bright. |
-| Lift | How far the map brightens the picture where it brightens it most, in stops. It can be less than the headroom: a scene with no bright highlights needs little of it. |
-| Applied | How much of the headroom your display is showing, in stops. *none* on a display with no room above white, which shows the photograph as the phone graded it for SDR. |
-
-## Depth map
-
-Only for a picture that carries a depth map: an iPhone portrait, or a JPEG
-with Google's depth data. It describes the map whether the picture or the
-map is on screen; while the map is shown in the picture's place, its heading
-wears a *Showing* pill.
-
-| Field | What it says |
-| --- | --- |
-| Resolution | The map's own size, usually much smaller than the picture's. |
-| Samples | Bits per sample of the map. |
-| Precision | Only while the map is shown, and only when the GPU could not hold it at full precision, and why. |
-| Described by | Apple or Google: whose description of the map the file carries. |
-| Encoding | *distance* or *inverse distance*, which is what the map's numbers are spread over. *unknown* where the file does not say; the pixel readout then shows the raw numbers. |
-| Range | The nearest and farthest distances the map can express. |
-| Accuracy | *absolute*, or *relative* where the file says the distances are only estimated. An iPhone's dual-camera portrait is relative: nearer and farther are right, but the distances themselves are not, and are marked `≈`. Google's depth data does not say, and is shown as absolute. |
-
 ## Camera
 
 Headed by the camera's make and model. For a camera raw, anything the EXIF
@@ -141,22 +107,6 @@ them. The map button opens where the picture was taken in the browser; the
 | Speed | How fast the camera was moving, in km/h, mph or knots, as the file records it. |
 | Positioning error | How far off the recorded position may be, as the GPS judged it. |
 
-## Georeference
-
-Only for a raster that says where its pixels are on the ground, such as a
-GeoTIFF elevation model or scanned map.
-
-| Field | What it says |
-| --- | --- |
-| Coordinate system | The projection or the geographic system the coordinates are in, by name and EPSG code as the file gives them. They are not looked up, so what you see is what was written. |
-| Vertical system | What the heights are measured from. |
-| Pixel is | Whether a coordinate is a pixel's corner or its center. |
-| Pixel size | How much ground one pixel covers, in the coordinates' unit. |
-| Origin | The coordinates of the top left corner. |
-| Min easting, Max easting, Min northing, Max northing | The ground the raster covers. For geographic coordinates these are longitude and latitude. |
-| Orientation | Only where the raster is rotated against the map's axes. |
-| No data | The value that marks a pixel with no data. |
-
 ## Orientation
 
 Only for a picture whose camera recorded which way it faced: an iPhone or
@@ -165,7 +115,10 @@ recent Canon mirrorless bodies, Panasonic Lumix, Pentax, and Olympus and OM
 System; or a DJI drone, from its gimbal. Nikon records it too, but in a form
 that is not read. A drawing shows the
 camera from behind, pitched and turned as it was over a level floor, with the
-picture on its screen and a dashed line along where the lens pointed. Rest the pointer anywhere on the
+picture on its screen and a dashed line along where the lens pointed. Where
+the file records the compass bearing the lens pointed on, an arrow across the
+floor runs that way, labeled with the bearing, and a shorter one marked *N*
+points north. Rest the pointer anywhere on the
 section to see the horizon grid on the picture for as long as it stays there
 — the grid `b` keeps up, described under [the interface](KEYS.md#the-interface).
 Its line along the true horizontal has a short tick on the side that is up.
@@ -193,6 +146,40 @@ distortion, moves the true horizon away from where it is drawn.
 A picture an editor turned upright and saved again without its orientation
 is assumed to have been turned whichever way stands it upright.
 
+## Gain map
+
+Only for a picture that carries a gain map: an HDR photograph from a recent
+phone, as a JPEG or a HEIC. It describes the map whether the picture or the
+map is on screen; while the map is shown in the picture's place, its heading
+wears a *Showing* pill.
+
+| Field | What it says |
+| --- | --- |
+| Resolution | The map's own size, usually a quarter of the picture's or less. |
+| Samples | *8-bit luminance* for a map that brightens all three colors alike, *8-bit RGB* for one with a channel for each. |
+| Precision | Only while the map is shown, and only when the GPU could not hold it at full precision, and why. |
+| Described by | Whose description of the map the file gives: ISO 21496-1, the standard Android phones and recent iPhones write, or Apple, an older iPhone's own. |
+| HDR headroom | How far above SDR white the HDR version of the photograph reaches, in stops. Each stop is twice as bright. |
+| Lift | How far the map brightens the picture where it brightens it most, in stops. It can be less than the headroom: a scene with no bright highlights needs little of it. |
+| Applied | How much of the headroom your display is showing, in stops. *none* on a display with no room above white, which shows the photograph as the phone graded it for SDR. |
+
+## Depth map
+
+Only for a picture that carries a depth map: an iPhone portrait, or a JPEG
+with Google's depth data. It describes the map whether the picture or the
+map is on screen; while the map is shown in the picture's place, its heading
+wears a *Showing* pill.
+
+| Field | What it says |
+| --- | --- |
+| Resolution | The map's own size, usually much smaller than the picture's. |
+| Samples | Bits per sample of the map. |
+| Precision | Only while the map is shown, and only when the GPU could not hold it at full precision, and why. |
+| Described by | Apple or Google: whose description of the map the file carries. |
+| Encoding | *distance* or *inverse distance*, which is what the map's numbers are spread over. *unknown* where the file does not say; the pixel readout then shows the raw numbers. |
+| Range | The nearest and farthest distances the map can express. |
+| Accuracy | *absolute*, or *relative* where the file says the distances are only estimated. An iPhone's dual-camera portrait is relative: nearer and farther are right, but the distances themselves are not, and are marked `≈`. Google's depth data does not say, and is shown as absolute. |
+
 ## Regions
 
 The regions the file marks out on the picture, as a table of their subject,
@@ -212,6 +199,22 @@ The regions come from:
 The subject column names who is in the region, or what kind of region it is
 where nothing says. Anything else written about it, such as a description,
 a barcode's value or whether it was a focus point, is in its tooltip.
+
+## Georeference
+
+Only for a raster that says where its pixels are on the ground, such as a
+GeoTIFF elevation model or scanned map.
+
+| Field | What it says |
+| --- | --- |
+| Coordinate system | The projection or the geographic system the coordinates are in, by name and EPSG code as the file gives them. They are not looked up, so what you see is what was written. |
+| Vertical system | What the heights are measured from. |
+| Pixel is | Whether a coordinate is a pixel's corner or its center. |
+| Pixel size | How much ground one pixel covers, in the coordinates' unit. |
+| Origin | The coordinates of the top left corner. |
+| Min easting, Max easting, Min northing, Max northing | The ground the raster covers. For geographic coordinates these are longitude and latitude. |
+| Orientation | Only where the raster is rotated against the map's axes. |
+| No data | The value that marks a pixel with no data. |
 
 ## Every tag
 

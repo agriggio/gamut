@@ -986,7 +986,25 @@ fn the_orientation_section_draws_the_level_line_on_the_picture() {
     }
     assert!(said(&harness, "210\u{00b0}"));
     assert!(said(&harness, "220\u{00b0}"));
-    assert!(!said(&harness, "212\u{00b0}"));
+    // The bearing itself is the camera's, written at the end of the arrow
+    // along the floor in the section beside north's, and on no upright.
+    let at = |harness: &Harness<'static, State>, word: &str| -> Vec<f32> {
+        harness
+            .output()
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == word => Some(text.pos.x),
+                _ => None,
+            })
+            .collect()
+    };
+    let bearing = at(&harness, "212\u{00b0}");
+    assert_eq!(bearing.len(), 1);
+    assert!(bearing[0] > side.min.x);
+    let north = at(&harness, "N");
+    assert_eq!(north.len(), 1);
+    assert!(north[0] > side.min.x);
 }
 
 /// The side panel is laid out where the chrome's geometry says, between

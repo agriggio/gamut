@@ -982,8 +982,19 @@ fn orientation_section(
     let (theme, grid) = (pass.theme, pass.grid);
     let thumb = pass.input.thumb.map(|thumb| (thumb, current.turn));
     block(pass, ui, Copyable::Section(place), width, |ui| {
-        let (rect, _) = ui.allocate_exact_size(vec2(width, attitude::HEIGHT), Sense::HOVER);
-        attitude::diagram(theme, grid, ui.painter(), rect, &shown, size, thumb);
+        let heading = current.exif.heading;
+        let height = attitude::HEIGHT + heading.map_or(0.0, |_| attitude::BEARING_ROOM);
+        let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::HOVER);
+        attitude::diagram(
+            theme,
+            grid,
+            ui.painter(),
+            rect,
+            &shown,
+            size,
+            thumb,
+            heading,
+        );
     });
     ui.add_space(HEAD_GAP);
     table(pass, ui, (first..).zip(&section.facts), width);
@@ -1458,9 +1469,10 @@ fn offer(
 
 /// Everything the panel has to say, in the order it says it: the file on
 /// disk, then what somebody wrote about the picture in it, then the picture
-/// itself and the gain map and depth map it carries, then what else its metadata has to
-/// say — the camera, the exposure, the place, the ground — and last the
-/// regions it marks out on the picture.
+/// itself, then what its metadata says of how it was taken — the camera, the
+/// exposure, the place and which way the camera faced — then the gain map,
+/// profile and depth map it carries, the regions it marks out on the picture,
+/// and last where its pixels are on the ground.
 ///
 /// A field the file would not give up is left out, a name with a blank under
 /// it saying less than nothing; a section left with nothing in it goes too,
@@ -1469,23 +1481,20 @@ fn offer(
 /// has a size and a picture always has a color space.
 fn contents(current: &Current) -> Contents {
     let exif = &current.exif;
-    // What somebody wrote says what the picture is, so it comes before
-    // how the picture is stored; the rest of the metadata, after.
-    let (about, captured): (Vec<_>, Vec<_>) = exif
-        .sections
-        .iter()
-        .partition(|section| section.group == Group::About);
+    let metadata = |group: Group| {
+        exif.sections
+            .iter()
+            .filter(move |section| section.group == group)
+            .map(|section| metadata_section(exif, section))
+    };
     let mut sections = vec![Section::new(
         "File",
         Face::File,
         fields(file_facts(current)),
     )];
-    sections.extend(
-        about
-            .into_iter()
-            .map(|section| metadata_section(exif, section)),
-    );
-    // The pill goes on whichever of the two is on screen.
+    // What somebody wrote says what the picture is, so it comes before
+    // how the picture is stored.
+    sections.extend(metadata(Group::About));
     sections.push(Section {
         showing: current.showing == Showing::Picture,
         ..Section::new(
@@ -1499,6 +1508,25 @@ fn contents(current: &Current) -> Contents {
             fields(image_facts(current)),
         )
     });
+    sections.extend(metadata(Group::Camera));
+    sections.extend(metadata(Group::Exposure));
+    sections.extend(metadata(Group::Location));
+    // Which way the camera faced, worked out in the picture as shown, which
+    // the turn in force decides as it does for the regions.
+    if let Some(attitude) = &exif.attitude
+        && let Some(shown) = attitude::shown(current)
+    {
+        let face = current.picture_face();
+        let size = current.turn.size([face.image.width, face.image.height]);
+        sections.push(Section {
+            attitude: Some((shown, size.map(|side| side as f32))),
+            ..Section::new(
+                ORIENTATION,
+                Face::Orientation,
+                fields(orientation_facts(attitude, &shown)),
+            )
+        });
+    }
     sections.push(Section {
         showing: current.showing == Showing::Auxiliary(Auxiliary::GainMap),
         ..Section::new(
@@ -1538,27 +1566,6 @@ fn contents(current: &Current) -> Contents {
             fields(depth_facts(current)),
         )
     });
-    sections.extend(
-        captured
-            .into_iter()
-            .map(|section| metadata_section(exif, section)),
-    );
-    // Which way the camera faced, worked out in the picture as shown, which
-    // the turn in force decides as it does for the regions.
-    if let Some(attitude) = &exif.attitude
-        && let Some(shown) = attitude::shown(current)
-    {
-        let face = current.picture_face();
-        let size = current.turn.size([face.image.width, face.image.height]);
-        sections.push(Section {
-            attitude: Some((shown, size.map(|side| side as f32))),
-            ..Section::new(
-                ORIENTATION,
-                Face::Orientation,
-                fields(orientation_facts(attitude, &shown)),
-            )
-        });
-    }
     // The regions are written out here rather than with the rest, since
     // where each is depends on the turn in force.
     // Each is copied as its row of the table, which is never empty, so the
@@ -1573,6 +1580,7 @@ fn contents(current: &Current) -> Contents {
         regions,
         ..Section::new(REGIONS, Face::Regions, facts)
     });
+    sections.extend(metadata(Group::Georeference));
     sections.retain(|section| !section.facts.is_empty());
     Contents { sections }
 }
