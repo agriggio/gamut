@@ -550,6 +550,7 @@ pub fn disabled(tip: Tip, conditions: Conditions) -> Option<Refused> {
                 | Control::Mosaic
                 | Control::ShowMosaic
                 | Control::Profile
+                | Control::HorizonGrid
                 | Control::Play
                 | Control::StepBack
                 | Control::StepForward
@@ -1169,6 +1170,7 @@ mod tests {
             Control::OpenIn,
             Control::TurnLeft,
             Control::TurnRight,
+            Control::HorizonGrid,
             Control::Play,
             Control::StepBack,
             Control::StepForward,

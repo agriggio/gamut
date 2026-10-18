@@ -690,7 +690,9 @@ impl App {
                     }
             }
             Does::Action(_) => met && !(conditions.nothing_open && about_picture(does)),
-            Does::Magnification(_) | Does::HorizonStep(_) => true,
+            Does::Magnification(_) => true,
+            // The spacings wait on what the key that steps them does.
+            Does::HorizonStep(_) => !self.refuses(Control::HorizonGrid),
         }
     }
 
@@ -713,9 +715,11 @@ impl App {
                 | Control::Histogram
                 | Control::Info
                 | Control::Grid
-                | Control::HorizonGrid
                 | Control::Loupe
                 | Control::Marks => panels.lit(control),
+                // Unchecked while refused, as its button is unlit: the grid
+                // stays asked for, but there is no grid on this file.
+                Control::HorizonGrid => panels.lit(control) && !self.refuses(control),
                 Control::Depth => current
                     .is_some_and(|current| current.showing == Showing::Auxiliary(Auxiliary::Depth)),
                 Control::GainMap => current.is_some_and(|current| {

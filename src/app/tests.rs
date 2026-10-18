@@ -4861,7 +4861,9 @@ fn i_and_shift_i_each_put_up_their_own_tab() {
 /// its camera faced, and its tooltip says so. For one that does, it comes
 /// on with the pointer's readout following it into the ways the pixels
 /// look — where the readout was the pixel's — and back out; a readout
-/// chosen otherwise is left alone. The key steps the spacing round.
+/// chosen otherwise is left alone. Left on, it stays asked for on a
+/// picture without an orientation, where its toggle and the key that steps
+/// its spacing are refused. The key steps the spacing round.
 #[test]
 fn the_horizon_grid_needs_an_orientation_and_brings_the_direction() {
     use crate::image::attitude::Attitude;
@@ -4891,6 +4893,19 @@ fn the_horizon_grid_needs_an_orientation_and_brings_the_direction() {
     assert_eq!(app.press(ui::Control::HorizonGrid), Effect::Redraw);
     assert_eq!(app.press(ui::Control::HorizonGrid), Effect::Redraw);
     assert_eq!(app.panels.coordinate_format, CoordinateFormat::Geographic);
+
+    assert_eq!(app.press(ui::Control::HorizonGrid), Effect::Redraw);
+    let current = app.current.as_mut().expect("a.png is on screen");
+    let attitude = current.exif.attitude.take();
+    assert_eq!(app.press(ui::Control::HorizonGrid), Effect::Nothing);
+    assert_eq!(app.perform(Action::CycleHorizonStep), Effect::Nothing);
+    assert!(app.panels.horizon_grid, "still asked for");
+    app.current
+        .as_mut()
+        .expect("a.png is on screen")
+        .exif
+        .attitude = attitude;
+    assert_eq!(app.press(ui::Control::HorizonGrid), Effect::Redraw);
 
     assert_eq!(app.panels.horizon_step, 10.0);
     for step in [15.0, 30.0, 5.0, 10.0] {

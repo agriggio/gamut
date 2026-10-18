@@ -2253,6 +2253,9 @@ impl App {
             ToggleMinimap => return self.press(Control::Minimap),
             ToggleGrid => return self.press(Control::Grid),
             ToggleHorizonGrid => return self.press(Control::HorizonGrid),
+            // Refused where the grid's toggle is, so that a spacing is never
+            // chosen for a grid that cannot be seen.
+            CycleHorizonStep if self.refuses(Control::HorizonGrid) => return Effect::Nothing,
             CycleHorizonStep => {
                 self.panels.horizon_step = ui::attitude::cycle(self.panels.horizon_step);
                 return Effect::Redraw;
