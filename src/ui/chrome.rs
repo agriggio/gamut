@@ -85,6 +85,9 @@ struct Worded<'a> {
     control: Control,
     words: Option<&'a str>,
     lit: bool,
+    /// Whether a press would do anything; a button that would not is drawn
+    /// dead and names its reason rather than itself.
+    enabled: bool,
     /// The width the words' place is held at, whatever they come to.
     room: f32,
     /// What the button is called where it is read out, in place of the
@@ -642,7 +645,7 @@ impl Pass<'_> {
                     ui.add_space(BAR_PADDING);
                     self.grid_toggle(ui, spacing.as_deref());
                     ui.add_space(BUTTON_GAP);
-                    self.horizon_toggle(ui);
+                    self.horizon_toggle(ui, current);
                     ui.add_space(BUTTON_GAP);
                     self.loupe_toggle(ui);
                     ui.add_space(BUTTON_GAP);
@@ -726,6 +729,7 @@ impl Pass<'_> {
                 control: Control::CameraJpeg,
                 words: Some(words),
                 lit: false,
+                enabled: true,
                 room,
                 name: Some(name.to_string()),
             },
@@ -752,7 +756,7 @@ impl Pass<'_> {
     /// The grid toggle: the icon always, and — while the grid is on — how far
     /// apart its lines are, written after the mark it qualifies.
     fn grid_toggle(&mut self, ui: &mut Ui, spacing: Option<&str>) {
-        self.reading_toggle(ui, icon::GRID_3X3, Control::Grid, spacing);
+        self.reading_toggle(ui, icon::GRID_3X3, Control::Grid, spacing, true);
     }
 
     /// The horizon grid's toggle, after the pixel grid's: the other grid
@@ -760,13 +764,20 @@ impl Pass<'_> {
     /// of its uprights is written after the mark, as the grid's is. Drawn
     /// dead rather than left out for a file that does not say which way its
     /// camera faced, so that the loupe and the readout after it hold still
-    /// from one file to the next.
-    fn horizon_toggle(&mut self, ui: &mut Ui) {
-        let reading = self
-            .panels
-            .horizon_grid
+    /// from one file to the next, and while another file is on its way in,
+    /// whose orientation this would not be. Unlit while dead, though the
+    /// grid stays asked for: it comes back with the next file that has one.
+    fn horizon_toggle(&mut self, ui: &mut Ui, current: &Current) {
+        let alive = current.exif.attitude.is_some() && self.input.arriving.is_none();
+        let reading = (alive && self.panels.horizon_grid)
             .then(|| super::attitude::label(self.panels.horizon_step));
-        self.reading_toggle(ui, icon::COMPASS, Control::HorizonGrid, reading.as_deref());
+        self.reading_toggle(
+            ui,
+            icon::COMPASS,
+            Control::HorizonGrid,
+            reading.as_deref(),
+            alive,
+        );
     }
 
     /// The loupe toggle, beside the grid's: a way of looking at the picture
@@ -778,7 +789,7 @@ impl Pass<'_> {
     fn loupe_toggle(&mut self, ui: &mut Ui) {
         let on = self.panels.lit(Control::Loupe) || self.input.loupe_held;
         let reading = on.then(|| super::loupe::label(self.panels.loupe_magnification));
-        self.reading_toggle(ui, icon::ZOOM_IN, Control::Loupe, reading.as_deref());
+        self.reading_toggle(ui, icon::ZOOM_IN, Control::Loupe, reading.as_deref(), true);
     }
 
     /// A toggle that is lit while it has a reading, written after the mark
@@ -792,6 +803,7 @@ impl Pass<'_> {
         marks: &[Mark],
         control: Control,
         reading: Option<&str>,
+        enabled: bool,
     ) {
         self.worded_button(
             ui,
@@ -800,6 +812,7 @@ impl Pass<'_> {
                 control,
                 words: reading,
                 lit: reading.is_some(),
+                enabled,
                 room: 0.0,
                 name: None,
             },
@@ -861,6 +874,7 @@ impl Pass<'_> {
             control,
             words: reading,
             lit,
+            enabled,
             room,
             name,
         } = worded;
@@ -881,8 +895,9 @@ impl Pass<'_> {
             Some(galley) => BUTTON_SIZE + READING_GAP + galley.size().x.max(room) + READING_PAD,
             None => BUTTON_SIZE,
         };
-        let (rect, response) = ui.allocate_exact_size(vec2(width, BUTTON_SIZE), Sense::CLICK);
-        let (background, ink) = self.button_ink(lit, &response, true);
+        let sense = if enabled { Sense::CLICK } else { Sense::HOVER };
+        let (rect, response) = ui.allocate_exact_size(vec2(width, BUTTON_SIZE), sense);
+        let (background, ink) = self.button_ink(lit, &response, enabled);
         ui.painter().rect_filled(rect, TOGGLE_RADIUS, background);
         let mark = Area::from_min_size(rect.min, Vec2::splat(BUTTON_SIZE));
         icon::paint(
@@ -900,7 +915,7 @@ impl Pass<'_> {
             ui.painter().galley(at, galley, ink);
         }
         let name = name.unwrap_or_else(|| control.label());
-        response.widget_info(|| WidgetInfo::selected(WidgetType::Button, true, lit, &name));
+        response.widget_info(|| WidgetInfo::selected(WidgetType::Button, enabled, lit, &name));
         let response = self.tooltip(response, Tip::Control(control));
         if response.clicked() {
             self.press(control);

@@ -378,6 +378,8 @@ fn screen_point(harness: &Harness<'static, State>, at: [f32; 2]) -> [f32; 2] {
 #[test]
 fn a_toggle_in_the_chrome_hands_back_its_press() {
     let mut harness = open(WINDOW, 1, panels());
+    // A picture that says which way its camera faced, for the horizon grid.
+    harness.state_mut().current = Some(pitched());
     for (label, control) in [
         ("Histogram", Control::Histogram),
         ("Information", Control::Info),
@@ -3235,6 +3237,36 @@ fn the_horizon_grid_follows_the_pointer() {
     assert!(with > without);
     harness.state_mut().panels.horizon_grid = false;
     assert!(curves(&mut harness) < without);
+}
+
+/// The horizon grid's toggle is dead and unlit for a file that does not
+/// say which way its camera faced, and while another file is on its way
+/// in, though the grid is asked for: a press reaches nothing. For a file
+/// that does, it is alive and lit, with the spacing after its mark.
+#[test]
+fn the_horizon_grid_toggle_is_dead_without_an_orientation() {
+    let mut on = panels();
+    on.horizon_grid = true;
+    let mut harness = open(WINDOW, 1, on);
+    let state = |harness: &mut Harness<'static, State>| {
+        harness.run();
+        let node = harness.get_by_label("Horizon grid").accesskit_node();
+        let lit = matches!(node.toggled(), Some(egui::accesskit::Toggled::True));
+        (node.is_disabled(), lit)
+    };
+    assert_eq!(state(&mut harness), (true, false));
+    assert_eq!(click(&mut harness, "Horizon grid"), []);
+
+    harness.state_mut().current = Some(pitched());
+    assert_eq!(state(&mut harness), (false, true));
+    assert_eq!(
+        click(&mut harness, "Horizon grid"),
+        [Command::Press(Control::HorizonGrid)]
+    );
+
+    harness.state_mut().input.arriving = Some("b.png".to_string());
+    assert_eq!(state(&mut harness), (true, false));
+    assert_eq!(click(&mut harness, "Horizon grid"), []);
 }
 
 /// Zoomed in until the picture runs past the content area, the horizon
