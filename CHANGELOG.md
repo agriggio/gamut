@@ -100,6 +100,10 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
 
 ### Changed
 
+- The information panel's sections come in a new order: File, About,
+  Image, Camera, Exposure, Location, Orientation, Gain map, Profile, Depth
+  map, Regions and Georeference — how the picture was taken before what it
+  carries beside it, and where its pixels are on the ground last.
 - On a Mac, a mouse's notched wheel zooms about the pointer, while two
   fingers on a trackpad, or a mouse that scrolls smoothly, still pan. The
   two are separate slots now: `gesture.image.wheel` for a wheel that turns

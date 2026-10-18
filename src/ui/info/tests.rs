@@ -72,6 +72,21 @@ fn written(current: &Current) -> Vec<String> {
         .collect()
 }
 
+/// The rows a section writes under its heading, its heading left out: the
+/// rows from it up to the next section's heading, or the end.
+fn rows_under(rows: &[String], current: &Current, at: usize) -> Vec<String> {
+    let headings: Vec<_> = contents(current)
+        .sections
+        .iter()
+        .map(|section| section.name.to_string())
+        .collect();
+    let end = rows[at + 1..]
+        .iter()
+        .position(|row| headings.contains(row))
+        .map_or(rows.len(), |end| at + 1 + end);
+    rows[at + 1..end].to_vec()
+}
+
 /// Every fact the panel exists to show, written out rather than merely
 /// headed: what the file is, then what the picture in it is, then the
 /// metadata's own groups after both.
@@ -143,9 +158,8 @@ fn a_depth_map_is_described_after_the_image() {
             .position(|row| row == DEPTH_MAP)
             .expect("a section");
         assert!(rows.iter().position(|row| row == "Image") < Some(at));
-        assert!(rows.iter().position(|row| row == "Camera") > Some(at));
-        let end = rows.iter().position(|row| row == "Camera").unwrap();
-        rows[at + 1..end].to_vec()
+        assert!(rows.iter().position(|row| row == "Camera") < Some(at));
+        rows_under(&rows, current, at)
     };
     let pairs = |pairs: &[(&str, &str)]| -> Vec<String> {
         pairs
@@ -431,9 +445,8 @@ fn a_profile_is_described_after_the_image() {
         .position(|row| row == PROFILE)
         .expect("a section");
     assert!(rows.iter().position(|row| row == "Image") < Some(at));
-    let end = rows.iter().position(|row| row == "Camera").unwrap();
     assert_eq!(
-        rows[at + 1..end],
+        rows_under(&rows, &current, at),
         [
             "Baseline exposure",
             "\u{2212}1.27 EV",
@@ -479,8 +492,7 @@ fn a_gain_map_is_described_after_the_image() {
             .position(|row| row == GAIN_MAP)
             .expect("a section");
         assert!(rows.iter().position(|row| row == "Image") < Some(at));
-        let end = rows.iter().position(|row| row == "Camera").unwrap();
-        rows[at + 1..end].to_vec()
+        rows_under(&rows, current, at)
     };
     let pairs = |pairs: &[(&str, &str)]| -> Vec<String> {
         pairs
