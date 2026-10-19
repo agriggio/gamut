@@ -4429,6 +4429,22 @@ fn an_arrival_is_named_by_what_it_stands_to() {
             a,
             large,
             Some((a, small)),
+            Arrival::Rescaled,
+            false,
+        ),
+        (
+            Reload::Page,
+            a,
+            small,
+            Some((a, large)),
+            Arrival::Rescaled,
+            false,
+        ),
+        (
+            Reload::InPlace,
+            a,
+            [6.0, 8.0],
+            Some((a, large)),
             Arrival::Reshaped,
             false,
         ),
@@ -4465,6 +4481,82 @@ fn an_arrival_is_named_by_what_it_stands_to() {
             "{mode:?} {path:?} {size:?} beside {shown:?}"
         );
     }
+}
+
+/// The file on screen read again at another size of the same shape — a
+/// page of a pyramid — keeps the same detail at the same size on screen;
+/// one of another shape is fitted afresh.
+#[test]
+fn a_page_of_the_same_shape_stays_in_place() {
+    let large = [64.0, 48.0];
+    let small = [32.0, 24.0];
+    let mut view = View::new();
+    view.set_zoom_at(2.0, VIEWPORT.center(), large, VIEWPORT);
+    view.pan_by(-40.0, 30.0, large, VIEWPORT);
+    let before = view.placement(large, VIEWPORT);
+    let centered = before.image_point(VIEWPORT.center());
+
+    let rescaled = arriving_view(Arrival::Rescaled, None, view, Some(large), small);
+    let after = rescaled.placement(small, VIEWPORT);
+    let landed = after.image_point(VIEWPORT.center());
+    assert!(
+        (after.width - before.width).abs() < 1e-3,
+        "{after:?} {before:?}"
+    );
+    assert!(
+        (landed[0] * 2.0 - centered[0]).abs() < 1e-3,
+        "{landed:?} {centered:?}"
+    );
+    assert!(
+        (landed[1] * 2.0 - centered[1]).abs() < 1e-3,
+        "{landed:?} {centered:?}"
+    );
+
+    let other = arriving_view(Arrival::Reshaped, None, view, Some(large), [24.0, 32.0]);
+    assert_eq!(other.fit(), Some(Fit::Whole), "another shape is fitted");
+}
+
+/// The file on screen written again at twice its size keeps its display
+/// and the same detail at the same size on screen; written again another
+/// shape, it starts over and is fitted.
+#[test]
+fn a_file_read_again_the_same_shape_keeps_its_display() {
+    let (dir, paths) = written("rescaled", &[("a.png", 32, 24)]);
+    let mut app = open(paths.clone(), vec![]);
+    answer(&mut app, Reload::Fresh);
+    app.view
+        .set_zoom_at(4.0, VIEWPORT.center(), app.image_size(), VIEWPORT);
+    let width = app.view.placement(app.image_size(), VIEWPORT).width;
+    if let Some(current) = app.current.as_mut() {
+        current.display.set_exposure(1.0);
+    }
+
+    write_png(&dir, "a.png", 64, 48);
+    let request = app.files.reload().expect("nothing is in flight");
+    let _ = app.send(request);
+    answer(&mut app, Reload::InPlace);
+    assert_eq!(app.image_size(), [64.0, 48.0]);
+    let current = app.current.as_ref().unwrap();
+    assert_eq!(current.display.exposure_stops(), 1.0, "the display stays");
+    let placement = app.view.placement(app.image_size(), VIEWPORT);
+    assert!(
+        (placement.width - width).abs() < 1e-3,
+        "the same size on screen"
+    );
+
+    write_png(&dir, "a.png", 24, 32);
+    let request = app.files.reload().expect("nothing is in flight");
+    let _ = app.send(request);
+    answer(&mut app, Reload::InPlace);
+    let current = app.current.as_ref().unwrap();
+    assert_eq!(
+        current.display.exposure_stops(),
+        0.0,
+        "another shape starts over"
+    );
+    assert_eq!(app.view.fit(), Some(Fit::Whole), "and is fitted");
+
+    std::fs::remove_dir_all(dir).expect("we just wrote it");
 }
 
 /// The paste button follows the clipboard and the interface together:

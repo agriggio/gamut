@@ -2798,7 +2798,7 @@ impl App {
                 .left(&file.path)
                 .filter(|left| left.rendering == rendering)
                 .cloned(),
-            Arrival::Reread | Arrival::Reshaped | Arrival::Rerendered => None,
+            Arrival::Reread | Arrival::Rescaled | Arrival::Reshaped | Arrival::Rerendered => None,
         };
         let refreshed = |display: &Display| {
             let mut display = display.clone();
@@ -2810,7 +2810,8 @@ impl App {
             // they are watching one spot for the change: same exposure and
             // tone map, with only an automatic window re-derived from the
             // new pixels.
-            (Arrival::Reread, Some(current), _) => refreshed(&current.display),
+            // So does the same scene at another size.
+            (Arrival::Reread | Arrival::Rescaled, Some(current), _) => refreshed(&current.display),
             (_, _, Some(settings)) => refreshed(&settings.display),
             _ => Display::for_image_with(&image, &stats, self.startup),
         };
@@ -2892,12 +2893,12 @@ impl App {
         self.facts_learned();
         // A region is of the picture it was drawn on. Stepping to another
         // file takes it off, and so does the file coming back a different
-        // size, where the pixels it marked out are no longer the pixels.
+        // size, even of the same shape, where the pixels it marked out are no longer the pixels.
         // Another rendering of the picture is other pixels, whatever its size.
         if stepping
             || matches!(
                 arrival,
-                Arrival::Reshaped | Arrival::Anew | Arrival::Rerendered
+                Arrival::Rescaled | Arrival::Reshaped | Arrival::Anew | Arrival::Rerendered
             )
         {
             self.marking.clear();
@@ -3427,7 +3428,13 @@ enum Arrival {
     /// or another page of it: everything stays, the user watching one spot
     /// for the change.
     Reread,
-    /// The file on screen read again at another size: a new shape to fit,
+    /// The file on screen read again at another size of the same shape —
+    /// another page of a pyramid, or the file written again larger or
+    /// smaller: the same scene, so the display stays and the view is
+    /// rescaled so the same detail stays where it was, at the size it was
+    /// on screen.
+    Rescaled,
+    /// The file on screen read again at another shape: a new shape to fit,
     /// its settings started over.
     Reshaped,
     /// Another file, of the same size as the picture on screen: the view
@@ -3454,11 +3461,13 @@ fn arrival(
     shown: Option<(&Path, [f32; 2])>,
 ) -> (Arrival, bool) {
     let same_size = shown.is_some_and(|(_, shown)| shown == size);
+    let same_shape = shown.is_some_and(|(_, shown)| View::same_shape(shown, size));
     let same_file = mode != Reload::Fresh;
     let stepping = shown.is_some_and(|(shown, _)| shown != path);
     let arrival = match (same_file, same_size) {
         _ if matches!(mode, Reload::Rendering | Reload::Reading) => Arrival::Rerendered,
         (true, true) => Arrival::Reread,
+        (true, false) if same_shape => Arrival::Rescaled,
         (true, false) => Arrival::Reshaped,
         (false, true) => Arrival::Beside,
         (false, false) => Arrival::Anew,
@@ -3503,9 +3512,10 @@ fn arriving_view(
             fitted.reset();
             fitted
         }
-        // The same scene rendered again: the detail under the center of
-        // the window stays there, at the size it was on screen.
-        (Arrival::Rerendered, _) => {
+        // The same scene rendered again, or at another size: the detail
+        // under the center of the window stays there, at the size it was
+        // on screen.
+        (Arrival::Rerendered | Arrival::Rescaled, _) => {
             let mut rescaled = view;
             if let Some(from) = shown_size {
                 rescaled.rescale(from, size);

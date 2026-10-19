@@ -220,6 +220,21 @@ impl View {
         self.zoom = (self.zoom / ratio[0]).clamp(MIN_ZOOM, MAX_ZOOM);
     }
 
+    /// Whether a picture `a` pixels across and down is the same shape as
+    /// one `b`, one of them the other made larger or smaller: each side of
+    /// the smaller within a pixel of the larger's at some one scale, the
+    /// rounding a reduced copy's sides are made with — the pages of a
+    /// pyramidal TIFF, say, each half the one before.
+    pub fn same_shape(a: [f32; 2], b: [f32; 2]) -> bool {
+        if a.iter().chain(&b).any(|side| *side <= 0.0) {
+            return false;
+        }
+        let (small, large) = if a[0] <= b[0] { (a, b) } else { (b, a) };
+        let lowest = ((small[0] - 1.0) / large[0]).max((small[1] - 1.0) / large[1]);
+        let highest = ((small[0] + 1.0) / large[0]).min((small[1] + 1.0) / large[1]);
+        lowest <= highest
+    }
+
     fn fit_zoom(fit: Fit, image: [f32; 2], viewport: [f32; 2]) -> f32 {
         let sx = viewport[0] / image[0];
         let sy = viewport[1] / image[1];
