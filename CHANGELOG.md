@@ -8,6 +8,14 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
 
 ### Added
 
+- Two buttons after the information panel's *Georeference* heading, for a
+  map whose coordinates can be put in latitude and longitude: one opens
+  its center on a map in the browser, through `open_map_link`, and the
+  other the area it covers, through the new `open_map_bounds_link` setting,
+  which takes each corner's latitude and longitude — `{lat_ul}`,
+  `{lng_ul}` and so on through `ur`, `lr` and `ll` — and by default draws
+  the four corners as a polygon on geojson.io. `Ctrl+Shift+Alt+M`, a Mac's
+  `⌃⇧⌘M`, presses the second.
 - `Ctrl+Shift+M`, a Mac's `⇧⌘M`, opens a map of where the picture was
   taken in the browser, as the button beside the information panel's
   *Location* does. The button's tooltip names it.
@@ -108,6 +116,9 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
 
 ### Changed
 
+- The information panel's *Georeference* section is headed by a globe
+  rather than a map, leaving the map's mark to the buttons that open one,
+  as in *Location*.
 - An 8-bit grayscale TIFF without a profile that says where its pixels are
   on the ground, or which value means no data — a slope, a land-cover
   class, a scaled index — opens as data, as a 16-bit one already did. An

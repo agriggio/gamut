@@ -967,8 +967,8 @@ mod tests {
 
     /// The Mac's chords keep the table's rules: every name it sets is the
     /// table's, no chord has two holders in one context, none of its
-    /// characters asks for Shift, and nothing is held with Ctrl, which on a
-    /// Mac is Mission Control's.
+    /// characters asks for Shift, and nothing is held with Ctrl alone, which
+    /// on a Mac is Mission Control's.
     #[test]
     fn the_macs_chords_keep_the_tables_rules() {
         let keymap = Keymap::mac();
@@ -985,8 +985,11 @@ mod tests {
                 if let Char(_) = chord.key {
                     assert!(!chord.mods.shift_key(), "{} asks for Shift", bound.name);
                 }
+                // Save the map's box, held with Ctrl and Command together,
+                // ⌃⇧⌘M, by the author's choice.
                 assert!(
-                    !chord.mods.control_key(),
+                    !chord.mods.control_key()
+                        || (bound.name == "files.map.bounds" && chord.mods.super_key()),
                     "{} is held with Ctrl",
                     bound.name
                 );
@@ -1084,7 +1087,7 @@ mod tests {
             };
             assert!(words.contains(&first), "{name} under {:?}", row.section);
         }
-        assert_eq!(names.len(), 106);
+        assert_eq!(names.len(), 107);
         for row in keymap.rows() {
             if let Keys::Also(name) | Keys::Gesture(name) = row.keys {
                 assert!(names.contains(&name), "{name} is described but not bound");

@@ -2152,6 +2152,52 @@ fn the_pixel_menu_offers_coordinates_only_for_a_map() {
     );
 }
 
+/// A raster placed in latitude and longitude wears two maps at the head of
+/// its Georeference section, its middle and its box; one placed in a system
+/// nothing can lift wears neither.
+#[test]
+fn a_georeference_offers_its_middle_and_its_box() {
+    let mut shown = panels();
+    shown.side = Some(super::side::Side::Info);
+    let place = |system: u16| {
+        let placed = crate::image::geo::Tags {
+            directory: vec![1, 1, 0, 2, 1024, 0, 1, 1, 3072, 0, 1, system],
+            scale: vec![1.0, 1.0, 0.0],
+            tiepoint: vec![0.0, 0.0, 0.0, 583_000.0, 4_507_000.0, 0.0],
+            ..Default::default()
+        };
+        let mut harness = open(WINDOW, 1, shown);
+        // A picture of its own, so the panel is not the one already drawn.
+        let mut current = photograph();
+        let exif = &mut current.exif;
+        exif.georeference = crate::image::geo::Georeference::read(&placed);
+        exif.sections.push(crate::image::exif::Section {
+            group: crate::image::exif::Group::Georeference,
+            entries: vec![crate::image::exif::Entry {
+                name: "System".to_string(),
+                value: format!("EPSG:{system}"),
+            }],
+        });
+        harness.state_mut().current = Some(current);
+        harness.run();
+        harness
+    };
+    // Projected, on UTM zone 18N.
+    let mut harness = place(32618);
+    assert_eq!(
+        click(&mut harness, "Open center in map"),
+        [Command::Press(Control::OpenMapCenter)]
+    );
+    assert_eq!(
+        click(&mut harness, "Open bounds in map"),
+        [Command::Press(Control::OpenMapBounds)]
+    );
+    // User-defined.
+    let harness = place(32767);
+    assert!(harness.query_by_label("Open center in map").is_none());
+    assert!(harness.query_by_label("Open bounds in map").is_none());
+}
+
 /// The chooser: opened, its field takes the keyboard, and what is typed
 /// and pressed comes back as commands rather than reaching the window —
 /// the query, the cursor's moves, `Enter` on the row under the cursor, a

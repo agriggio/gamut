@@ -77,10 +77,16 @@ fn a_configuration_read_again_rebinds_the_keys() {
         .unwrap();
     config.show_histogram = false;
     config.open_map_link = "https://example.com/?{lat},{lng}".to_string();
+    config.open_map_bounds_link =
+        "https://example.com/?{lat_ul},{lng_ul},{lat_lr},{lng_lr}".to_string();
     config.exiftool = "/opt/exiftool/exiftool".to_string();
     let _ = app.reconfigure(config, None);
     assert_eq!(app.keys.spelled("interface.help"), "F1");
     assert_eq!(app.open_map_link, "https://example.com/?{lat},{lng}");
+    assert_eq!(
+        app.open_map_bounds_link,
+        "https://example.com/?{lat_ul},{lng_ul},{lat_lr},{lng_lr}"
+    );
     assert_eq!(app.exiftool.configured(), "/opt/exiftool/exiftool");
     assert_eq!(app.panels.side, Some(ui::side::Side::Histogram));
     let toast = app.toasts.showing().expect("the reload is said");
@@ -89,6 +95,10 @@ fn a_configuration_read_again_rebinds_the_keys() {
     let _ = app.reconfigure(options().config, Some("Configuration line 3: no".into()));
     assert_eq!(app.keys.spelled("interface.help"), "?, /");
     assert_eq!(app.open_map_link, crate::settings::OPEN_MAP_LINK);
+    assert_eq!(
+        app.open_map_bounds_link,
+        crate::settings::OPEN_MAP_BOUNDS_LINK
+    );
     assert_eq!(app.exiftool.configured(), "exiftool");
     let toast = app.toasts.showing().expect("the problem is said");
     assert_eq!(toast.message, "Configuration line 3: no");
@@ -160,6 +170,7 @@ fn options() -> Options {
             show_info: false,
             browse_folder: true,
             open_map_link: crate::settings::OPEN_MAP_LINK.to_string(),
+            open_map_bounds_link: crate::settings::OPEN_MAP_BOUNDS_LINK.to_string(),
             exiftool: "exiftool".to_string(),
             keys: keymap::Keymap::table(),
             gestures: Gestures::table(),

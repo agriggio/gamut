@@ -185,9 +185,10 @@ enum Face {
     Headed {
         mark: &'static [icon::Mark],
         head: &'static [&'static str],
-        /// A button after the head, with the mark it wears: the map of
-        /// where the picture was taken, beside the coordinates.
-        button: Option<(&'static [icon::Mark], Control)>,
+        /// The buttons after the head, each with the mark it wears: the
+        /// map of where the picture was taken, beside the coordinates, and
+        /// the two of a georeference's middle and box, beside its name.
+        buttons: &'static [(&'static [icon::Mark], Control)],
         /// Whether the row under the head switches how the file is read,
         /// as a photo or as data: the Image section's, beside the facts
         /// the switch corrects — see [`reading_row`].
@@ -534,10 +535,10 @@ fn column(pass: &mut Pass, ui: &mut egui::Ui, current: &Current, picture: &egui:
                     Face::Headed {
                         mark,
                         head,
-                        button,
+                        buttons,
                         reading,
                     } => headed_section(
-                        pass, ui, place, section, index, width, mark, head, button, reading,
+                        pass, ui, place, section, index, width, mark, head, buttons, reading,
                     ),
                     Face::Regions => {
                         regions_section(pass, ui, current, picture, place, section, index, width)
@@ -592,7 +593,7 @@ fn file_section(
         theme.accent,
         None,
         name,
-        None,
+        &[],
         0.0,
     );
     if let Some((index, folder)) = field(FOLDER) {
@@ -629,7 +630,7 @@ fn file_section(
             theme.text_primary,
             Some("\u{00b7}"),
             size.into_iter().chain(modified),
-            None,
+            &[],
             0.0,
         );
     }
@@ -651,7 +652,7 @@ fn headed_section(
     width: f32,
     mark: &[icon::Mark],
     head: &[&str],
-    button: Option<(&[icon::Mark], Control)>,
+    buttons: &[(&[icon::Mark], Control)],
     reading: bool,
 ) {
     let theme = pass.theme;
@@ -665,7 +666,7 @@ fn headed_section(
         })
         .collect();
     if pieces.is_empty() {
-        marked_heading(pass, ui, place, section, width, mark);
+        marked_heading(pass, ui, place, section, width, mark, buttons);
     } else {
         // The pill stands at the column's end, level with the mark, in
         // room the head is kept out of.
@@ -679,7 +680,7 @@ fn headed_section(
             theme.accent,
             None,
             pieces,
-            button,
+            buttons,
             pill.map_or(0.0, |pill| pill + CHIP_GAP),
         );
         if let (Some(pill), Some(at)) = (pill, at) {
@@ -768,10 +769,12 @@ fn marked_heading(
     section: &Section,
     width: f32,
     mark: &[icon::Mark],
+    buttons: &[(&[icon::Mark], Control)],
 ) -> bool {
     let theme = pass.theme;
     let grid = pass.grid;
-    block(pass, ui, Copyable::Section(place), width, |ui| {
+    let mut places = Vec::with_capacity(buttons.len());
+    let pointed = block(pass, ui, Copyable::Section(place), width, |ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = MARK_GAP;
             let (rect, _) = ui.allocate_exact_size(Vec2::splat(COPY_ICON), Sense::HOVER);
@@ -798,10 +801,25 @@ fn marked_heading(
                         )
                         .wrap(),
                     );
+                    // After the name, where the line's own go after its
+                    // pieces, clear of the copy button at the column's end.
+                    // Only their room here: they are pressed on top of the
+                    // block, once it has been laid out.
+                    for _ in buttons {
+                        let (rect, _) =
+                            ui.allocate_exact_size(Vec2::splat(CHIP_HEIGHT), Sense::HOVER);
+                        places.push(rect);
+                    }
                 });
             });
         });
-    })
+    });
+    for (index, (&(mark, control), rect)) in buttons.iter().zip(places).enumerate() {
+        let id = ui.id().with(("head button", place, index));
+        let response = ui.interact(rect, id, Sense::CLICK);
+        head_button(pass, ui, response, mark, control);
+    }
+    pointed
 }
 
 /// The pill at the end of a heading whose section is on screen: an eye and
@@ -876,7 +894,7 @@ fn regions_section(
     width: f32,
 ) {
     let theme = pass.theme;
-    if marked_heading(pass, ui, place, section, width, icon::SQUARE_DASHED) {
+    if marked_heading(pass, ui, place, section, width, icon::SQUARE_DASHED, &[]) {
         mark_regions(pass, picture, current, &section.regions);
     }
     let cells: Vec<[String; 4]> = section.regions.iter().map(region_cells).collect();
@@ -973,7 +991,7 @@ fn orientation_section(
     };
     let left = ui.cursor().min.x;
     let top = ui.cursor().min.y;
-    marked_heading(pass, ui, place, section, width, icon::MOVE_3D);
+    marked_heading(pass, ui, place, section, width, icon::MOVE_3D, &[]);
     let heading = egui::Rect::from_x_y_ranges(
         left..=left + width,
         top..=ui.cursor().min.y - ui.spacing().item_spacing.y,
@@ -1226,8 +1244,8 @@ struct Piece {
 
 /// One line of `pieces` in `ink`, after `mark` where there is one and with
 /// `between` set between each two, broken to `width` less `reserve` where
-/// they do not fit; and after them `button`, wearing its mark, where there
-/// is one. Where the mark went, for whatever stands level with it.
+/// they do not fit; and after them `buttons`, each wearing its mark. Where
+/// the mark went, for whatever stands level with it.
 ///
 /// Each piece is pointed at and copied on its own, and says in its tooltip
 /// what it stands for where it is written short. The copy button goes where
@@ -1242,7 +1260,7 @@ fn line(
     ink: Color,
     between: Option<&str>,
     pieces: impl IntoIterator<Item = Piece>,
-    button: Option<(&[icon::Mark], Control)>,
+    buttons: &[(&[icon::Mark], Control)],
     reserve: f32,
 ) -> Option<egui::Rect> {
     let grid = pass.grid;
@@ -1288,26 +1306,39 @@ fn line(
                 pointed,
             );
         }
-        if let Some((mark, control)) = button {
+        for &(mark, control) in buttons {
             ui.add_space(MARK_GAP - space);
-            let (rect, response) = ui.allocate_exact_size(Vec2::splat(CHIP_HEIGHT), Sense::CLICK);
-            let (background, ink) = pass.button_ink(false, &response, true);
-            ui.painter().rect_filled(rect, TOGGLE_RADIUS, background);
-            icon::paint(
-                ui.painter(),
-                mark,
-                icon::square(grid, rect, COPY_ICON),
-                ink,
-                background,
-            );
-            response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, control.label()));
-            let response = pass.tooltip(response, Tip::Control(control));
-            if response.clicked() {
-                pass.press(control);
-            }
+            let (_, response) = ui.allocate_exact_size(Vec2::splat(CHIP_HEIGHT), Sense::CLICK);
+            head_button(pass, ui, response, mark, control);
         }
     });
     marked
+}
+
+/// A button wearing `mark` at the head of a section, where `response` was
+/// sensed, pressing `control`.
+fn head_button(
+    pass: &mut Pass,
+    ui: &egui::Ui,
+    response: egui::Response,
+    mark: &[icon::Mark],
+    control: Control,
+) {
+    let rect = response.rect;
+    let (background, ink) = pass.button_ink(false, &response, true);
+    ui.painter().rect_filled(rect, TOGGLE_RADIUS, background);
+    icon::paint(
+        ui.painter(),
+        mark,
+        icon::square(pass.grid, rect, COPY_ICON),
+        ink,
+        background,
+    );
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, control.label()));
+    let response = pass.tooltip(response, Tip::Control(control));
+    if response.clicked() {
+        pass.press(control);
+    }
 }
 
 /// `rows` as a table of two columns: each field's name, dim, in a column as
@@ -1502,7 +1533,7 @@ fn contents(current: &Current) -> Contents {
             Face::Headed {
                 mark: icon::IMAGE,
                 head: &[RESOLUTION, READ_BY],
-                button: None,
+                buttons: &[],
                 reading: true,
             },
             fields(image_facts(current)),
@@ -1534,7 +1565,7 @@ fn contents(current: &Current) -> Contents {
             Face::Headed {
                 mark: icon::SUN,
                 head: &[],
-                button: None,
+                buttons: &[],
                 reading: false,
             },
             fields(gain_map_facts(current)),
@@ -1547,7 +1578,7 @@ fn contents(current: &Current) -> Contents {
             Face::Headed {
                 mark: icon::SPLINE,
                 head: &[],
-                button: None,
+                buttons: &[],
                 reading: false,
             },
             fields(profile_facts(current)),
@@ -1560,7 +1591,7 @@ fn contents(current: &Current) -> Contents {
             Face::Headed {
                 mark: icon::AXIS_3D,
                 head: &[],
-                button: None,
+                buttons: &[],
                 reading: false,
             },
             fields(depth_facts(current)),
@@ -1661,25 +1692,40 @@ fn metadata_section(exif: &exif::Exif, section: &exif::Section) -> Section {
         .entries
         .iter()
         .map(|entry| (entry.name.as_str(), entry.value.clone()));
-    let (mark, head, button): (_, &'static [&'static str], _) = match section.group {
+    type Buttons = &'static [(&'static [icon::Mark], Control)];
+    let (mark, head, buttons): (_, &'static [&'static str], Buttons) = match section.group {
         // The mark the panel's own button wears.
-        Group::About => (icon::INFO, &[exif::TITLE], None),
-        Group::Camera => (icon::CAMERA, &[exif::CAMERA], None),
-        Group::Exposure => (icon::APERTURE, &[], None),
+        Group::About => (icon::INFO, &[exif::TITLE], &[]),
+        Group::Camera => (icon::CAMERA, &[exif::CAMERA], &[]),
+        Group::Exposure => (icon::APERTURE, &[], &[]),
         // Only where the file gave numbers a map can take.
         Group::Location => (
             icon::MAP_PIN,
             &[exif::LATITUDE, exif::LONGITUDE],
-            exif.position.map(|_| (icon::MAP, Control::OpenMap)),
+            match exif.position {
+                Some(_) => &[(icon::MAP, Control::OpenMap)],
+                None => &[],
+            },
         ),
-        Group::Georeference => (icon::MAP, &[], None),
+        // Only where the raster can be placed in latitude and longitude.
+        Group::Georeference => (
+            icon::GLOBE,
+            &[],
+            match &exif.georeference {
+                Some(geo) if geo.offers_geographic() => &[
+                    (icon::MAP, Control::OpenMapCenter),
+                    (icon::SCAN, Control::OpenMapBounds),
+                ],
+                _ => &[],
+            },
+        ),
     };
     Section::new(
         section.group.name(),
         Face::Headed {
             mark,
             head,
-            button,
+            buttons,
             reading: false,
         },
         fields(entries),

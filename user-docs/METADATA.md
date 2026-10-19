@@ -205,6 +205,14 @@ a barcode's value or whether it was a focus point, is in its tooltip.
 Only for a raster that says where its pixels are on the ground, such as a
 GeoTIFF elevation model or scanned map.
 
+Where its coordinates can be turned into latitude and longitude, two buttons
+follow the heading. The map button opens a map of the center of the raster
+in the browser, through the same `open_map_link` setting as the *Location*
+section's. The corners button, or `Ctrl+Shift+Alt+M` (`⌃⇧⌘M` on a Mac),
+opens a map of the area it covers, outlined by its four corners; the
+`open_map_bounds_link` setting in [SETTINGS.md](SETTINGS.md) picks the
+site.
+
 | Field | What it says |
 | --- | --- |
 | Coordinate system | The projection or the geographic system the coordinates are in, by name and EPSG code as the file gives them. They are not looked up, so what you see is what was written. |

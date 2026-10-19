@@ -1183,6 +1183,26 @@ only where the file gave both numbers, so it is never dead. A setting that
 does not name both is refused as it is read: a link with one of them fixed
 would open the same place for every picture.
 
+A georeference that `offers_geographic` puts two buttons at the head of the
+`Georeference` section, after its name: `Control::OpenMapCenter` opens the
+same `open_map_link` at `Georeference::center`, and `Control::OpenMapBounds`
+opens `settings::map_bounds_link` of `open_map_bounds_link` at
+`Georeference::corners`, each corner's latitude and longitude in
+`{lat_ul}`, `{lng_ul}` and so on through `ur`, `lr` and `ll` — the raster's
+corners as stored, its first row's ends and its last's. Both read the raster
+at its corners rather than its pixels' middles — `latitude_longitude_at` —
+and at its stored size, the turn being the screen's and not the ground's.
+The corners and not a box around them, because a projected raster's edges
+are not lines of latitude and longitude: the four corners say where it lies
+on the ground, which a box of the extremes would not, and a link that wants
+a box can still name it by two of them, which is why the setting asks only
+for one latitude and one longitude. `Ctrl+Shift+Alt+M` presses the box
+button through `Action::OpenMapBounds`, under `When::Geographic`. The
+heading's buttons are laid out
+inside the section's copying block for their room only, and pressed through
+`ui.interact` once the block is done, so that they sit on top of it and a
+press on one is not also a copy of the section.
+
 The words — the `About` section — are read from two blocks, because a file
 keeps them in two. EXIF is what the camera wrote, and has a tag for a caption,
 an artist and a copyright; XMP is what every program since has written — the title, the
@@ -1786,8 +1806,8 @@ gestures — so nothing else has to be told, except a Mac's menu bar, whose key
 equivalents are set on its items: `App::rekey_menubar` builds the same tree
 again from the new keymap, and `menubar::Bar::rekey` sets each tagged item's
 key, the tags being the same items' since the tree depends on the keymap only
-for its keys. `App::open_map_link` is replaced as well; the map button reads
-it only when pressed, so there is nothing else to tell.
+for its keys. `App::open_map_link` and `App::open_map_bounds_link` are replaced as
+well; the map buttons read them only when pressed, so there is nothing else to tell.
 
 The panels the file sets are not applied again. They say how the window
 opens, and a save that reset every panel the user had toggled since would

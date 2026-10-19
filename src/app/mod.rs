@@ -444,6 +444,9 @@ pub struct App {
     /// The web address the map button opens, with `{lat}` and `{lng}` for
     /// the coordinates: the setting.
     open_map_link: String,
+    /// The web address the box button opens, with `{lat_ul}`, `{lng_ul}`
+    /// and the same for `ur`, `lr` and `ll` for its corners: the setting.
+    open_map_bounds_link: String,
     /// Where exiftool is, for the info panel's Tags tab: the setting, and
     /// the program it was found as.
     exiftool: exiftool::Program,
@@ -727,6 +730,7 @@ impl App {
             named,
             directories,
             open_map_link: config.open_map_link.clone(),
+            open_map_bounds_link: config.open_map_bounds_link.clone(),
             exiftool: exiftool::Program::new(&config.exiftool),
             tags: Tags::default(),
             tags_delivered,
@@ -2400,7 +2404,7 @@ impl App {
     /// Puts in force what can change in `config` while the window is up:
     /// the keys and the gestures, and with them everything that names them —
     /// the tooltips, the help popup, and a Mac's menu bar — and the web
-    /// address the map button opens. The panels it
+    /// addresses the map buttons open. The panels it
     /// sets are how the window opens, and toggling one since is not undone;
     /// whether a file named alone browses its folder was settled when the
     /// command line was read. `complaint` is what the file got wrong, said
@@ -2409,6 +2413,7 @@ impl App {
         self.keys = Rc::new(config.keys);
         self.gestures = Rc::new(config.gestures);
         self.open_map_link = config.open_map_link;
+        self.open_map_bounds_link = config.open_map_bounds_link;
         // Looked for again where it was not found too, since what the
         // configuration names may have been installed since; and where the
         // tab is waiting on it, it reads the file at once.

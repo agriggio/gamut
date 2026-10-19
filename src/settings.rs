@@ -33,6 +33,7 @@ use anyhow::{Context, Result};
 
 use crate::app::keymap::{Chord, Keymap};
 use crate::gestures::{Behavior, Gestures, Slot};
+use crate::image::geo::Corners;
 use crate::ui::{CoordinateFormat, GeographicFormat, PixelFormat};
 use crate::ui::{attitude, filmstrip, loupe, scale};
 use crate::{PROGRAM, shown_path, xdg};
@@ -53,6 +54,10 @@ pub struct Config {
     /// The web address the `Location` section's map button opens, with
     /// `{lat}` and `{lng}` standing for the coordinates in signed degrees.
     pub open_map_link: String,
+    /// The web address the `Georeference` section's box button opens, with
+    /// `{lat_ul}`, `{lng_ul}` and the same for `ur`, `lr` and `ll` standing
+    /// for the raster's corners, in signed degrees.
+    pub open_map_bounds_link: String,
     /// The program the info panel's Tags tab runs: a name looked for in
     /// `PATH` and the places packages put it, or a path.
     pub exiftool: String,
@@ -70,6 +75,7 @@ impl Default for Config {
             show_info: false,
             browse_folder: true,
             open_map_link: OPEN_MAP_LINK.to_string(),
+            open_map_bounds_link: OPEN_MAP_BOUNDS_LINK.to_string(),
             exiftool: "exiftool".to_string(),
             keys: Keymap::default(),
             gestures: Gestures::default(),
@@ -93,7 +99,7 @@ struct Setting {
 /// Every setting the configuration file takes, in the order the template
 /// lists them. [`Config::template`] writes each one's value, and
 /// [`Config::parse`] reads it back.
-const SETTINGS: [Setting; 8] = [
+const SETTINGS: [Setting; 9] = [
     Setting {
         name: "show_ui",
         words: "The panels around the picture.",
@@ -132,7 +138,7 @@ const SETTINGS: [Setting; 8] = [
     },
     Setting {
         name: "open_map_link",
-        words: "The web page the map button in the info panel's Location section opens: {lat} and {lng} are where the picture was taken, in degrees.",
+        words: "The web page the map buttons in the info panel's Location and Georeference sections open: {lat} and {lng} are where the picture was taken, or the middle of what it covers, in degrees.",
         get: |config| config.open_map_link.clone(),
         set: |config, value| {
             // A link without both would open the same place for every
@@ -141,6 +147,22 @@ const SETTINGS: [Setting; 8] = [
                 return Err("needs {lat} and {lng} in it".to_string());
             }
             config.open_map_link = value.to_string();
+            Ok(())
+        },
+    },
+    Setting {
+        name: "open_map_bounds_link",
+        words: "The web page the corners button in the info panel's Georeference section opens: {lat_ul} and {lng_ul}, {lat_ur} and {lng_ur}, {lat_lr} and {lng_lr}, and {lat_ll} and {lng_ll} are the picture's upper left, upper right, lower right and lower left corners, in degrees.",
+        get: |config| config.open_map_bounds_link.clone(),
+        set: |config, value| {
+            // As with the map link: one with no latitude or no longitude in
+            // it would open the same place for every picture. Not every
+            // corner, since a box can be named by two of them.
+            let has = |names: &[&str]| names.iter().any(|name| value.contains(name));
+            if !(has(&CORNERS[..4]) && has(&CORNERS[4..])) {
+                return Err("needs a corner's {lat_..} and {lng_..} in it".to_string());
+            }
+            config.open_map_bounds_link = value.to_string();
             Ok(())
         },
     },
@@ -177,6 +199,36 @@ pub const OPEN_MAP_LINK: &str = "https://geojson.io/#data=data:application/json,
 pub fn map_link(link: &str, [latitude, longitude]: [f64; 2]) -> String {
     link.replace("{lat}", &format!("{latitude:.6}"))
         .replace("{lng}", &format!("{longitude:.6}"))
+}
+
+/// Where the box button goes unless the configuration says otherwise: the
+/// picture's four corners as a GeoJSON polygon, its ring run from the lower
+/// left through the lower right, which is counterclockwise on a map with
+/// north up, as RFC 7946 has an outer ring run.
+pub const OPEN_MAP_BOUNDS_LINK: &str = "https://geojson.io/#data=data:application/json,%7B%22type%22%3A%22Feature%22%2C%22properties%22%3A%7B%7D%2C%22geometry%22%3A%7B%22type%22%3A%22Polygon%22%2C%22coordinates%22%3A%5B%5B%5B{lng_ll}%2C{lat_ll}%5D%2C%5B{lng_lr}%2C{lat_lr}%5D%2C%5B{lng_ur}%2C{lat_ur}%5D%2C%5B{lng_ul}%2C{lat_ul}%5D%2C%5B{lng_ll}%2C{lat_ll}%5D%5D%5D%7D%7D";
+
+/// The names a box's link puts the corners in by: the four latitudes, then
+/// the four longitudes.
+const CORNERS: [&str; 8] = [
+    "{lat_ul}", "{lat_ur}", "{lat_lr}", "{lat_ll}", "{lng_ul}", "{lng_ur}", "{lng_lr}", "{lng_ll}",
+];
+
+/// `link` with the picture's corners in it, each in signed degrees to six
+/// places, as [`map_link`] writes a point's.
+pub fn map_bounds_link(link: &str, corners: Corners) -> String {
+    let Corners {
+        upper_left,
+        upper_right,
+        lower_right,
+        lower_left,
+    } = corners;
+    [upper_left, upper_right, lower_right, lower_left]
+        .into_iter()
+        .zip(["ul", "ur", "lr", "ll"])
+        .fold(link.to_string(), |link, ([latitude, longitude], corner)| {
+            link.replace(&format!("{{lat_{corner}}}"), &format!("{latitude:.6}"))
+                .replace(&format!("{{lng_{corner}}}"), &format!("{longitude:.6}"))
+        })
 }
 
 /// Settings the configuration file once took: how the pointer's pixel and
@@ -821,7 +873,7 @@ mod tests {
             .lines()
             .filter(|line| line.starts_with("gesture."))
             .count();
-        assert_eq!(keys, 106, "{uncommented}");
+        assert_eq!(keys, 107, "{uncommented}");
         // A Mac's three more: the scroll, the scroll with Command, and the
         // pinch.
         let slots = if cfg!(target_os = "macos") { 13 } else { 10 };
@@ -922,6 +974,8 @@ mod tests {
             show_info: !defaults.show_info,
             browse_folder: !defaults.browse_folder,
             open_map_link: "https://www.openstreetmap.org/?mlat={lat}&mlon={lng}".to_string(),
+            open_map_bounds_link: "https://example.com/?bbox={lng_ll},{lat_ll},{lng_ur},{lat_ur}"
+                .to_string(),
             exiftool: "/opt/exiftool/exiftool".to_string(),
             keys: defaults.keys.clone(),
             gestures: defaults.gestures.clone(),
@@ -949,6 +1003,41 @@ mod tests {
         let (config, problems) =
             Config::parse(&format!("open_map_link = {OPEN_MAP_LINK}  # the default\n"));
         assert_eq!(config.open_map_link, OPEN_MAP_LINK);
+        assert!(problems.is_empty(), "{problems:?}");
+    }
+
+    /// The box's address takes the picture's corners where it says; one
+    /// with no latitude or no longitude in it is a problem, and the default
+    /// stands.
+    #[test]
+    fn the_map_bounds_link_takes_the_corners() {
+        let corners = Corners {
+            upper_left: [47.809, 5.95],
+            upper_right: [47.809, 6.05],
+            lower_right: [47.609, 6.05],
+            lower_left: [47.609, 5.95],
+        };
+        assert_eq!(
+            map_bounds_link(OPEN_MAP_BOUNDS_LINK, corners),
+            "https://geojson.io/#data=data:application/json,%7B%22type%22%3A%22Feature%22%2C%22properties%22%3A%7B%7D%2C%22geometry%22%3A%7B%22type%22%3A%22Polygon%22%2C%22coordinates%22%3A%5B%5B%5B5.950000%2C47.609000%5D%2C%5B6.050000%2C47.609000%5D%2C%5B6.050000%2C47.809000%5D%2C%5B5.950000%2C47.809000%5D%2C%5B5.950000%2C47.609000%5D%5D%5D%7D%7D"
+        );
+        // Two corners are enough to name a box by.
+        let bbox = "https://example.com/?bbox={lng_ll},{lat_ll},{lng_ur},{lat_ur}";
+        let (config, problems) = Config::parse(&format!("open_map_bounds_link = {bbox}\n"));
+        assert_eq!(config.open_map_bounds_link, bbox);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(
+            map_bounds_link(bbox, corners),
+            "https://example.com/?bbox=5.950000,47.609000,6.050000,47.809000"
+        );
+        let (config, problems) =
+            Config::parse("open_map_bounds_link = https://example.com/?{lat_ul},{lat_lr}\n");
+        assert_eq!(config.open_map_bounds_link, OPEN_MAP_BOUNDS_LINK);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        let (config, problems) = Config::parse(&format!(
+            "open_map_bounds_link = {OPEN_MAP_BOUNDS_LINK}  # the default\n"
+        ));
+        assert_eq!(config.open_map_bounds_link, OPEN_MAP_BOUNDS_LINK);
         assert!(problems.is_empty(), "{problems:?}");
     }
 

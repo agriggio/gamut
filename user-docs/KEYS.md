@@ -36,6 +36,7 @@ Command, `⌥` Option, `⇧` Shift and `⌃` Control, run together onto the key.
 | `⌘Z` | Undo | `files.undo` |
 | `⌘E` | Export the picture as shown | `files.export` |
 | `⇧⌘M` | Open a map of where the picture was taken | `files.map` |
+| `⌃⇧⌘M` | Open a map of the area a georeferenced picture covers | `files.map.bounds` |
 | `;`, `⌘L` | Turn the picture a quarter counterclockwise | `display.turn.left` |
 | `'`, `⌘R` | Turn the picture a quarter clockwise | `display.turn.right` |
 | `⌘C` | Copy the image, or the region, as displayed | `clipboard.image` |
@@ -141,6 +142,7 @@ on screen, since there is then nowhere to pan to.
 | `Ctrl+Z` | Undo the last rename, deletion or removal | `files.undo` |
 | `Ctrl+E` | Export the picture as shown to a new JPG or PNG | `files.export` |
 | `Ctrl+Shift+M` | Open map of image location in browser, for a picture that records its location | `files.map` |
+| `Ctrl+Alt+Shift+M` | Open map of image bounds in browser, for a picture placed in latitude and longitude | `files.map.bounds` |
 
 A file you have already looked at comes back exactly as you left it: the same
 pan and zoom, the same turn, the same window and exposure, the same tone curve
