@@ -93,6 +93,7 @@ is, so that the two read as two tabs of one panel: a row of buttons at its
 head, as tall as the information's header (`info::CHIP_HEIGHT`), so the
 hairline under it (`info::HEADER_GAP`) stays put as the tabs are switched —
 the pair that reads the file as a photo or as data first (`Control::Reading`,
+`|` pressing whichever is not lit as `Action::ToggleReading`,
 see [color](color.md#display-referred-scene-referred-and-measured)), since
 it is upstream of everything in the column, and at the far end the reset,
 with the clipped pixels' toggle just before it;

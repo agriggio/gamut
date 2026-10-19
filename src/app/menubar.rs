@@ -420,7 +420,7 @@ fn image(b: &mut Builder) -> Vec<Node> {
         b.submenu("Window", Some(Control::Window(0)), windows),
         b.submenu("Highlights", Some(Control::Curve(0)), curves),
         b.submenu("False Color", Some(Control::Ramp(0)), ramps),
-        b.submenu("Read As", Some(Control::Reading(Reading::Photo)), readings),
+        b.submenu("Mode", Some(Control::Reading(Reading::Photo)), readings),
         b.button("Mark Clipped Pixels", Control::Marks),
         b.button("Reset Display", Control::Reset),
         Node::Separator,

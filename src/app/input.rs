@@ -149,6 +149,10 @@ pub enum Action {
     /// Exposure, by this many stops.
     Exposure(f32),
     CycleAutoWindow,
+    /// Read the file on screen the other way: as data where it is read as
+    /// a photo, as a photo where it is read as data — the pair of buttons
+    /// at the head of the histogram panel, from whichever is lit.
+    ToggleReading,
     /// Move the value that comes out black by this fraction of the
     /// window's width: the black handle's key.
     StepBlack(f32),
@@ -417,6 +421,9 @@ pub(super) fn action_of(tip: Tip) -> Option<Action> {
         // windows and the curves in turn where a button names one outright.
         Tip::Control(Control::Window(index)) if index < histogram::WINDOWS.len() => CycleAutoWindow,
         Tip::Control(Control::Curve(index)) if index < ToneMap::ALL.len() => CycleToneMap,
+        // The pair that reads the file one way or the other, which the key
+        // switches between.
+        Tip::Control(Control::Reading(_)) => ToggleReading,
         // A cell of a menu sets one state directly where the key steps
         // through them all: the key is worth naming, the description of the
         // step is not. A numbered cell of the zoom menu is the exception, its
@@ -478,8 +485,7 @@ pub(super) fn action_of(tip: Tip) -> Option<Action> {
             | Control::ExportAs(_)
             | Control::ExportTo
             | Control::CancelExport
-            | Control::OpenLastFolder
-            | Control::Reading(_),
+            | Control::OpenLastFolder,
         ) => return None,
         // The words at the end of the bottom bar are about four settings at
         // once, so no one key does what they do; what a press on them opens
@@ -694,8 +700,8 @@ impl When {
             When::Coordinates => "a file with other coordinates",
             When::Geographic => "a file placed in lat/long",
             When::Orientation => "a file with camera orientation",
-            When::Data => "an image read as data",
-            When::Photo => "an image read as a photo",
+            When::Data => "data mode",
+            When::Photo => "photo mode",
         }
     }
 
@@ -1376,6 +1382,12 @@ pub static ROWS: &[Row] = &[
                 defaults: &[key('S')],
             },
         ]),
+    },
+    Row {
+        section: Section::Display,
+        when: None,
+        help: "Toggle photo/data mode",
+        keys: one!("display.reading", ToggleReading, [key('|')]),
     },
     Row {
         section: Section::Display,
@@ -2390,6 +2402,18 @@ impl App {
             ToggleGainMap => return self.press(Control::GainMap),
             ToggleMosaic => return self.press(Control::Mosaic),
             ToggleProfile => return self.press(Control::Profile),
+            // The button that is not lit, so that the key and the pair cannot
+            // come to mean different things.
+            ToggleReading => {
+                let Some(current) = &self.current else {
+                    return Effect::Nothing;
+                };
+                let other = match Reading::of(current.picture().0) {
+                    Reading::Photo => Reading::Data,
+                    Reading::Data => Reading::Photo,
+                };
+                return self.press(Control::Reading(other));
+            }
             ToggleRegion => return self.press(Control::Region),
             // Only a region moves, grows and shrinks, and there is none: see
             // `perform_on_region`.

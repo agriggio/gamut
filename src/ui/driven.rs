@@ -625,9 +625,9 @@ fn the_histogram_panel_hands_back_the_hand_on_its_band() {
             Some(egui::accesskit::Toggled::True)
         )
     };
-    assert!(lit(&harness, "Read as photo") && !lit(&harness, "Read as data"));
+    assert!(lit(&harness, "Set photo mode") && !lit(&harness, "Set data mode"));
     assert_eq!(
-        click(&mut harness, "Read as data"),
+        click(&mut harness, "Set data mode"),
         [Command::Press(Control::Reading(Reading::Data))]
     );
 
@@ -1109,7 +1109,7 @@ fn the_curves_are_dead_under_a_false_color() {
             Some(egui::accesskit::Toggled::True)
         )
     };
-    assert!(lit(&harness, "Read as data") && !lit(&harness, "Read as photo"));
+    assert!(lit(&harness, "Set data mode") && !lit(&harness, "Set photo mode"));
     assert!(
         harness.query_by_label("Window 0").is_some(),
         "data has the row of windows"
@@ -1129,7 +1129,7 @@ fn the_curves_are_dead_under_a_false_color() {
     harness.run();
     assert!(!dead(&harness, "Curve 1"));
     assert!(!dead(&harness, "Exposure"));
-    assert!(lit(&harness, "Read as photo") && !lit(&harness, "Read as data"));
+    assert!(lit(&harness, "Set photo mode") && !lit(&harness, "Set data mode"));
     assert!(harness.query_by_label("Window 0").is_none());
     assert_eq!(
         click(&mut harness, "Curve 1"),

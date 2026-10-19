@@ -8,6 +8,9 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
 
 ### Added
 
+- `|` reads the file on screen the other way, as data where it is read as a
+  photo and as a photo where it is read as data, as the *Photo* / *Data*
+  pair at the head of the histogram panel does. Both buttons name it.
 - An *Orientation* section in the information panel, for a picture whose
   camera recorded which way it faced — an iPhone's or iPad's
   accelerometer, a GoPro's gravity vector, the electronic level of a
