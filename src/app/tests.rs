@@ -1133,6 +1133,36 @@ fn the_reading_switch_reads_the_file_again_and_stays_with_it() {
     assert!(app.conditions().data);
 }
 
+/// The reading's key presses whichever of the pair is not lit: a photo of
+/// the scan read as data, and back.
+#[test]
+fn the_reading_key_switches_to_the_other_reading() {
+    use crate::image::Referred;
+    use crate::image::decode::Reading;
+
+    let scan = fixture("tiff-gray16.tif");
+    let mut app = open(vec![scan.clone()], vec![scan.clone()]);
+    answer(&mut app, Reload::Fresh);
+    fn referred(app: &App) -> Referred {
+        app.current
+            .as_ref()
+            .expect("a picture is up")
+            .image
+            .referred
+    }
+    assert_eq!(referred(&app), Referred::Measured);
+
+    let _ = app.perform(input::Action::ToggleReading);
+    assert_eq!(app.kept.reading(&scan), Some(Reading::Photo));
+    answer(&mut app, Reload::Reading);
+    assert_eq!(referred(&app), Referred::Display);
+
+    let _ = app.perform(input::Action::ToggleReading);
+    assert_eq!(app.kept.reading(&scan), Some(Reading::Data));
+    answer(&mut app, Reload::Reading);
+    assert_eq!(referred(&app), Referred::Measured);
+}
+
 /// `--transfer` carries the reading with it where the decoder's followed
 /// the curve: the deep gray TIFF taken for a measurement is a photo under
 /// `--transfer srgb`, and a raw's linear counts stay graded under

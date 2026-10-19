@@ -541,6 +541,7 @@ that is not a paste; open it as an argument instead.
 | `s` | Black point up | `display.black.up` |
 | `Shift+A` | White point down | `display.white.down` |
 | `Shift+S` | White point up | `display.white.up` |
+| `\|` | Toggle photo/data mode | `display.reading` |
 | `e` | Cycle the window rule: as stored (0–1) → full range → trimmed (the central 99.8%) | `display.window` |
 | `t` | Toggle the curve on the highlights: clip, or roll off | `display.tone-map` |
 | `w` | Mark clipped pixels, or stop: red where a channel has reached white, blue where one has reached black | `display.marks` |
@@ -665,9 +666,9 @@ Each press moves its end by a twentieth of the window's width as the
 histogram draws it, and no further than the histogram's axis goes.
 
 Moving either end by hand takes the window out of whichever rule it was
-on. On a file read as data, `e` cycles back into the rules and the *As
-stored* button on the histogram panel puts the window back at 0 to 1; on a
-photo the rules are not offered, and the reset button puts the window back
+on. In data mode, `e` cycles back into the rules and the *As
+stored* button on the histogram panel puts the window back at 0 to 1; in
+photo mode the rules are not offered, and the reset button puts the window back
 with everything else. The exposure is a push on top of whatever the window
 is, and neither handle touches it. Exposure stops at ±16 stops.
 
@@ -725,19 +726,20 @@ the pointer at that stage; pointing at the picture marks the pixel on every
 plot and writes its value at each stage, from the file at the foot of the
 panel to what the screen shows at the top.
 
-The pair of buttons at the head of the panel, *Photo* and *Data*, says how
-the file is being read, and switches it. A photo is shown as it was made to
-look, with 1.0 as white; data is numbers windowed to what they hold, a
-single channel spread along a ramp with no exposure to push. The program
+The pair of buttons at the head of the panel, *Photo* and *Data*, says which
+mode the file is read in, and switches it; `|` toggles between the two. In
+photo mode the file is shown as it was made to look, with 1.0 as white; in
+data mode it is numbers windowed to what they hold, a single channel spread
+along a ramp with no exposure to push. The program
 guesses from the file, and guesses wrong on some: a 16-bit grayscale scan
 saved without its profile opens as data, auto-leveled, and pressing *Photo*
 reads it again as the photograph it is; an elevation model saved as an
 ordinary 8-bit image opens as a picture, and *Data* reads it as the
 measurement it is. The choice stays with the file for the rest of the
-session, so stepping away and back finds it read the same way, and the
-same pair is under the Image heading of the information panel. While the
-gain map or the depth map is shown in the picture's place the pair is off:
-a map is data whatever the picture is.
+session, so stepping away and back finds it in the same mode, and the
+same pair is under the Image heading of the information panel, beside
+*Mode*. While the gain map or the depth map is shown in the picture's place
+the pair is off: a map is always in data mode.
 
 `w`, or the warning sign in the row of buttons at the top of the panel,
 paints the clipped
@@ -761,7 +763,7 @@ at the end and the reading says where it is. Under it, the *Curve* row —
 *Clip* or *Roll off* — that `t` toggles, since a stop or two of exposure
 puts the top of any picture above white.
 
-A file read as data has neither: its numbers need not be light, so there
+In data mode a file has neither: its numbers need not be light, so there
 is no exposure to push — the white handle does the same job in the file's
 own units — and a curve would bend the values you are reading off. `d`,
 `f` and `t` do nothing on it, and values past the top of the window are
@@ -772,9 +774,9 @@ holds to black and white; and *Trimmed* leaves the outermost 0.2% out
 before stretching, which is what data — sensor counts, a float TIFF, an
 elevation model — opens with. A photo has no such row: it opens as stored,
 stretching it would only make it look wrong, and the handles are the way
-into its shadows and highlights. To push the exposure of a file read as
-data, press *Photo*. The rows are the same for every photo, and the same
-for every file of data, so the panel changes height only between the two.
+into its shadows and highlights. To push the exposure of a file in data
+mode, switch it to photo mode. The rows are the same for every file in
+photo mode, and the same for every file in data mode, so the panel changes height only between the two.
 
 The curve is added to bring values brighter than white back down into a
 surface that cannot show them. *Clip* is not a second curve but the absence

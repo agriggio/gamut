@@ -734,8 +734,8 @@ pub fn words(tip: Tip) -> Option<String> {
         // The two readings a file can be given, at the head of the
         // histogram panel and in the information panel's Image section;
         // what follows from each is `reading_means`, set under it.
-        Tip::Control(Control::Reading(Reading::Photo)) => "Read as a photo",
-        Tip::Control(Control::Reading(Reading::Data)) => "Read as data",
+        Tip::Control(Control::Reading(Reading::Photo)) => "Set photo mode",
+        Tip::Control(Control::Reading(Reading::Data)) => "Set data mode",
         // And what becomes of the highlights under each, the curve named
         // where there is one.
         Tip::Control(Control::Curve(index)) => match ToneMap::ALL.get(index)? {

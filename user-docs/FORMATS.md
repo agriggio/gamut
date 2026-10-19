@@ -98,8 +98,8 @@ non-RGB space, leaves the file shown as sRGB rather than approximated.
 and `--primaries bt709|p3|bt2020|adobe|prophoto` replace whatever the file said or was
 assumed to mean, for every file opened in that run. This matters most for
 TIFF, which says nothing at all. For one file at a time, the *Photo* /
-*Data* pair at the head of the histogram panel does the same job in plainer
-terms — see [KEYS.md](KEYS.md).
+*Data* pair at the head of the histogram panel, or `|`, does the same job in
+plainer terms — see [KEYS.md](KEYS.md).
 
 **Depth and channels survive.** A 16-bit scan stays 16-bit, floating-point
 data stays floating point, and a grayscale image stays single-channel rather
@@ -121,14 +121,14 @@ what it holds,
 because values occupying a fraction of the nominal range otherwise show as a
 black rectangle. A single-channel measurement is spread straight across the
 grays, the middle of the window coming out middle gray, as an elevation
-model or a temperature grid is drawn everywhere else. On any file read as
-data the window's ends are hard ends, on any monitor, and neither the
-exposure nor the tone curve does anything, since its values need not be
-light. Where any of that leaves highlights above white — a PQ
-frame, a gain-mapped photograph, the windows of a metered church — the
-neutral tone map is on from the start rather than clipping, unless the image
-is going out to an HDR surface, where the highlights have somewhere to go
-and no curve is applied at all. All of it is adjustable: `e` cycles the
+model or a temperature grid is drawn everywhere else. In data mode the
+window's ends are hard ends, on any monitor, and neither the exposure nor
+the tone curve does anything, since its values need not be light. Where
+any of that leaves highlights above white — a PQ frame, a gain-mapped
+photograph, the windows of a metered church — the neutral tone map is on
+from the start rather than clipping, unless the image is going out to an
+HDR surface, where the highlights have somewhere to go and no curve is
+applied at all. All of it is adjustable: `e` cycles the
 automatic window, `t` the tone map, `o`
 the room above white, `z` resets. The information panel's "Referred to" line says
 which kind of light a file was taken for.

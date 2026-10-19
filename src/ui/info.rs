@@ -726,7 +726,7 @@ fn reading_row(pass: &mut Pass, ui: &mut egui::Ui, width: f32) {
         ui.painter().text(
             pos2(name.min.x, name.center().y),
             egui::Align2::LEFT_CENTER,
-            "Read as",
+            "Mode",
             font.clone(),
             theme.text_dim.into(),
         );
