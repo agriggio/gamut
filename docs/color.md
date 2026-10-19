@@ -91,8 +91,8 @@ transfer function decides it unless a decoder knows better:
   Blender's own writer put on every picture it saved, says nothing was
   done, and the picture is metered like one that says nothing.
 - **Measured** (every other linear file: a 16-bit gray or a float TIFF
-  with no profile, a 16-bit TIFF placed on the ground or carrying a no-data
-  value, a linear-declared PNG or JPEG XL, sensor counts) may not be light
+  with no profile, a 16-bit TIFF or an 8-bit gray one placed on the ground
+  or carrying a no-data value, a linear-declared PNG or JPEG XL, sensor counts) may not be light
   at all —
   an elevation model, a mask, a temperature grid — so neither a white nor a
   middle gray means anything for it. It gets the trimmed window

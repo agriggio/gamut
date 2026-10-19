@@ -115,8 +115,8 @@ camera would expose it: the exposure is set so that the bulk of the light
 lands at middle gray, and the exposure slider on the histogram panel shows
 the setting in stops, ready to be pushed either way with `d` and `f`.
 Measurement data — a 16-bit grayscale or a floating-point TIFF without a
-profile, a 16-bit TIFF that says where its pixels are on the ground, and
-any other linear file — opens on a trimmed window, the central 99.8% of
+profile, a 16-bit TIFF or an 8-bit grayscale one that says where its pixels
+are on the ground, and any other linear file — opens on a trimmed window, the central 99.8% of
 what it holds,
 because values occupying a fraction of the nominal range otherwise show as a
 black rectangle. A single-channel measurement is spread straight across the

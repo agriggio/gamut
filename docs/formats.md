@@ -306,8 +306,12 @@ there is: 8-bit files are overwhelmingly pictures, and so are 16-bit files
 of three colors, which is what a scan or an editor's export saved without
 its profile looks like, where a measurement is nearly always one channel or
 floats; a file that carries GeoTIFF's key directory (34735) or GDAL's
-no-data value is data whatever its layout, a three-band satellite composite
-being the 16-bit RGB file that is counts after all. The *Photo* / *Data*
+no-data value is data unless it is 8-bit color, a three-band satellite
+composite being the 16-bit RGB file that is counts after all. An 8-bit one
+placed on the ground is the other way: three channels or a palette, which
+the crate expands to three, is an orthophoto or a rendered map, and one
+channel is a slope, a class or a scaled index — `tiff-geo-gray8.tif` and
+`tiff-geo-rgb8.tif` are the pair. The *Photo* / *Data*
 switch and `--transfer` are the overrides for the 16-bit gray scan, or the
 RGB file of counts with no georeference, that the guess gets wrong; see
 [color](color.md#display-referred-scene-referred-and-measured).

@@ -108,6 +108,10 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
 
 ### Changed
 
+- An 8-bit grayscale TIFF without a profile that says where its pixels are
+  on the ground, or which value means no data — a slope, a land-cover
+  class, a scaled index — opens as data, as a 16-bit one already did. An
+  8-bit color one, an orthophoto or a rendered map, still opens as a photo.
 - The information panel's sections come in a new order: File, About,
   Image, Camera, Exposure, Location, Orientation, Gain map, Profile, Depth
   map, Regions and Georeference — how the picture was taken before what it
