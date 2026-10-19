@@ -192,6 +192,10 @@ pub const NO_GAIN_MAP: &str = "This image has no gain map.";
 /// same reason.
 pub const NO_MOSAIC: &str = "This image has no raw mosaic.";
 pub const NO_ORIENTATION: &str = "Image orientation data not available";
+/// What the map button says, for the key, on a file that does not say
+/// where it was taken. The button is drawn only beside a location, so this
+/// is only ever the reason a press of the key is refused.
+pub const NO_LOCATION: &str = "This image has no location.";
 
 /// What the gain map's toggle says under its name on a raw whose profile
 /// says how it should look: where the map it shows comes from, there being
@@ -286,6 +290,9 @@ pub struct Conditions {
     /// Whether the file on screen says which way its camera faced, which
     /// is what the horizon grid needs.
     pub orientation: bool,
+    /// Whether the file on screen says where it was taken, which is what
+    /// the map needs.
+    pub located: bool,
     /// Whether the window has room for each of what the side panel holds,
     /// and for the help popup.
     pub room: Room,
@@ -348,6 +355,7 @@ impl Default for Conditions {
             coordinates: false,
             geographic: false,
             orientation: false,
+            located: false,
             room: Room {
                 histogram: false,
                 info: false,
@@ -394,6 +402,7 @@ impl Conditions {
         coordinates: false,
         geographic: false,
         orientation: true,
+        located: true,
         room: Room {
             histogram: true,
             info: true,
@@ -462,6 +471,7 @@ pub fn disabled(tip: Tip, conditions: Conditions) -> Option<Refused> {
         mosaic,
         profile,
         orientation,
+        located,
         ..
     } = conditions;
     let said = |said| Some(Refused { said, hint: None });
@@ -492,6 +502,9 @@ pub fn disabled(tip: Tip, conditions: Conditions) -> Option<Refused> {
     }
     if tip == Tip::Control(Control::HorizonGrid) && !orientation {
         return said(NO_ORIENTATION);
+    }
+    if tip == Tip::Control(Control::OpenMap) && !located {
+        return said(NO_LOCATION);
     }
     if tip == Tip::Control(Control::Profile) && !profile {
         return said(NO_PROFILE);

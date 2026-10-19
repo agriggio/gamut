@@ -238,6 +238,9 @@ pub enum Action {
     TurnRight,
     /// Open the export dialog on the picture as shown — see `app::exporting`.
     Export,
+    /// Open a map of where the picture was taken in the browser — see
+    /// `App::open_map`.
+    OpenMap,
     /// Put back the last thing done to a file on disk: the file restored
     /// from the trash, or its old name — see `app::edits`.
     Undo,
@@ -445,6 +448,7 @@ pub(super) fn action_of(tip: Tip) -> Option<Action> {
         Tip::Control(Control::TurnLeft) => TurnLeft,
         Tip::Control(Control::TurnRight) => TurnRight,
         Tip::Control(Control::Export) => Export,
+        Tip::Control(Control::OpenMap) => OpenMap,
         // The two buttons in the middle of an empty window, by the keys
         // that put up the same dialog.
         Tip::Control(Control::OpenFiles) => OpenFiles,
@@ -472,7 +476,6 @@ pub(super) fn action_of(tip: Tip) -> Option<Action> {
             | Control::TagsRefresh
             | Control::TagGroup(_)
             | Control::TagRow(_)
-            | Control::OpenMap
             | Control::Chooser
             | Control::Choose(_)
             | Control::FileMenu
@@ -641,6 +644,8 @@ pub enum When {
     Geographic,
     /// The file on screen says which way its camera faced.
     Orientation,
+    /// The file on screen says where it was taken.
+    Located,
     /// The image on screen is read as data rather than as a photo: numbers
     /// windowed to what they hold, which is what the window rules are for.
     Data,
@@ -653,7 +658,7 @@ impl When {
     /// Every condition, for a test to hold them all up against the
     /// application.
     #[cfg(test)]
-    pub const ALL: [When; 21] = [
+    pub const ALL: [When; 22] = [
         When::RegionSelected,
         When::SeveralFiles,
         When::Animation,
@@ -673,6 +678,7 @@ impl When {
         When::Coordinates,
         When::Geographic,
         When::Orientation,
+        When::Located,
         When::Data,
         When::Photo,
     ];
@@ -700,6 +706,7 @@ impl When {
             When::Coordinates => "a file with other coordinates",
             When::Geographic => "a file placed in lat/long",
             When::Orientation => "a file with camera orientation",
+            When::Located => "a file with a location",
             When::Data => "data mode",
             When::Photo => "photo mode",
         }
@@ -739,6 +746,7 @@ impl Conditions {
             When::Coordinates => self.coordinates,
             When::Geographic => self.geographic,
             When::Orientation => self.orientation,
+            When::Located => self.located,
             When::Data => self.data,
             When::Photo => !self.data && !self.nothing_open,
         }
@@ -1234,6 +1242,12 @@ pub static ROWS: &[Row] = &[
         help: "Export the picture as shown to a new JPG or PNG",
         keys: one!("files.export", Export, [typed(CTRL, 'e')]),
     },
+    Row {
+        section: Section::Files,
+        when: Some(When::Located),
+        help: "Open map of image location in browser",
+        keys: one!("files.map", OpenMap, [typed(CTRL, 'M')]),
+    },
     // The region's own section: the key that puts one up, what the fit
     // does while it is, and the names that are tried before the plain ones
     // while it is — by default on the same arrows, which then move the
@@ -1578,6 +1592,7 @@ pub static MAC_DEFAULTS: &[(&str, &[Chord])] = &[
     ),
     ("files.undo", &[typed(CMD, 'z')]),
     ("files.export", &[typed(CMD, 'e')]),
+    ("files.map", &[typed(CMD, 'M')]),
     // Preview's.
     ("display.turn.left", &[key(';'), typed(CMD, 'l')]),
     ("display.turn.right", &[key('\''), typed(CMD, 'r')]),
@@ -2428,6 +2443,7 @@ impl App {
             TurnLeft => return self.press(Control::TurnLeft),
             TurnRight => return self.press(Control::TurnRight),
             Export => return self.press(Control::Export),
+            OpenMap => return self.press(Control::OpenMap),
             Undo => return self.undo(),
             // The buttons' own presses, so that the key and the button in
             // the middle of an empty window cannot come to mean different
@@ -2621,6 +2637,7 @@ impl App {
             coordinates: ui::pixel::Answers::of(current).beyond_pixel(),
             geographic: georeference.is_some_and(|geo| geo.offers_geographic()),
             orientation: current.is_some_and(|current| current.exif.attitude.is_some()),
+            located: current.is_some_and(|current| current.exif.position.is_some()),
             room: self.room(),
             hdr: self.hdr_state(),
             camera_jpeg: current

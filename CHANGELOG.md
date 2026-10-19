@@ -8,6 +8,9 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
 
 ### Added
 
+- `Ctrl+Shift+M`, a Mac's `⇧⌘M`, opens a map of where the picture was
+  taken in the browser, as the button beside the information panel's
+  *Location* does. The button's tooltip names it.
 - `|` reads the file on screen the other way, as data where it is read as a
   photo and as a photo where it is read as data, as the *Photo* / *Data*
   pair at the head of the histogram panel does. Both buttons name it.
