@@ -198,7 +198,7 @@ pub const NO_ORIENTATION: &str = "Image orientation data not available";
 pub const NO_LOCATION: &str = "This image has no location.";
 /// The same for the box button's key, on a file not placed in latitude and
 /// longitude.
-pub const NO_BOUNDS: &str = "This image is not placed in latitude and longitude.";
+pub const NO_BOUNDS: &str = "This image doesn't have spatial bounds.";
 
 /// What the gain map's toggle says under its name on a raw whose profile
 /// says how it should look: where the map it shows comes from, there being
@@ -655,7 +655,7 @@ pub fn words(tip: Tip) -> Option<String> {
         Tip::Control(Control::OpenMap) => "Open map to this location",
         // Nor this: on screen only beside a georeference.
         Tip::Control(Control::OpenMapCenter) => "Open map to the center of this image",
-        Tip::Control(Control::OpenMapBounds) => "Open map of the area this image covers",
+        Tip::Control(Control::OpenMapBounds) => "Open map of the bounds of this image",
         // The information panel's head: its two tabs, and the buttons
         // that copy what is on the one on screen. Copy All carries what
         // the rest of the column's copies do, which no key reaches.

@@ -2185,17 +2185,17 @@ fn a_georeference_offers_its_middle_and_its_box() {
     // Projected, on UTM zone 18N.
     let mut harness = place(32618);
     assert_eq!(
-        click(&mut harness, "Open center in map"),
+        click(&mut harness, "Open image center in map"),
         [Command::Press(Control::OpenMapCenter)]
     );
     assert_eq!(
-        click(&mut harness, "Open bounds in map"),
+        click(&mut harness, "Open image bounds in map"),
         [Command::Press(Control::OpenMapBounds)]
     );
     // User-defined.
     let harness = place(32767);
-    assert!(harness.query_by_label("Open center in map").is_none());
-    assert!(harness.query_by_label("Open bounds in map").is_none());
+    assert!(harness.query_by_label("Open image center in map").is_none());
+    assert!(harness.query_by_label("Open image bounds in map").is_none());
 }
 
 /// The chooser: opened, its field takes the keyboard, and what is typed
