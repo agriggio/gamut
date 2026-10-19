@@ -49,8 +49,10 @@ shown within about half a second. Nothing has to be pressed.
 A reload keeps you where you were: the same pan and zoom, the same exposure
 and tone map, with only an automatic window re-derived from the new pixels.
 The point is watching one spot as the numbers under it change. A file that
-comes back a different size is treated as a different picture and gets a fresh
-fit. `]` and `[` move the watch along with the view.
+comes back the same shape at another size is the same picture written larger or
+smaller: it keeps its exposure and tone map, and stays where it was at the size it
+was on screen. One that comes back another shape is treated as a different picture
+and gets a fresh fit. `]` and `[` move the watch along with the view.
 
 It is a `stat` every 250 ms, not `inotify`. That costs nothing measurable, and
 it is the version that works over NFS and SSHFS and that survives the way most

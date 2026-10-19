@@ -768,3 +768,18 @@ fn a_rescale_keeps_the_same_detail_at_the_same_size() {
     assert_eq!(view.pan, [600.0, -300.0]);
     assert_eq!(view.zoom, 1.0);
 }
+
+/// A picture made larger or smaller is the same shape, its sides rounded
+/// to a whole pixel either way; one cropped or stretched is not.
+#[test]
+fn the_same_shape_is_a_scale_give_or_take_the_rounding() {
+    assert!(View::same_shape([4000.0, 3000.0], [1000.0, 750.0]));
+    assert!(View::same_shape([1000.0, 750.0], [4000.0, 3000.0]));
+    // A pyramid's halving, rounded down on one side and up on the other.
+    assert!(View::same_shape([1001.0, 751.0], [500.0, 376.0]));
+    assert!(View::same_shape([751.0, 1001.0], [376.0, 500.0]));
+    assert!(View::same_shape([3.0, 1001.0], [1.0, 500.0]));
+    assert!(!View::same_shape([4000.0, 3000.0], [1000.0, 760.0]));
+    assert!(!View::same_shape([4000.0, 3000.0], [3000.0, 4000.0]));
+    assert!(!View::same_shape([4000.0, 3000.0], [0.0, 0.0]));
+}

@@ -97,8 +97,13 @@ the frames without decoding any, which the header itself does not state.
 A page is a read like a file: `Request` names it, `Reload::Page` says why,
 and the loader decodes it, scans it and uploads it as it would a file, since
 a page may be any size or layout. `App::apply` treats it as it treats a file
-changed on disk: the display stays, the view stays where the size matches
-and is fitted afresh where it does not. `n` and `N` step pages and frames
+changed on disk: where the size matches, the display and the view stay;
+where the page is the same shape at another size — the pages of a pyramid,
+each a reduction of the one before — the display stays and the view is
+rescaled, so that the same detail stays under the center of the window at
+the size it was on screen (`Arrival::Rescaled`, by `View::same_shape`, a
+pixel's rounding either way); and where the page is another shape, both
+start over and it is fitted afresh. `n` and `N` step pages and frames
 alike, going round the ends as `]` and `[` go round the list. The page a
 file was left on is kept beside its view and display in `kept.rs`, and a
 file coming back is asked for at that page. A frame is kept the same way,

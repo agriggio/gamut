@@ -116,6 +116,13 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
 
 ### Changed
 
+- Stepping to a page of another size that is the same shape — the pages
+  of a pyramidal TIFF, each a reduction of the one before — keeps the
+  same detail at the center of the window, at the size it was on screen,
+  rather than fitting the page afresh, and keeps the exposure, tone map
+  and window set on the page before. So does a file on screen written
+  again larger or smaller. A page of another shape is still fitted, and
+  its display still starts over.
 - The information panel's *Georeference* section is headed by a globe
   rather than a map, leaving the map's mark to the buttons that open one,
   as in *Location*.
