@@ -431,7 +431,49 @@ impl Georeference {
     /// WGS 84, in degrees, in that order; `None` where the file cannot say,
     /// or where the point is off the part of the globe its projection maps.
     pub fn latitude_longitude(&self, at: [u32; 2]) -> Option<[f64; 2]> {
-        let [x, y] = self.model(at);
+        self.lifted(self.model(at))
+    }
+
+    /// The point `at` of the stored raster as latitude and longitude, as
+    /// [`Self::latitude_longitude`] gives them, where `at` is measured from
+    /// the raster's first corner in pixels — so that `[0, 0]` is that corner
+    /// and the raster's size the one across from it, rather than a pixel's
+    /// middle.
+    pub fn latitude_longitude_at(&self, at: [f64; 2]) -> Option<[f64; 2]> {
+        let [a, b, c, d, e, f] = self.affine;
+        // The model is read at a pixel's middle, half a pixel in from its
+        // corner, plus the inset; so a corner is half a pixel out from that.
+        let shift = self.inset - 0.5;
+        let (column, row) = (at[0] + shift, at[1] + shift);
+        self.lifted([a * column + b * row + c, d * column + e * row + f])
+    }
+
+    /// The middle of a stored raster `size` pixels across, as latitude and
+    /// longitude.
+    pub fn center(&self, size: [u32; 2]) -> Option<[f64; 2]> {
+        self.latitude_longitude_at([size[0] as f64 / 2.0, size[1] as f64 / 2.0])
+    }
+
+    /// The four corners of a stored raster `size` pixels across, each as
+    /// latitude and longitude; `None` where any of them cannot be placed.
+    ///
+    /// The corners and not a box around them: a projected raster's edges
+    /// are not lines of latitude and longitude, and the four corners say
+    /// where it lies on the ground as a box drawn along them would not.
+    pub fn corners(&self, size: [u32; 2]) -> Option<Corners> {
+        let [width, height] = size.map(f64::from);
+        let corner = |at| self.latitude_longitude_at(at);
+        Some(Corners {
+            upper_left: corner([0.0, 0.0])?,
+            upper_right: corner([width, 0.0])?,
+            lower_right: corner([width, height])?,
+            lower_left: corner([0.0, height])?,
+        })
+    }
+
+    /// A point in the model's coordinates as latitude and longitude on
+    /// WGS 84, in that order, where the file can say.
+    fn lifted(&self, [x, y]: [f64; 2]) -> Option<[f64; 2]> {
         let [longitude, latitude] = match (&self.lift, self.geographic) {
             (None, true) => [x, y],
             (None, false) => return None,
@@ -457,6 +499,16 @@ impl Georeference {
         let [a, b, _, d, e, _] = self.affine;
         a.hypot(d).min(b.hypot(e))
     }
+}
+
+/// The corners of a raster as stored on the globe, each latitude and
+/// longitude in degrees on WGS 84: its first row's ends, and its last's.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Corners {
+    pub upper_left: [f64; 2],
+    pub upper_right: [f64; 2],
+    pub lower_right: [f64; 2],
+    pub lower_left: [f64; 2],
 }
 
 /// Where the raster sits in the model's coordinates: the ground under its
@@ -800,6 +852,39 @@ mod tests {
             [47.7885, 5.9605],
             1e-12,
         );
+    }
+
+    /// A raster's middle and its corners are read from its corners rather than
+    /// from its pixels' middles, whichever the file's coordinates are of.
+    #[test]
+    fn a_raster_has_a_middle_and_corners() {
+        let geo = Georeference::read(&placed(2, 4326, [5.9505, 47.8085], 0.001)).expect("placed");
+        near(
+            geo.center([100, 200]).expect("a latitude"),
+            [47.709, 6.0],
+            1e-12,
+        );
+        let corners = geo.corners([100, 200]).expect("corners");
+        near(corners.upper_left, [47.809, 5.95], 1e-12);
+        near(corners.upper_right, [47.809, 6.05], 1e-12);
+        near(corners.lower_right, [47.609, 6.05], 1e-12);
+        near(corners.lower_left, [47.609, 5.95], 1e-12);
+
+        // A projected one's are each its corner, lifted.
+        let bern =
+            Georeference::read(&placed(1, 2056, [2_600_000.0, 1_200_000.0], 2.5)).expect("placed");
+        let corners = bern.corners([400, 400]).expect("corners");
+        let lifted = |at| bern.latitude_longitude_at(at).expect("on the globe");
+        assert_eq!(corners.upper_left, lifted([0.0, 0.0]));
+        assert_eq!(corners.lower_right, lifted([400.0, 400.0]));
+        assert!(corners.upper_left[0] > corners.lower_left[0]);
+        assert!(corners.upper_right[1] > corners.upper_left[1]);
+
+        // A system nothing can look up has neither.
+        let unknown =
+            Georeference::read(&placed(1, USER_DEFINED, [1000.0, 2000.0], 1.0)).expect("placed");
+        assert_eq!(unknown.center([10, 10]), None);
+        assert_eq!(unknown.corners([10, 10]), None);
     }
 
     /// A system spelled out in parameters, or named by a code the table

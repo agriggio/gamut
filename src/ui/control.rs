@@ -209,6 +209,13 @@ controls! {
     /// panel's `Location` section, which opens a map of where the picture
     /// was taken in the browser.
     OpenMap,
+    /// The two buttons at the head of the information panel's
+    /// `Georeference` section, for a raster placed in latitude and
+    /// longitude: a map of its middle opened in the browser, as
+    /// [`Control::OpenMap`] opens one of where a picture was taken, and a
+    /// map of the box it covers.
+    OpenMapCenter,
+    OpenMapBounds,
     /// The file chooser: opened by `Ctrl+P`, and closed by the same key
     /// pressed again while it is up — which arrives through here from the
     /// popup itself, since the field in it has the keyboard.
@@ -345,6 +352,8 @@ impl Control {
             Control::VisitExiftool => format!("Visit {}", crate::exiftool::WEBSITE),
             Control::TagsRefresh => "Refresh".to_string(),
             Control::OpenMap => "Open in map".to_string(),
+            Control::OpenMapCenter => "Open image center in map".to_string(),
+            Control::OpenMapBounds => "Open image bounds in map".to_string(),
             Control::Chooser => "Choose a file".to_string(),
             Control::Choose(index) => format!("Choose file {}", index + 1),
             Control::FileMenu => "File".to_string(),

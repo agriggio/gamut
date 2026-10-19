@@ -192,6 +192,13 @@ pub const NO_GAIN_MAP: &str = "This image has no gain map.";
 /// same reason.
 pub const NO_MOSAIC: &str = "This image has no raw mosaic.";
 pub const NO_ORIENTATION: &str = "Image orientation data not available";
+/// What the map button says, for the key, on a file that does not say
+/// where it was taken. The button is drawn only beside a location, so this
+/// is only ever the reason a press of the key is refused.
+pub const NO_LOCATION: &str = "This image has no location.";
+/// The same for the box button's key, on a file not placed in latitude and
+/// longitude.
+pub const NO_BOUNDS: &str = "This image doesn't have spatial bounds.";
 
 /// What the gain map's toggle says under its name on a raw whose profile
 /// says how it should look: where the map it shows comes from, there being
@@ -286,6 +293,9 @@ pub struct Conditions {
     /// Whether the file on screen says which way its camera faced, which
     /// is what the horizon grid needs.
     pub orientation: bool,
+    /// Whether the file on screen says where it was taken, which is what
+    /// the map needs.
+    pub located: bool,
     /// Whether the window has room for each of what the side panel holds,
     /// and for the help popup.
     pub room: Room,
@@ -348,6 +358,7 @@ impl Default for Conditions {
             coordinates: false,
             geographic: false,
             orientation: false,
+            located: false,
             room: Room {
                 histogram: false,
                 info: false,
@@ -394,6 +405,7 @@ impl Conditions {
         coordinates: false,
         geographic: false,
         orientation: true,
+        located: true,
         room: Room {
             histogram: true,
             info: true,
@@ -462,6 +474,8 @@ pub fn disabled(tip: Tip, conditions: Conditions) -> Option<Refused> {
         mosaic,
         profile,
         orientation,
+        located,
+        geographic,
         ..
     } = conditions;
     let said = |said| Some(Refused { said, hint: None });
@@ -492,6 +506,12 @@ pub fn disabled(tip: Tip, conditions: Conditions) -> Option<Refused> {
     }
     if tip == Tip::Control(Control::HorizonGrid) && !orientation {
         return said(NO_ORIENTATION);
+    }
+    if tip == Tip::Control(Control::OpenMap) && !located {
+        return said(NO_LOCATION);
+    }
+    if tip == Tip::Control(Control::OpenMapBounds) && !geographic {
+        return said(NO_BOUNDS);
     }
     if tip == Tip::Control(Control::Profile) && !profile {
         return said(NO_PROFILE);
@@ -633,6 +653,9 @@ pub fn words(tip: Tip) -> Option<String> {
         Tip::Control(Control::OpenIn) => "Open the file in another application",
         // No key opens it: it is on screen only beside the coordinates.
         Tip::Control(Control::OpenMap) => "Open map to this location",
+        // Nor this: on screen only beside a georeference.
+        Tip::Control(Control::OpenMapCenter) => "Open map to the center of this image",
+        Tip::Control(Control::OpenMapBounds) => "Open map of the bounds of this image",
         // The information panel's head: its two tabs, and the buttons
         // that copy what is on the one on screen. Copy All carries what
         // the rest of the column's copies do, which no key reaches.

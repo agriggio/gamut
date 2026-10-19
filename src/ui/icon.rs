@@ -274,6 +274,35 @@ pub(super) const MAP: &[Mark] = &[
     Mark::Line([15.0, 6.0], [15.0, 21.0]),
 ];
 
+/// Lucide's `globe`: the earth, its equator and one meridian seen edge on —
+/// the mark at the head of the info panel's section about where a raster's
+/// pixels are on the ground. Each half of the meridian is an arc of radius
+/// 14.5 from pole to pole, about a center 10.5 out to the other side.
+pub(super) const GLOBE: &[Mark] = &[
+    Mark::circle([12.0, 12.0], 10.0),
+    Mark::arc([22.5, 12.0], 14.5, 136.4, 87.2),
+    Mark::arc([1.5, 12.0], 14.5, -43.6, 87.2),
+    Mark::Line([2.0, 12.0], [22.0, 12.0]),
+];
+
+/// Lucide's `scan`: a square's four rounded corners and nothing between
+/// them — the mark on the button that opens a map of the area a
+/// georeferenced picture covers, by its four corners.
+pub(super) const SCAN: &[Mark] = &[
+    Mark::Line([3.0, 7.0], [3.0, 5.0]),
+    Mark::arc([5.0, 5.0], 2.0, 180.0, 90.0),
+    Mark::Line([5.0, 3.0], [7.0, 3.0]),
+    Mark::Line([17.0, 3.0], [19.0, 3.0]),
+    Mark::arc([19.0, 5.0], 2.0, -90.0, 90.0),
+    Mark::Line([21.0, 5.0], [21.0, 7.0]),
+    Mark::Line([21.0, 17.0], [21.0, 19.0]),
+    Mark::arc([19.0, 19.0], 2.0, 0.0, 90.0),
+    Mark::Line([19.0, 21.0], [17.0, 21.0]),
+    Mark::Line([7.0, 21.0], [5.0, 21.0]),
+    Mark::arc([5.0, 19.0], 2.0, 90.0, 90.0),
+    Mark::Line([3.0, 19.0], [3.0, 17.0]),
+];
+
 /// Lucide's `square-dashed`: a square's four rounded corners and two dashes
 /// down each side — the mark at the head of the info panel's section about
 /// the regions the metadata marks out on the picture.
@@ -1334,7 +1363,7 @@ mod tests {
 
     /// Every icon in the table, so that a new one is held to the same
     /// promises as the rest.
-    const ICONS: [&[Mark]; 48] = [
+    const ICONS: [&[Mark]; 50] = [
         CHART_AREA,
         INFO,
         CIRCLE_QUESTION_MARK,
@@ -1346,6 +1375,8 @@ mod tests {
         APERTURE,
         MAP_PIN,
         SQUARE_DASHED,
+        GLOBE,
+        SCAN,
         MAP,
         FILE_IMAGE,
         FOLDER,

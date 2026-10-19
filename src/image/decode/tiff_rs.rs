@@ -180,7 +180,8 @@ impl super::Decoder for TiffRs {
         let orientation = orientation(&mut decoder)?;
         let profile = decoder.find_tag(Tag::IccProfile)?;
         // A GeoTIFF's key directory, or a value standing for no data: either
-        // says the file is a measurement — see `color_space`.
+        // says the file is a measurement unless it is 8-bit color — see
+        // `color_space`.
         let georeferenced =
             nodata.is_some() || decoder.find_tag(Tag::Unknown(GEO_KEY_DIRECTORY))?.is_some();
 
@@ -623,9 +624,12 @@ fn orientation<R: io::Read + Seek>(decoder: &mut Decoder<R>) -> Result<Orientati
 /// export saved without its profile looks like, where a measurement is
 /// nearly always one channel — an elevation, a mask, a frame of counts — or
 /// floats, which nothing encodes a curve into. A file that says where its
-/// pixels are on the ground, or which value means no data, is data whatever
-/// its layout. The *Photo* / *Data* switch and `--transfer` override the
-/// guess when it is wrong.
+/// pixels are on the ground, or which value means no data, is data unless
+/// it is 8-bit color — an orthophoto, a rendered basemap, a scanned map,
+/// which GIS tools write as three channels or a palette (the decoder hands
+/// a palette over as three). One 8-bit channel there is a slope, a class or
+/// a scaled index far more often than it is a hillshade. The *Photo* /
+/// *Data* switch and `--transfer` override the guess when it is wrong.
 fn color_space(
     samples: &Samples,
     profile: Option<tiff::decoder::ifd::Value>,
@@ -635,7 +639,11 @@ fn color_space(
         return ColorSpace::stated(None, Some(&profile));
     }
     match samples {
-        Samples::U8 { .. } => ColorSpace::SRGB,
+        Samples::U8 { channels, .. }
+            if !georeferenced || matches!(channels, Channels::Rgb | Channels::Rgba) =>
+        {
+            ColorSpace::SRGB
+        }
         Samples::U16 { channels, .. }
             if matches!(channels, Channels::Rgb | Channels::Rgba) && !georeferenced =>
         {

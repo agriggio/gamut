@@ -909,6 +909,32 @@ const FIXTURES: &[Fixture] = &[
         tolerance: EXACT,
         ..PLAIN
     },
+    Fixture {
+        file: "tiff-geo-gray8.tif",
+        covers: "a georeferenced 8-bit channel, without a profile — guessed a measurement",
+        channels: Channels::Gray,
+        kind: Kind::U8,
+        color: LINEAR,
+        alpha: AlphaMode::Opaque,
+        tone: Tone::Gray,
+        coverage: Coverage::Opaque,
+        nodata: None,
+        tolerance: EXACT,
+        ..PLAIN
+    },
+    Fixture {
+        file: "tiff-geo-rgb8.tif",
+        covers: "a georeferenced 8-bit color picture, without a profile — an orthophoto, guessed display-referred",
+        channels: Channels::Rgb,
+        kind: Kind::U8,
+        color: SRGB,
+        alpha: AlphaMode::Opaque,
+        tone: Tone::Color,
+        coverage: Coverage::Opaque,
+        nodata: None,
+        tolerance: EXACT,
+        ..PLAIN
+    },
     // Three directories, of which the middle one is the first's mask.
     Fixture {
         file: "tiff-mask.tif",

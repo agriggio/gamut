@@ -787,6 +787,14 @@ VRT
 gdal_translate -q -of GTiff -a_nodata -9999 -co COMPRESS=NONE \
   "$work/nodata.vrt" tiff-nodata.tif
 
+# The 8-bit pattern placed on the ground, without a profile: one channel is
+# a slope or a class and read as data, three are an orthophoto and read as
+# a picture.
+for layout in gray8 rgb8; do
+  gdal_translate -q -of GTiff -a_srs EPSG:26910 -a_ullr 565000 5219000 565400 5218700 \
+    -co COMPRESS=NONE tiff-$layout.tif tiff-geo-$layout.tif
+done
+
 # ---------------------------------------------------------- camera raw
 # What a camera writes: not a picture but one count per photosite, under a
 # color filter, with the matrix that says what the counts mean. DNG is the

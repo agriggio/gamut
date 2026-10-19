@@ -238,6 +238,12 @@ pub enum Action {
     TurnRight,
     /// Open the export dialog on the picture as shown — see `app::exporting`.
     Export,
+    /// Open a map of where the picture was taken in the browser — see
+    /// `App::open_map`.
+    OpenMap,
+    /// Open a map of the area a georeferenced picture covers in the
+    /// browser — see `App::open_map_bounds`.
+    OpenMapBounds,
     /// Put back the last thing done to a file on disk: the file restored
     /// from the trash, or its old name — see `app::edits`.
     Undo,
@@ -324,10 +330,12 @@ const CTRL: Mods = Mods::CONTROL;
 const SHIFT: Mods = Mods::SHIFT;
 const CTRL_SHIFT: Mods = Mods::CONTROL.union(Mods::SHIFT);
 const ALT: Mods = Mods::ALT;
+const CTRL_ALT: Mods = Mods::CONTROL.union(Mods::ALT);
 /// The Command key, which winit calls Super.
 const CMD: Mods = Mods::SUPER;
 const CMD_SHIFT: Mods = Mods::SUPER.union(Mods::SHIFT);
 const CMD_OPTION: Mods = Mods::SUPER.union(Mods::ALT);
+const CTRL_CMD: Mods = Mods::CONTROL.union(Mods::SUPER);
 
 /// What to press for `action`: the chords of the name that runs it, and
 /// `None` where nothing is bound to it.
@@ -445,6 +453,8 @@ pub(super) fn action_of(tip: Tip) -> Option<Action> {
         Tip::Control(Control::TurnLeft) => TurnLeft,
         Tip::Control(Control::TurnRight) => TurnRight,
         Tip::Control(Control::Export) => Export,
+        Tip::Control(Control::OpenMap) => OpenMap,
+        Tip::Control(Control::OpenMapBounds) => OpenMapBounds,
         // The two buttons in the middle of an empty window, by the keys
         // that put up the same dialog.
         Tip::Control(Control::OpenFiles) => OpenFiles,
@@ -472,7 +482,7 @@ pub(super) fn action_of(tip: Tip) -> Option<Action> {
             | Control::TagsRefresh
             | Control::TagGroup(_)
             | Control::TagRow(_)
-            | Control::OpenMap
+            | Control::OpenMapCenter
             | Control::Chooser
             | Control::Choose(_)
             | Control::FileMenu
@@ -641,6 +651,8 @@ pub enum When {
     Geographic,
     /// The file on screen says which way its camera faced.
     Orientation,
+    /// The file on screen says where it was taken.
+    Located,
     /// The image on screen is read as data rather than as a photo: numbers
     /// windowed to what they hold, which is what the window rules are for.
     Data,
@@ -653,7 +665,7 @@ impl When {
     /// Every condition, for a test to hold them all up against the
     /// application.
     #[cfg(test)]
-    pub const ALL: [When; 21] = [
+    pub const ALL: [When; 22] = [
         When::RegionSelected,
         When::SeveralFiles,
         When::Animation,
@@ -673,6 +685,7 @@ impl When {
         When::Coordinates,
         When::Geographic,
         When::Orientation,
+        When::Located,
         When::Data,
         When::Photo,
     ];
@@ -700,6 +713,7 @@ impl When {
             When::Coordinates => "a file with other coordinates",
             When::Geographic => "a file placed in lat/long",
             When::Orientation => "a file with camera orientation",
+            When::Located => "a file with a location",
             When::Data => "data mode",
             When::Photo => "photo mode",
         }
@@ -739,6 +753,7 @@ impl Conditions {
             When::Coordinates => self.coordinates,
             When::Geographic => self.geographic,
             When::Orientation => self.orientation,
+            When::Located => self.located,
             When::Data => self.data,
             When::Photo => !self.data && !self.nothing_open,
         }
@@ -1234,6 +1249,18 @@ pub static ROWS: &[Row] = &[
         help: "Export the picture as shown to a new JPG or PNG",
         keys: one!("files.export", Export, [typed(CTRL, 'e')]),
     },
+    Row {
+        section: Section::Files,
+        when: Some(When::Located),
+        help: "Open map of image location in browser",
+        keys: one!("files.map", OpenMap, [typed(CTRL, 'M')]),
+    },
+    Row {
+        section: Section::Files,
+        when: Some(When::Geographic),
+        help: "Open map of image bounds in browser",
+        keys: one!("files.map.bounds", OpenMapBounds, [typed(CTRL_ALT, 'M')]),
+    },
     // The region's own section: the key that puts one up, what the fit
     // does while it is, and the names that are tried before the plain ones
     // while it is — by default on the same arrows, which then move the
@@ -1578,6 +1605,8 @@ pub static MAC_DEFAULTS: &[(&str, &[Chord])] = &[
     ),
     ("files.undo", &[typed(CMD, 'z')]),
     ("files.export", &[typed(CMD, 'e')]),
+    ("files.map", &[typed(CMD, 'M')]),
+    ("files.map.bounds", &[typed(CTRL_CMD, 'M')]),
     // Preview's.
     ("display.turn.left", &[key(';'), typed(CMD, 'l')]),
     ("display.turn.right", &[key('\''), typed(CMD, 'r')]),
@@ -2428,6 +2457,8 @@ impl App {
             TurnLeft => return self.press(Control::TurnLeft),
             TurnRight => return self.press(Control::TurnRight),
             Export => return self.press(Control::Export),
+            OpenMap => return self.press(Control::OpenMap),
+            OpenMapBounds => return self.press(Control::OpenMapBounds),
             Undo => return self.undo(),
             // The buttons' own presses, so that the key and the button in
             // the middle of an empty window cannot come to mean different
@@ -2621,6 +2652,7 @@ impl App {
             coordinates: ui::pixel::Answers::of(current).beyond_pixel(),
             geographic: georeference.is_some_and(|geo| geo.offers_geographic()),
             orientation: current.is_some_and(|current| current.exif.attitude.is_some()),
+            located: current.is_some_and(|current| current.exif.position.is_some()),
             room: self.room(),
             hdr: self.hdr_state(),
             camera_jpeg: current
@@ -3115,8 +3147,49 @@ impl App {
             return;
         };
         let url = crate::settings::map_link(&self.open_map_link, position);
+        self.browse(&url);
+    }
+
+    /// Opens a map of the middle of the georeferenced raster on screen, at
+    /// the address the map button's setting gives.
+    fn open_map_center(&mut self) {
+        let Some(center) = self
+            .georeferenced()
+            .and_then(|(geo, size)| geo.center(size))
+        else {
+            return;
+        };
+        let url = crate::settings::map_link(&self.open_map_link, center);
+        self.browse(&url);
+    }
+
+    /// Opens a map of the area the georeferenced raster on screen covers,
+    /// by its four corners, at the address the configuration gives.
+    fn open_map_bounds(&mut self) {
+        let Some(corners) = self
+            .georeferenced()
+            .and_then(|(geo, size)| geo.corners(size))
+        else {
+            return;
+        };
+        let url = crate::settings::map_bounds_link(&self.open_map_bounds_link, corners);
+        self.browse(&url);
+    }
+
+    /// The picture's georeference and the size of the raster it places, as
+    /// stored — which is what a georeference is read through, the turn
+    /// being the screen's and not the ground's.
+    fn georeferenced(&self) -> Option<(&crate::image::geo::Georeference, [u32; 2])> {
+        let current = self.current.as_ref()?;
+        let (picture, _) = current.picture();
+        let geo = current.exif.georeference.as_ref()?;
+        Some((geo, [picture.width, picture.height]))
+    }
+
+    /// Opens `url` in the browser, saying so only where it cannot.
+    fn browse(&mut self, url: &str) {
         // Nothing said when it goes: the browser coming up is the answer.
-        if let Err(error) = openers::browse(&url) {
+        if let Err(error) = openers::browse(url) {
             report(&error);
             self.toast(briefly(&error), Level::Error);
         }
@@ -3535,6 +3608,14 @@ impl App {
             }
             Control::OpenMap => {
                 self.open_map();
+                Effect::Redraw
+            }
+            Control::OpenMapCenter => {
+                self.open_map_center();
+                Effect::Redraw
+            }
+            Control::OpenMapBounds => {
+                self.open_map_bounds();
                 Effect::Redraw
             }
             // As with the reset: the key's action, so that the button and the
