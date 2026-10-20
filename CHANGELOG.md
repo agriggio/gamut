@@ -12,6 +12,12 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
   its compass heading but not how its camera was tilted, as a Pixel's
   does: a ring at the middle of the picture with the heading over it.
   `B` does nothing for such a picture, there being no uprights to space.
+- An *Orientation* section in the information panel for such a picture
+  too: the floor with its arrows to the heading and to north, no camera
+  over it and a note saying there is no pitch or roll. The pointer on the
+  section draws the ring on the picture.
+- A *Bearing* row in the *Orientation* section wherever the file records
+  its compass heading, written as the diagram writes it.
 - A bearing from magnetic north has an M after it — on the horizon grid,
   the *Orientation* section's diagram and the pointer's readout in the bar
   — and is written in degrees rather than as N, E, S or W.

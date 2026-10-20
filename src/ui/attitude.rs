@@ -120,20 +120,21 @@ struct Face {
 /// there is one. Where the file says the bearing the lens pointed on,
 /// `heading`, the floor wears an arrow along that way, written with the
 /// bearing — marked as from `magnetic` north where it is — and another to
-/// north.
+/// north. With no `shown`, for a file that gives the bearing and not how
+/// the camera was tilted, the camera is left out and [`NO_TILT`] said in
+/// its place, over the floor and its arrows.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn diagram(
     theme: &Theme,
     grid: icon::Grid,
     painter: &egui::Painter,
     rect: egui::Rect,
-    shown: &Shown,
+    shown: Option<&Shown>,
     size: [f32; 2],
     thumb: Option<(Thumb, Turn)>,
     heading: Option<f64>,
     magnetic: bool,
 ) {
-    let axes = camera_axes(shown.gravity);
     // Placed from the top by the height without the arrows, so that the
     // camera is drawn the same size and in the same place with them.
     let scale = rect.width().min(HEIGHT * 1.4) / SCENE_SPAN;
@@ -163,6 +164,27 @@ pub(super) fn diagram(
             painter.line_segment([screen(ends[0]), screen(ends[1])], floor_stroke);
         }
     }
+    // With no tilt there is no camera to draw, nor gravity to hang from
+    // it: the arrows, and over where the camera would stand the words
+    // saying why it does not, on a patch of the panel's ground.
+    let Some(shown) = shown else {
+        floor_arrows(theme, grid, painter, &screen, heading, magnetic);
+        let galley = painter.layout_no_wrap(
+            NO_TILT.to_string(),
+            egui::FontId::proportional(BEARING_SIZE),
+            Color32::PLACEHOLDER,
+        );
+        let at = screen([0.0, 0.0, 0.0]);
+        let extent = galley.size();
+        painter.rect_filled(
+            egui::Rect::from_center_size(at, extent + vec2(4.0, 0.0)),
+            2.0,
+            theme.bar_background,
+        );
+        painter.galley(at - extent / 2.0, galley, dim);
+        return;
+    };
+    let axes = camera_axes(shown.gravity);
     // Gravity, straight down from the camera to the floor.
     painter.extend(egui::Shape::dashed_line(
         &[screen([0.0, 0.0, 0.0]), screen([0.0, FLOOR_DROP, 0.0])],
@@ -170,36 +192,8 @@ pub(super) fn diagram(
         DASH / 2.0,
         GAP / 2.0,
     ));
+    floor_arrows(theme, grid, painter, &screen, heading, magnetic);
     let accent: Color32 = theme.accent.into();
-    // Where the lens pointed and where north is, out from gravity's foot
-    // across the floor. The lens points along +z as far as it points
-    // anywhere level, and bearings run clockwise seen from above, toward
-    // +x; north is the lens's bearing back from it.
-    if let Some(heading) = heading {
-        let stroke = |ink| Stroke::new(grid.line_width(ARROW_LINE), ink);
-        let north = (-heading as f32).to_radians();
-        let bearing = degrees(heading.round() as u32 % 360, magnetic);
-        // North over the lens's way, whose arrow runs out past its words
-        // where the two lie close.
-        floor_arrow(
-            painter,
-            &screen,
-            0.0,
-            HEADING_REACH,
-            &bearing,
-            stroke(accent),
-            theme.bar_background.into(),
-        );
-        floor_arrow(
-            painter,
-            &screen,
-            north,
-            NORTH_REACH,
-            "N",
-            stroke(theme.text_primary.into()),
-            theme.bar_background.into(),
-        );
-    }
 
     // The solids, in the camera's axes and then carried into the world's.
     let aspect = (size[0] / size[1].max(1.0)).clamp(1.0 / MAX_ASPECT, MAX_ASPECT);
@@ -337,6 +331,52 @@ pub(super) fn diagram(
             }
             outline(painter, &screen, Stroke::new(edge.width, dim));
         }
+    }
+}
+
+/// What the diagram says where the camera would stand, for a file that
+/// gives the bearing its lens pointed along and not how it was tilted.
+pub(super) const NO_TILT: &str = "No pitch/roll information";
+
+/// The arrows across the floor, drawn through `screen`, where the file
+/// says the `heading` the lens pointed along: see [`diagram`].
+fn floor_arrows(
+    theme: &Theme,
+    grid: icon::Grid,
+    painter: &egui::Painter,
+    screen: &impl Fn(Point) -> Pos2,
+    heading: Option<f64>,
+    magnetic: bool,
+) {
+    let accent: Color32 = theme.accent.into();
+    // Where the lens pointed and where north is, out from under the camera
+    // across the floor. The lens points along +z as far as it points
+    // anywhere level, and bearings run clockwise seen from above, toward
+    // +x; north is the lens's bearing back from it.
+    if let Some(heading) = heading {
+        let stroke = |ink| Stroke::new(grid.line_width(ARROW_LINE), ink);
+        let north = (-heading as f32).to_radians();
+        let bearing = degrees(heading.round() as u32 % 360, magnetic);
+        // North over the lens's way, whose arrow runs out past its words
+        // where the two lie close.
+        floor_arrow(
+            painter,
+            screen,
+            0.0,
+            HEADING_REACH,
+            &bearing,
+            stroke(accent),
+            theme.bar_background.into(),
+        );
+        floor_arrow(
+            painter,
+            screen,
+            north,
+            NORTH_REACH,
+            "N",
+            stroke(theme.text_primary.into()),
+            theme.bar_background.into(),
+        );
     }
 }
 
@@ -1162,7 +1202,7 @@ fn compass(bearing: u32, magnetic: bool) -> String {
 
 /// A bearing in whole degrees, with an M after it where it is from
 /// `magnetic` north.
-fn degrees(bearing: u32, magnetic: bool) -> String {
+pub(super) fn degrees(bearing: u32, magnetic: bool) -> String {
     format!("{bearing}\u{00b0}{}", magnetic_mark(magnetic))
 }
 

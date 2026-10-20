@@ -885,6 +885,48 @@ fn the_camera_wears_the_picture_on_its_screen() {
     assert!(worn(&harness));
 }
 
+/// A file that gives the bearing its lens pointed along and not how the
+/// camera was tilted has an Orientation section too: the floor and its
+/// arrows with no camera over them, the note saying why, and the bearing
+/// as its one row; while the pointer is on it the ring is drawn at the
+/// middle of the picture.
+#[test]
+fn a_heading_alone_has_an_orientation_section_without_a_camera() {
+    use super::attitude::NO_TILT;
+    use super::side::Side;
+
+    let mut with_info = panels();
+    with_info.side = Some(Side::Info);
+    let mut harness = open(WINDOW, 1, with_info);
+    let mut current = photograph();
+    current.exif.heading = Some(349.4);
+    current.exif.magnetic = true;
+    harness.state_mut().current = Some(current);
+    harness.run();
+    assert!(harness.query_by_label("Orientation").is_some());
+    assert!(harness.query_by_label("Bearing").is_some());
+    assert!(harness.query_by_label("Pitch").is_none());
+    let said = |harness: &Harness<'static, State>, word: &str| {
+        harness.output().shapes.iter().any(
+            |shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == word),
+        )
+    };
+    assert!(said(&harness, NO_TILT));
+    assert!(said(&harness, "N"));
+    let rings = |harness: &Harness<'static, State>| {
+        harness
+            .output()
+            .shapes
+            .iter()
+            .filter(|shape| matches!(&shape.shape, egui::Shape::Circle(circle) if circle.fill == egui::Color32::TRANSPARENT && circle.stroke.color == egui::Color32::WHITE))
+            .count()
+    };
+    assert_eq!(rings(&harness), 0);
+    harness.get_by_label("Bearing").hover();
+    harness.run();
+    assert_eq!(rings(&harness), 1);
+}
+
 /// A file that says which way its camera faced has an Orientation section,
 /// and one that does not has none; while the pointer is on the section the
 /// level line is drawn across the picture, beside the panel.
@@ -989,7 +1031,8 @@ fn the_orientation_section_draws_the_level_line_on_the_picture() {
     assert!(said(&harness, "210\u{00b0}"));
     assert!(said(&harness, "220\u{00b0}"));
     // The bearing itself is the camera's, written at the end of the arrow
-    // along the floor in the section beside north's, and on no upright.
+    // along the floor in the section beside north's and in the Bearing row
+    // under it, and on no upright.
     let at = |harness: &Harness<'static, State>, word: &str| -> Vec<f32> {
         harness
             .output()
@@ -1002,8 +1045,9 @@ fn the_orientation_section_draws_the_level_line_on_the_picture() {
             .collect()
     };
     let bearing = at(&harness, "212\u{00b0}");
-    assert_eq!(bearing.len(), 1);
-    assert!(bearing[0] > side.min.x);
+    assert_eq!(bearing.len(), 2);
+    assert!(bearing.iter().all(|&x| x > side.min.x));
+    assert!(harness.query_by_label("Bearing").is_some());
     let north = at(&harness, "N");
     assert_eq!(north.len(), 1);
     assert!(north[0] > side.min.x);

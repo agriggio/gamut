@@ -213,8 +213,10 @@ struct Section {
     /// order; empty for every other face.
     regions: Vec<ShownRegion>,
     /// For [`Face::Orientation`], which way the camera faced in the picture
-    /// as shown, and that picture's size; `None` for every other face.
-    attitude: Option<(Shown, [f32; 2])>,
+    /// as shown — `None` inside for a file that gives only the bearing its
+    /// lens pointed along — and that picture's size; `None` for every other
+    /// face.
+    attitude: Option<(Option<Shown>, [f32; 2])>,
     /// Whether what the section describes is on screen, which a pill at the
     /// end of its heading says: the picture's, or the gain map's or the
     /// depth map's while it is shown in its place.
@@ -1008,7 +1010,7 @@ fn orientation_section(
             grid,
             ui.painter(),
             rect,
-            &shown,
+            shown.as_ref(),
             size,
             thumb,
             heading,
@@ -1026,12 +1028,21 @@ fn orientation_section(
     // The section is a preview of the horizon grid: while the pointer is
     // on it the grid is drawn, as the toggle would — unless the toggle has
     // it up already.
+    // A file that gives only its heading has only the ring at the middle,
+    // and no line to name.
     let pointed = ui.rect_contains_pointer(whole);
     if pointed && !pass.panels.horizon_grid {
-        attitude::paint(pass, picture, current, &shown, pass.panels.horizon_step);
+        match (&shown, current.exif.heading) {
+            (Some(shown), _) => {
+                attitude::paint(pass, picture, current, shown, pass.panels.horizon_step)
+            }
+            (None, Some(heading)) => attitude::paint_heading(pass, picture, current, heading),
+            (None, None) => {}
+        }
     }
     if (pointed || pass.panels.horizon_grid)
-        && let Some(line) = attitude::line(current, &shown)
+        && let Some(shown) = &shown
+        && let Some(line) = attitude::line(current, shown)
         && !ui.rect_contains_pointer(heading)
     {
         let word = line.word();
@@ -1060,11 +1071,42 @@ fn leaning(degrees: f64, positive: &str, negative: &str) -> String {
 }
 
 /// The section's rows: how far the lens pointed above or below level, how
-/// far the horizon runs from the picture's across, and what the file holds
-/// as it wrote it — three numbers in the sensor's axes, or a level's angles.
-fn orientation_facts(attitude: &Attitude, shown: &Shown) -> Vec<(&'static str, String)> {
+/// far the horizon runs from the picture's across, the bearing the lens
+/// pointed along — as the diagram writes it, marked as from `magnetic`
+/// north where it is — and what the file holds of the tilt as it wrote it:
+/// three numbers in the sensor's axes, or a level's angles. A file that
+/// gives the `heading` and not the `tilt` has the bearing alone.
+fn orientation_facts(
+    tilt: Option<(&Attitude, &Shown)>,
+    heading: Option<f64>,
+    magnetic: bool,
+) -> Vec<(&'static str, String)> {
+    let mut facts = Vec::new();
+    if let Some((_, shown)) = tilt {
+        facts.push(("Pitch", leaning(shown.pitch, "up", "down")));
+        facts.push((
+            "Horizon",
+            shown
+                .horizon
+                .map(|degrees| leaning(degrees, "clockwise", "counterclockwise"))
+                .unwrap_or_default(),
+        ));
+    }
+    if let Some(heading) = heading {
+        let bearing = heading.round().rem_euclid(360.0) as u32;
+        facts.push(("Bearing", attitude::degrees(bearing, magnetic)));
+    }
+    if let Some((attitude, _)) = tilt {
+        facts.push(reading(attitude));
+    }
+    facts
+}
+
+/// What the file holds of the tilt, as it wrote it: the name of the
+/// section's last row and the row.
+fn reading(attitude: &Attitude) -> (&'static str, String) {
     let numbers = |reading: [f64; 3]| reading.map(|value| format!("{value:.3}")).join(", ");
-    let (name, reading) = match attitude.source {
+    match attitude.source {
         Source::Apple(reading) => ("Accelerometer", format!("{} g", numbers(reading))),
         Source::GoPro(reading) => ("Gravity", numbers(reading)),
         // The angles as the level wrote them, before the orientation tag:
@@ -1081,18 +1123,7 @@ fn orientation_facts(attitude: &Attitude, shown: &Shown) -> Vec<(&'static str, S
             };
             (name, angles.join(", "))
         }
-    };
-    vec![
-        ("Pitch", leaning(shown.pitch, "up", "down")),
-        (
-            "Horizon",
-            shown
-                .horizon
-                .map(|degrees| leaning(degrees, "clockwise", "counterclockwise"))
-                .unwrap_or_default(),
-        ),
-        (name, reading),
-    ]
+    }
 }
 
 /// A region's four numbers as the table writes them: its top left corner
@@ -1544,19 +1575,22 @@ fn contents(current: &Current) -> Contents {
     sections.extend(metadata(Group::Exposure));
     sections.extend(metadata(Group::Location));
     // Which way the camera faced, worked out in the picture as shown, which
-    // the turn in force decides as it does for the regions.
-    if let Some(attitude) = &exif.attitude
-        && let Some(shown) = attitude::shown(current)
-    {
+    // the turn in force decides as it does for the regions — or, for a file
+    // that gives the bearing its lens pointed along and not how the camera
+    // was tilted, that bearing alone.
+    let tilt = exif.attitude.as_ref().zip(attitude::shown(current));
+    if tilt.is_some() || exif.heading.is_some() {
+        let facts = orientation_facts(
+            tilt.as_ref().map(|(attitude, shown)| (*attitude, shown)),
+            exif.heading,
+            exif.magnetic,
+        );
+        let shown = tilt.map(|(_, shown)| shown);
         let face = current.picture_face();
         let size = current.turn.size([face.image.width, face.image.height]);
         sections.push(Section {
             attitude: Some((shown, size.map(|side| side as f32))),
-            ..Section::new(
-                ORIENTATION,
-                Face::Orientation,
-                fields(orientation_facts(attitude, &shown)),
-            )
+            ..Section::new(ORIENTATION, Face::Orientation, fields(facts))
         });
     }
     sections.push(Section {
