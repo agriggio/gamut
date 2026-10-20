@@ -405,7 +405,8 @@ pub fn place(
 }
 
 /// The way the pixel `at` looks, to a tenth of a degree: its bearing where
-/// the file says which way the lens pointed, and otherwise how far round to
+/// the file says which way the lens pointed — on the bar, with an M after
+/// it where that is from magnetic north — and otherwise how far round to
 /// the right of that, signed; then how far above level, signed. Bare and
 /// parted by a comma for a copy; in parentheses, each as wide as it can be,
 /// for the bar. A dash for the way round where the lens pointed too steeply
@@ -428,7 +429,10 @@ fn direction(current: &Current, at: [u32; 2], padded: bool) -> Option<String> {
                 bearing
             };
             match padded {
-                true => format!("{bearing:5.1}\u{00b0}"),
+                true => format!(
+                    "{bearing:5.1}\u{00b0}{}",
+                    super::attitude::magnetic_mark(current.exif.magnetic)
+                ),
                 false => format!("{bearing:.1}"),
             }
         }

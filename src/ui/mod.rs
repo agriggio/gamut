@@ -1149,22 +1149,24 @@ impl Pass<'_> {
         }
         // The horizon grid, over the pixel grid and under the region, and
         // the two lines through the pointer — but not under the loupe,
-        // whose glass is what the hand is reading then.
-        if self.panels.horizon_grid
-            && picture
-            && let Some(shown) = attitude::shown(current)
-        {
-            attitude::paint(
-                self,
-                ui.painter(),
-                current,
-                &shown,
-                self.panels.horizon_step,
-            );
-            if self.input.loupe.is_none()
-                && let Some(at) = self.input.pointer
-            {
-                attitude::pointer(self, ui.painter(), current, &shown, at);
+        // whose glass is what the hand is reading then. A file that gives
+        // its heading and not its tilt has only the ring at the middle.
+        if self.panels.horizon_grid && picture {
+            if let Some(shown) = attitude::shown(current) {
+                attitude::paint(
+                    self,
+                    ui.painter(),
+                    current,
+                    &shown,
+                    self.panels.horizon_step,
+                );
+                if self.input.loupe.is_none()
+                    && let Some(at) = self.input.pointer
+                {
+                    attitude::pointer(self, ui.painter(), current, &shown, at);
+                }
+            } else if let Some(heading) = current.exif.heading {
+                attitude::paint_heading(self, ui.painter(), current, heading);
             }
         }
         // Under the minimap, like the grid: the region marks up the picture,

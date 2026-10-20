@@ -3315,6 +3315,45 @@ fn the_horizon_grid_toggle_is_dead_without_an_orientation() {
     assert_eq!(click(&mut harness, "Horizon grid"), []);
 }
 
+/// For a file that gives its heading and not how its camera was tilted,
+/// the horizon grid's toggle is alive and lit, with no spacing after its
+/// mark, and the grid is a ring at the middle of the picture with the
+/// bearing over it, marked as magnetic where it is: one ring, and none once
+/// the grid is off.
+#[test]
+fn the_horizon_grid_is_a_ring_for_a_heading_alone() {
+    let mut on = panels();
+    on.horizon_grid = true;
+    let mut harness = open(WINDOW, 1, on);
+    let mut current = picture(5, 3);
+    current.exif.heading = Some(349.4);
+    current.exif.magnetic = true;
+    harness.state_mut().current = Some(current);
+    harness.run();
+    let node = harness.get_by_label("Horizon grid").accesskit_node();
+    assert!(!node.is_disabled());
+    assert!(matches!(
+        node.toggled(),
+        Some(egui::accesskit::Toggled::True)
+    ));
+    assert!(harness.query_by_label("10°").is_none());
+    let drawn = |harness: &mut Harness<'static, State>| {
+        harness.run();
+        let shapes = &harness.output().shapes;
+        let rings = shapes
+            .iter()
+            .filter(|shape| matches!(&shape.shape, egui::Shape::Circle(circle) if circle.fill == egui::Color32::TRANSPARENT && circle.stroke.color == egui::Color32::WHITE))
+            .count();
+        let bearing = shapes.iter().any(
+            |shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "349°M"),
+        );
+        (rings, bearing)
+    };
+    assert_eq!(drawn(&mut harness), (1, true));
+    harness.state_mut().panels.horizon_grid = false;
+    assert_eq!(drawn(&mut harness), (0, false));
+}
+
 /// Zoomed in until the picture runs past the content area, the horizon
 /// grid keeps to the content area rather than crossing the bars, and
 /// leaves the loupe's glass clear for what the glass shows.
@@ -3374,7 +3413,8 @@ fn the_horizon_grid_keeps_off_the_bars_and_the_glass() {
 
 /// The pointer's readout in the ways the pixels look: the bearing where the
 /// file says which way the lens pointed, and how far round from that where
-/// it does not, then the elevation — padded in the bar, bare in a copy.
+/// it does not, then the elevation — padded in the bar, bare in a copy, the
+/// bar marking a bearing from magnetic north.
 #[test]
 fn the_readout_says_which_way_a_pixel_looks() {
     use super::pixel::{CoordinateFormat, GeographicFormat, place};
@@ -3391,6 +3431,10 @@ fn the_readout_says_which_way_a_pixel_looks() {
     assert_eq!(write(&current, true), "( +0.0\u{00b0}, -20.0\u{00b0})");
     current.exif.heading = Some(212.0);
     assert_eq!(write(&current, true), "(212.0\u{00b0}, -20.0\u{00b0})");
+    assert_eq!(write(&current, false), "212.0,-20.0");
+    // From magnetic north, marked in the bar and bare in a copy.
+    current.exif.magnetic = true;
+    assert_eq!(write(&current, true), "(212.0\u{00b0}M, -20.0\u{00b0})");
     assert_eq!(write(&current, false), "212.0,-20.0");
     // Without a focal length there is no way to tell, and the pixel's own
     // place is written instead.

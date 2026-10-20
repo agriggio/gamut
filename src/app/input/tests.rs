@@ -545,11 +545,19 @@ fn each_condition_is_met_by_its_own_reading() {
                 ..none
             },
         ),
+        (
+            When::Heading,
+            Conditions {
+                heading: true,
+                ..none
+            },
+        ),
     ];
     for (held, conditions) in readings {
         for when in When::ALL {
-            let expected =
-                when == held || (when == When::AnimationOrPages && held == When::Animation);
+            let expected = when == held
+                || (when == When::AnimationOrPages && held == When::Animation)
+                || (when == When::Heading && held == When::Orientation);
             assert_eq!(
                 conditions.met(when),
                 expected,

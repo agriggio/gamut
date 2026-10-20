@@ -692,7 +692,7 @@ impl App {
             Does::Action(_) => met && !(conditions.nothing_open && about_picture(does)),
             Does::Magnification(_) => true,
             // The spacings wait on what the key that steps them does.
-            Does::HorizonStep(_) => !self.refuses(Control::HorizonGrid),
+            Does::HorizonStep(_) => self.spaces_horizon(),
         }
     }
 

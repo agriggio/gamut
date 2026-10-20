@@ -837,7 +837,7 @@ where all of it is set.
 | `I` | Show the file information on its *Raw Data* tab, or hide it | `interface.raw-data` |
 | `m` | Show or hide the minimap | `interface.minimap` |
 | `g` | Show or hide the grid over the image | `interface.grid` |
-| `b` | Show or hide the horizon grid, for a picture that records which way the camera faced | `interface.horizon-grid` |
+| `b` | Show or hide the horizon grid, for a picture that records which way the camera faced or its compass heading | `interface.horizon-grid` |
 | `B` | Cycle the horizon grid's spacing: 5°, 10°, 15° or 30° | `interface.horizon-step` |
 | `l` | Show or hide the loupe | `interface.loupe` |
 | `Shift+L` | Cycle the loupe's magnification: 2, 4, 8 or 16 times | `interface.loupe-magnification` |
@@ -956,6 +956,18 @@ amount; a wide lens bends straight edges near the frame away from the lines;
 and a picture cropped after it was taken has its middle in the wrong place,
 which moves the horizon. Differences between two places in the same picture
 are good to about a degree.
+
+A picture that records its compass heading but not how the camera was
+tilted, as a Pixel's does, gets only a ring at its middle with the heading
+over it. Nothing else in such a picture can be given a bearing, since a
+camera pointed up or turned on its side moves every other point's bearing
+by an amount the file does not say. `B` does nothing for such a picture.
+
+A bearing from magnetic north rather than true north — as a phone often
+records it — has an M after it, on the grid, the ring, the *Orientation*
+section's diagram and the pointer's readout, and is always written in
+degrees rather than as N, E, S or W. A copy of the readout leaves the M
+out.
 
 The loupe, `l` or the button beside the grid's, rings the pixels around
 the pointer and shows them magnified in a circle beside it, for looking

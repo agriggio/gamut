@@ -119,7 +119,8 @@ struct Face {
 /// `thumb`, the file's thumbnail read through the turn in force, where
 /// there is one. Where the file says the bearing the lens pointed on,
 /// `heading`, the floor wears an arrow along that way, written with the
-/// bearing, and another to north.
+/// bearing — marked as from `magnetic` north where it is — and another to
+/// north.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn diagram(
     theme: &Theme,
@@ -130,6 +131,7 @@ pub(super) fn diagram(
     size: [f32; 2],
     thumb: Option<(Thumb, Turn)>,
     heading: Option<f64>,
+    magnetic: bool,
 ) {
     let axes = camera_axes(shown.gravity);
     // Placed from the top by the height without the arrows, so that the
@@ -176,7 +178,7 @@ pub(super) fn diagram(
     if let Some(heading) = heading {
         let stroke = |ink| Stroke::new(grid.line_width(ARROW_LINE), ink);
         let north = (-heading as f32).to_radians();
-        let bearing = format!("{}\u{00b0}", heading.round() as u32 % 360);
+        let bearing = degrees(heading.round() as u32 % 360, magnetic);
         // North over the lens's way, whose arrow runs out past its words
         // where the two lie close.
         floor_arrow(
@@ -828,6 +830,22 @@ impl<'a> Canvas<'a> {
         self.solid(&self.painter, vec![at, at + up], ink);
     }
 
+    /// `words` on a tag of its own, `rise` beyond `at` in the direction
+    /// `up` on screen, so that it can be read whatever the picture is
+    /// behind it. Left out where a hole reaches into the tag.
+    fn tag(&self, at: Pos2, up: egui::Vec2, rise: f32, words: String) {
+        let font = egui::FontId::proportional(BEARING_SIZE);
+        let painter = &self.painter;
+        let galley = painter.layout_no_wrap(words, font, Color32::PLACEHOLDER);
+        let middle = at + up * (rise + galley.size().y / 2.0);
+        let rect = egui::Rect::from_center_size(middle, galley.size() + vec2(6.0, 2.0));
+        if self.in_hole(rect) {
+            return;
+        }
+        painter.rect_filled(rect, 3.0, LABEL_GROUND);
+        painter.galley(rect.center() - galley.size() / 2.0, galley, self.accent);
+    }
+
     /// Whether any hole reaches into `rect`, for what is drawn whole or
     /// not at all.
     fn in_hole(&self, rect: egui::Rect) -> bool {
@@ -920,7 +938,10 @@ pub(super) fn paint(
                 && (0.0..=size[1]).contains(&crossing[1])
             {
                 let bearing = (heading + this).round().rem_euclid(360.0) as u32;
-                labels.push((canvas.screen(crossing), compass(bearing)));
+                labels.push((
+                    canvas.screen(crossing),
+                    compass(bearing, current.exif.magnetic),
+                ));
             }
         }
         // And the level curves, the same `step` apart above and below the
@@ -949,17 +970,8 @@ pub(super) fn paint(
         }
         // Each bearing over the horizon where its upright crosses it,
         // above the dashes, on a tag of its own.
-        let font = egui::FontId::proportional(BEARING_SIZE);
-        let up = vec2(sin, -cos);
         for (at, words) in labels {
-            let galley = painter.layout_no_wrap(words, font.clone(), Color32::PLACEHOLDER);
-            let middle = at + up * (BEARING_RISE + galley.size().y / 2.0);
-            let rect = egui::Rect::from_center_size(middle, galley.size() + vec2(6.0, 2.0));
-            if canvas.in_hole(rect) {
-                continue;
-            }
-            painter.rect_filled(rect, 3.0, LABEL_GROUND);
-            painter.galley(rect.center() - galley.size() / 2.0, galley, accent);
+            canvas.tag(at, vec2(sin, -cos), BEARING_RISE, words);
         }
         return;
     }
@@ -981,6 +993,38 @@ pub(super) fn paint(
         canvas.solid(&canvas.painter, vec![back + side, tip, back - side], accent);
     }
 }
+
+/// What the horizon grid draws, with `painter`, for a picture whose file
+/// gives the `heading` its lens pointed along but not how the camera was
+/// tilted: a ring round the middle of the picture, the one point whose
+/// bearing that is, and the bearing over it. Without the pitch and the
+/// roll no other point can be given a bearing, nor any line be called
+/// level, so nothing else is drawn.
+pub(super) fn paint_heading(pass: &Pass, painter: &egui::Painter, current: &Current, heading: f64) {
+    let canvas = Canvas::new(pass, painter, current);
+    let middle = canvas.screen([canvas.size[0] / 2.0, canvas.size[1] / 2.0]);
+    let reach = CENTER_RING + (canvas.width + HALO) / 2.0;
+    if canvas.in_hole(egui::Rect::from_center_size(
+        middle,
+        vec2(reach, reach) * 2.0,
+    )) {
+        return;
+    }
+    let painter = &canvas.painter;
+    painter.circle_stroke(middle, CENTER_RING, canvas.halo());
+    painter.circle_stroke(middle, CENTER_RING, canvas.stroke(canvas.accent));
+    let bearing = heading.round().rem_euclid(360.0) as u32;
+    canvas.tag(
+        middle,
+        vec2(0.0, -1.0),
+        CENTER_RING + BEARING_RISE,
+        compass(bearing, current.exif.magnetic),
+    );
+}
+
+/// The radius of the ring [`paint_heading`] draws round the middle of the
+/// picture, on screen.
+const CENTER_RING: f32 = 6.0;
 
 /// The upright `azimuth` degrees round from where the lens pointed, cut to
 /// the picture on screen: from the point every upright meets at, out
@@ -1103,15 +1147,29 @@ const BEARING_SIZE: f32 = 11.0;
 const BEARING_RISE: f32 = 6.0;
 
 /// A bearing as written over its upright: the four points of the compass by
-/// their letters, and the rest in degrees.
-fn compass(bearing: u32) -> String {
-    match bearing {
-        0 => "N".to_string(),
-        90 => "E".to_string(),
-        180 => "S".to_string(),
-        270 => "W".to_string(),
-        _ => format!("{bearing}\u{00b0}"),
+/// their letters, and the rest in degrees. A bearing from `magnetic` north
+/// is always in degrees, with an M after them, since N would read as true
+/// north.
+fn compass(bearing: u32, magnetic: bool) -> String {
+    match (bearing, magnetic) {
+        (0, false) => "N".to_string(),
+        (90, false) => "E".to_string(),
+        (180, false) => "S".to_string(),
+        (270, false) => "W".to_string(),
+        _ => degrees(bearing, magnetic),
     }
+}
+
+/// A bearing in whole degrees, with an M after it where it is from
+/// `magnetic` north.
+fn degrees(bearing: u32, magnetic: bool) -> String {
+    format!("{bearing}\u{00b0}{}", magnetic_mark(magnetic))
+}
+
+/// What follows a bearing from `magnetic` north, to tell it from one from
+/// true north: an M, and nothing after a bearing from true north.
+pub(super) fn magnetic_mark(magnetic: bool) -> &'static str {
+    if magnetic { "M" } else { "" }
 }
 
 /// How far the chevron marking a horizon off the picture runs back and
@@ -1218,6 +1276,17 @@ fn edge_reach(offset: [f32; 2], middle: [f32; 2]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A bearing from true north names the four points of the compass by
+    /// their letters; one from magnetic north is always in degrees, marked.
+    #[test]
+    fn a_magnetic_bearing_is_marked() {
+        assert_eq!(compass(0, false), "N");
+        assert_eq!(compass(270, false), "W");
+        assert_eq!(compass(349, false), "349\u{00b0}");
+        assert_eq!(compass(0, true), "0\u{00b0}M");
+        assert_eq!(compass(349, true), "349\u{00b0}M");
+    }
 
     /// A line through the picture is cut at its edges; one that passes it
     /// by, level or slanted, is not drawn at all.

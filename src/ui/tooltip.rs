@@ -291,8 +291,10 @@ pub struct Conditions {
     pub coordinates: bool,
     pub geographic: bool,
     /// Whether the file on screen says which way its camera faced, which
-    /// is what the horizon grid needs.
+    /// is what the horizon grid needs; and whether it gives the bearing the
+    /// lens pointed along, which is all the ring at the middle needs.
     pub orientation: bool,
+    pub heading: bool,
     /// Whether the file on screen says where it was taken, which is what
     /// the map needs.
     pub located: bool,
@@ -358,6 +360,7 @@ impl Default for Conditions {
             coordinates: false,
             geographic: false,
             orientation: false,
+            heading: false,
             located: false,
             room: Room {
                 histogram: false,
@@ -405,6 +408,7 @@ impl Conditions {
         coordinates: false,
         geographic: false,
         orientation: true,
+        heading: true,
         located: true,
         room: Room {
             histogram: true,
@@ -474,6 +478,7 @@ pub fn disabled(tip: Tip, conditions: Conditions) -> Option<Refused> {
         mosaic,
         profile,
         orientation,
+        heading,
         located,
         geographic,
         ..
@@ -504,7 +509,7 @@ pub fn disabled(tip: Tip, conditions: Conditions) -> Option<Refused> {
     if matches!(tip, Tip::Control(Control::Mosaic | Control::ShowMosaic)) && !mosaic {
         return said(NO_MOSAIC);
     }
-    if tip == Tip::Control(Control::HorizonGrid) && !orientation {
+    if tip == Tip::Control(Control::HorizonGrid) && !orientation && !heading {
         return said(NO_ORIENTATION);
     }
     if tip == Tip::Control(Control::OpenMap) && !located {

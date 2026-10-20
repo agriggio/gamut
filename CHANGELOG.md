@@ -8,6 +8,13 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
 
 ### Added
 
+- The horizon grid, `b` or the compass button, for a picture that records
+  its compass heading but not how its camera was tilted, as a Pixel's
+  does: a ring at the middle of the picture with the heading over it.
+  `B` does nothing for such a picture, there being no uprights to space.
+- A bearing from magnetic north has an M after it — on the horizon grid,
+  the *Orientation* section's diagram and the pointer's readout in the bar
+  — and is written in degrees rather than as N, E, S or W.
 - Two buttons after the information panel's *Georeference* heading, for a
   map whose coordinates can be put in latitude and longitude: one opens
   its center on a map in the browser, through `open_map_link`, and the

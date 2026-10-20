@@ -761,22 +761,33 @@ impl Pass<'_> {
 
     /// The horizon grid's toggle, after the pixel grid's: the other grid
     /// laid over the picture, and so beside it. While it is on, the spacing
-    /// of its uprights is written after the mark, as the grid's is. Drawn
-    /// dead rather than left out for a file that does not say which way its
-    /// camera faced, so that the loupe and the readout after it hold still
-    /// from one file to the next, and while another file is on its way in,
-    /// whose orientation this would not be. Unlit while dead, though the
-    /// grid stays asked for: it comes back with the next file that has one.
+    /// of its uprights is written after the mark, as the grid's is; a file
+    /// that gives only its heading has no uprights, and the toggle is lit
+    /// with nothing written after it.
+    /// Drawn dead rather than left out for a file that says neither which
+    /// way its camera faced nor its heading, so that the loupe and the
+    /// readout after it hold still from one file to the next, and while
+    /// another file is on its way in, whose orientation this would not be.
+    /// Unlit while dead, though the grid stays asked for: it comes back with
+    /// the next file that has one.
     fn horizon_toggle(&mut self, ui: &mut Ui, current: &Current) {
-        let alive = current.exif.attitude.is_some() && self.input.arriving.is_none();
-        let reading = (alive && self.panels.horizon_grid)
+        let exif = &current.exif;
+        let alive =
+            (exif.attitude.is_some() || exif.heading.is_some()) && self.input.arriving.is_none();
+        let lit = alive && self.panels.horizon_grid;
+        let reading = (lit && exif.attitude.is_some())
             .then(|| super::attitude::label(self.panels.horizon_step));
-        self.reading_toggle(
+        self.worded_button(
             ui,
-            icon::COMPASS,
-            Control::HorizonGrid,
-            reading.as_deref(),
-            alive,
+            Worded {
+                marks: icon::COMPASS,
+                control: Control::HorizonGrid,
+                words: reading.as_deref(),
+                lit,
+                enabled: alive,
+                room: 0.0,
+                name: None,
+            },
         );
     }
 

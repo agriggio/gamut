@@ -1012,6 +1012,7 @@ fn orientation_section(
             size,
             thumb,
             heading,
+            current.exif.magnetic,
         );
     });
     ui.add_space(HEAD_GAP);
