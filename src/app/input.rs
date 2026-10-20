@@ -651,6 +651,9 @@ pub enum When {
     Geographic,
     /// The file on screen says which way its camera faced.
     Orientation,
+    /// The file on screen says which way its camera faced, or at least the
+    /// bearing it pointed along.
+    Heading,
     /// The file on screen says where it was taken.
     Located,
     /// The image on screen is read as data rather than as a photo: numbers
@@ -665,7 +668,7 @@ impl When {
     /// Every condition, for a test to hold them all up against the
     /// application.
     #[cfg(test)]
-    pub const ALL: [When; 22] = [
+    pub const ALL: [When; 23] = [
         When::RegionSelected,
         When::SeveralFiles,
         When::Animation,
@@ -685,6 +688,7 @@ impl When {
         When::Coordinates,
         When::Geographic,
         When::Orientation,
+        When::Heading,
         When::Located,
         When::Data,
         When::Photo,
@@ -713,6 +717,7 @@ impl When {
             When::Coordinates => "a file with other coordinates",
             When::Geographic => "a file placed in lat/long",
             When::Orientation => "a file with camera orientation",
+            When::Heading => "a file with heading or tilt",
             When::Located => "a file with a location",
             When::Data => "data mode",
             When::Photo => "photo mode",
@@ -753,6 +758,7 @@ impl Conditions {
             When::Coordinates => self.coordinates,
             When::Geographic => self.geographic,
             When::Orientation => self.orientation,
+            When::Heading => self.orientation || self.heading,
             When::Located => self.located,
             When::Data => self.data,
             When::Photo => !self.data && !self.nothing_open,
@@ -1003,7 +1009,7 @@ pub static ROWS: &[Row] = &[
     },
     Row {
         section: Section::Interface,
-        when: Some(When::Orientation),
+        when: Some(When::Heading),
         help: "Toggle the horizon grid",
         keys: one!("interface.horizon-grid", ToggleHorizonGrid, [key('b')]),
     },
@@ -2295,8 +2301,9 @@ impl App {
             ToggleGrid => return self.press(Control::Grid),
             ToggleHorizonGrid => return self.press(Control::HorizonGrid),
             // Refused where the grid's toggle is, so that a spacing is never
-            // chosen for a grid that cannot be seen.
-            CycleHorizonStep if self.refuses(Control::HorizonGrid) => return Effect::Nothing,
+            // chosen for a grid that cannot be seen — and for a file that
+            // gives only its heading, whose ring has no spacing.
+            CycleHorizonStep if !self.spaces_horizon() => return Effect::Nothing,
             CycleHorizonStep => {
                 self.panels.horizon_step = ui::attitude::cycle(self.panels.horizon_step);
                 return Effect::Redraw;
@@ -2652,6 +2659,7 @@ impl App {
             coordinates: ui::pixel::Answers::of(current).beyond_pixel(),
             geographic: georeference.is_some_and(|geo| geo.offers_geographic()),
             orientation: current.is_some_and(|current| current.exif.attitude.is_some()),
+            heading: current.is_some_and(|current| current.exif.heading.is_some()),
             located: current.is_some_and(|current| current.exif.position.is_some()),
             room: self.room(),
             hdr: self.hdr_state(),
@@ -2690,6 +2698,13 @@ impl App {
     /// no one could see would be worse than one that does nothing.
     pub(super) fn refuses(&self, control: Control) -> bool {
         ui::tooltip::disabled(Tip::Control(control), self.conditions()).is_some()
+    }
+
+    /// Whether the horizon grid's spacing means anything now: the grid can
+    /// be shown, and the file says how its camera was tilted, so that there
+    /// are uprights to space rather than only the ring at the middle.
+    pub(super) fn spaces_horizon(&self) -> bool {
+        !self.refuses(Control::HorizonGrid) && self.conditions().orientation
     }
 
     /// Acts on what a pass of the interface asked for, and says what the

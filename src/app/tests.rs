@@ -5046,3 +5046,21 @@ fn the_horizon_grid_needs_an_orientation_and_brings_the_direction() {
         assert_eq!(app.panels.horizon_step, step);
     }
 }
+
+/// A picture whose file gives the bearing its lens pointed along and not
+/// how the camera was tilted has the horizon grid too — the ring at its
+/// middle — but no spacing for the key to step, there being no uprights.
+#[test]
+fn the_horizon_grid_takes_a_heading_alone() {
+    use input::Action;
+
+    let (mut app, _dir) = app_over("heading", &[("a.png", 64, 48)]);
+    let current = app.current.as_mut().expect("a.png is on screen");
+    current.exif.heading = Some(349.0);
+    assert!(current.exif.attitude.is_none());
+    assert!(!app.refuses(ui::Control::HorizonGrid));
+    assert_eq!(app.perform(Action::ToggleHorizonGrid), Effect::Redraw);
+    assert!(app.panels.horizon_grid);
+    assert_eq!(app.perform(Action::CycleHorizonStep), Effect::Nothing);
+    assert_eq!(app.panels.horizon_step, 10.0);
+}

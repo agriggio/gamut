@@ -154,6 +154,9 @@ pub struct Exif {
     /// does — or as it meant to say, on an iPhone of iOS 8 (see
     /// [`heading`]). `None` where the file does not say.
     pub heading: Option<f64>,
+    /// Whether the file says `heading` is from magnetic north rather than
+    /// true north, where it says either.
+    pub magnetic: bool,
     /// How the pixels are compressed, for a TIFF: its own directory says,
     /// and the info panel's `Image` section shows it. `None` for every other
     /// file — a raw's directory is about the preview in front of it, and
@@ -420,6 +423,7 @@ impl Exif {
                     .and_then(|level| Attitude::level(level, Orientation::NoTransforms)),
                 focal_equivalent: None,
                 heading: None,
+                magnetic: false,
                 compression: None,
             };
         };
@@ -457,6 +461,8 @@ impl Exif {
             }),
             focal_equivalent: focal_equivalent(exif),
             heading: heading(exif).map(|(degrees, _)| degrees.rem_euclid(360.0)),
+            magnetic: heading(exif)
+                .is_some_and(|(_, reference)| north(exif, reference) == Some("magnetic")),
             compression: primary(exif, Tag::Compression)
                 .map(|field| display(exif, field))
                 .filter(|value| !value.is_empty()),
@@ -965,19 +971,25 @@ pub const LONGITUDE: &str = "Longitude";
 /// apart.
 fn direction(exif: &exif::Exif) -> Option<String> {
     let (degrees, reference) = heading(exif)?;
-    let north = match &primary(exif, reference).map(|field| &field.value) {
+    let north = north(exif, reference);
+    let degrees = degrees.round().rem_euclid(360.0);
+    Some(match north {
+        Some(north) => format!("{degrees:.0}\u{00b0} from {north} north"),
+        None => format!("{degrees:.0}\u{00b0}"),
+    })
+}
+
+/// Which north the `reference` tag names, as the panel writes it: `true` or
+/// `magnetic`. `None` where it names neither.
+fn north(exif: &exif::Exif, reference: Tag) -> Option<&'static str> {
+    match &primary(exif, reference).map(|field| &field.value) {
         Some(Value::Ascii(parts)) => match parts.first().map(Vec::as_slice) {
             Some(b"T") => Some("true"),
             Some(b"M") => Some("magnetic"),
             _ => None,
         },
         _ => None,
-    };
-    let degrees = degrees.round().rem_euclid(360.0);
-    Some(match north {
-        Some(north) => format!("{degrees:.0}\u{00b0} from {north} north"),
-        None => format!("{degrees:.0}\u{00b0}"),
-    })
+    }
 }
 
 /// Which way the camera was pointed, in degrees clockwise from north, and
@@ -1742,6 +1754,7 @@ mod tests {
             let path = written(name, &jpeg_with(photograph_by(make, bearing)));
             let exif = Exif::read(&path);
             let _ = std::fs::remove_file(&path);
+            assert!(!exif.magnetic, "from true north");
             let row = section(&exif, Group::Location)
                 .iter()
                 .find(|entry| entry.name == "Direction")
