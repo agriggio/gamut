@@ -4,13 +4,11 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.12.2 - 2026-10-22
 
 ### Fixed
 
-- On a Mac, a window that opens a moment after launch — a directory sorted
-  by anything but name, put in order first, or files sent by Finder —
-  comes up in front rather than behind the terminal it was started from.
+- (macOS) make sure window opens on top when launched from an app bundle.
 
 ## 0.12.1 - 2026-10-21
 
