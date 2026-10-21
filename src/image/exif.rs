@@ -25,6 +25,7 @@
 use std::fs::File;
 use std::io::{BufReader, Read, SeekFrom};
 use std::path::Path;
+use std::time::{Duration, SystemTime};
 
 use ::image::metadata::Orientation;
 use exif::{Context, In, Rational, Tag, Value};
@@ -36,6 +37,7 @@ use super::metadata_region::{MetadataRegion, Placed};
 use super::orient::Turn;
 use super::xmp::{self, Xmp};
 use super::{directory, enclosed, geo, tiff};
+use crate::clock::{self, Civil};
 
 /// How long a rendered value may be before it is cut short. Long enough for a
 /// lens name or a comment, short enough that one field cannot become the
@@ -162,6 +164,8 @@ pub struct Exif {
     /// file — a raw's directory is about the preview in front of it, and
     /// any other container's EXIF block has no pixels of its own.
     pub compression: Option<String>,
+    /// When the picture was taken, as [`taken`] reads it.
+    pub taken: Option<Taken>,
 }
 
 impl Exif {
@@ -221,7 +225,9 @@ impl Exif {
         // CRW, which has no EXIF, and the exposure of a Phase One, whose
         // EXIF names the camera and stops — and the color temperature, which
         // only the library's reading of the sensor can work out.
-        if let Some(rows) = opened.and_then(Opened::facts) {
+        let facts = opened.and_then(Opened::facts);
+        exif.taken = taken_of(block.as_ref(), &xmp, || facts.clone());
+        if let Some(rows) = facts {
             for entry in rows {
                 let group = if rank(&entry.name) < rank(TAKEN) {
                     Group::Camera
@@ -425,6 +431,7 @@ impl Exif {
                 heading: None,
                 magnetic: false,
                 compression: None,
+                taken: None,
             };
         };
 
@@ -466,6 +473,7 @@ impl Exif {
             compression: primary(exif, Tag::Compression)
                 .map(|field| display(exif, field))
                 .filter(|value| !value.is_empty()),
+            taken: None,
         }
     }
 }
@@ -1403,6 +1411,282 @@ pub(super) fn tidy(number: &str) -> String {
     }
 }
 
+/// When the picture was taken, as the file list sorts by it and shows it:
+/// the moment, pinned down as far as the file lets it be, and what the
+/// camera's clock read.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Taken {
+    pub moment: SystemTime,
+    pub wall: Civil,
+}
+
+/// How far a GPS fix's time may be from a whole quarter hour off the
+/// camera's clock, in seconds, and still be taken as the zone the clock was
+/// set to: the fix and the exposure are seconds apart on a phone, and a
+/// fix older than this says less about the zone than about the receiver.
+const GPS_SLACK: i64 = 5 * 60;
+
+/// The widest a zone runs from UTC, in seconds: Kiribati's +14:00.
+const WIDEST_ZONE: i64 = 14 * 3600;
+
+/// When `path` was taken, off the file as it is open and the XMP already
+/// read from it, or `None` where nothing in it says.
+///
+/// What is wanted is a moment, so that files from cameras in different
+/// zones interleave as they were taken, and the first answer that names
+/// one is used: the EXIF date with the zone the camera wrote beside it,
+/// then an XMP date that carries its zone, then the EXIF date with the zone
+/// worked out from the GPS fix's UTC beside it. A date that names no zone
+/// at all — most cameras' — is read in this machine's, as LibRaw reads a
+/// raw's: right for a collection taken where it is kept, and an hour or a
+/// day out for one that is not, which no file of that kind can help.
+pub fn taken(path: &Path, mut opened: Option<&mut Opened>, xmp: &Xmp) -> Option<Taken> {
+    let block = Exif::parse(path, opened.as_deref_mut(), tiff::PREFIX);
+    taken_of(block.as_ref(), xmp, || opened?.facts())
+}
+
+/// [`taken`], from the EXIF block already parsed, the packet, and the
+/// decoder's facts, asked for only where neither of the others says.
+fn taken_of(
+    block: Option<&exif::Exif>,
+    xmp: &Xmp,
+    facts: impl FnOnce() -> Option<Vec<Entry>>,
+) -> Option<Taken> {
+    let exif = block.and_then(|block| {
+        reading(
+            block,
+            Tag::DateTimeOriginal,
+            Tag::SubSecTimeOriginal,
+            [Tag::OffsetTimeOriginal, Tag::OffsetTime],
+        )
+        .or_else(|| {
+            reading(
+                block,
+                Tag::DateTimeDigitized,
+                Tag::SubSecTimeDigitized,
+                [Tag::OffsetTimeDigitized, Tag::OffsetTime],
+            )
+        })
+    });
+    let packet = [
+        (xmp::EXIF, "DateTimeOriginal"),
+        (xmp::PHOTOSHOP, "DateCreated"),
+        (xmp::BASIC, "CreateDate"),
+    ]
+    .into_iter()
+    .find_map(|(namespace, name)| iso8601(xmp.property(namespace, name)?.first()?));
+
+    if let Some(zoned) = [exif, packet]
+        .into_iter()
+        .flatten()
+        .find(|reading| reading.offset.is_some())
+    {
+        return zoned.taken();
+    }
+    if let Some(reading) = exif
+        && let Some(offset) = block
+            .and_then(gps_utc)
+            .and_then(|utc| zone_from_utc(reading.wall, utc))
+    {
+        return Reading {
+            offset: Some(offset),
+            ..reading
+        }
+        .taken();
+    }
+    exif.or(packet)
+        .or_else(|| {
+            // A raw with no EXIF the reader reaches has LibRaw's reading
+            // of its header, in this machine's zone.
+            let facts = facts()?;
+            let taken = facts.iter().find(|entry| entry.name == TAKEN)?;
+            iso8601(&taken.value)
+        })?
+        .taken()
+}
+
+/// A reading of a clock: what it said, the fraction of a second it did
+/// not, and how far ahead of UTC it was where that is said.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct Reading {
+    wall: Civil,
+    nanos: u32,
+    offset: Option<i64>,
+}
+
+impl Reading {
+    fn taken(self) -> Option<Taken> {
+        let moment = clock::moment(self.wall, self.offset)?;
+        Some(Taken {
+            moment: moment.checked_add(Duration::from_nanos(u64::from(self.nanos)))?,
+            wall: self.wall,
+        })
+    }
+}
+
+/// The EXIF date in `date`, with the fraction of a second in `subsec` and
+/// the zone in the first of `offsets` that says one.
+fn reading(exif: &exif::Exif, date: Tag, subsec: Tag, offsets: [Tag; 2]) -> Option<Reading> {
+    let ascii = |tag| match &primary(exif, tag)?.value {
+        Value::Ascii(parts) => parts.first().map(Vec::as_slice),
+        _ => None,
+    };
+    let mut when = exif::DateTime::from_ascii(ascii(date)?).ok()?;
+    if let Some(fraction) = ascii(subsec) {
+        // A fraction that is not digits is left out rather than refusing
+        // the date it is a fraction of.
+        when.parse_subsec(fraction).ok();
+    }
+    Some(Reading {
+        wall: civil(
+            i64::from(when.year),
+            when.month.into(),
+            when.day.into(),
+            when.hour.into(),
+            when.minute.into(),
+            when.second.into(),
+        )?,
+        nanos: when.nanosecond.unwrap_or(0),
+        offset: offsets
+            .into_iter()
+            .find_map(|tag| zone(std::str::from_utf8(ascii(tag)?).ok()?.trim())),
+    })
+}
+
+/// A date and time as XMP writes one — ISO 8601's `2026-08-27T20:06:17.25
+/// +12:00`, the time, its seconds and the zone each optional — or with a
+/// space for the `T`, as LibRaw's reading is written.
+fn iso8601(text: &str) -> Option<Reading> {
+    let text = text.trim();
+    let (date, time) = match text.split_once(['T', ' ']) {
+        Some((date, time)) => (date, Some(time)),
+        None => (text, None),
+    };
+    let mut parts = date.split('-');
+    let year = digits(parts.next()?)?;
+    let month = digits(parts.next()?)?;
+    let day = digits(parts.next()?)?;
+    if parts.next().is_some() {
+        return None;
+    }
+    let (mut hour, mut minute, mut second, mut nanos, mut offset) = (0, 0, 0, 0, None);
+    if let Some(time) = time {
+        let (clock, written_zone) = match time.find(['Z', '+', '-']) {
+            Some(at) => (&time[..at], Some(&time[at..])),
+            None => (time, None),
+        };
+        let mut parts = clock.split(':');
+        hour = digits(parts.next()?)?;
+        minute = digits(parts.next()?)?;
+        if let Some(seconds) = parts.next() {
+            let (whole, fraction) = seconds.split_once('.').unwrap_or((seconds, ""));
+            second = digits(whole)?;
+            if !fraction.is_empty() {
+                let kept = &fraction[..fraction.len().min(9)];
+                nanos = digits(kept)? * 10u32.pow(9 - kept.len() as u32);
+            }
+        }
+        if parts.next().is_some() {
+            return None;
+        }
+        if let Some(written_zone) = written_zone {
+            offset = Some(zone(written_zone)?);
+        }
+    }
+    Some(Reading {
+        wall: civil(i64::from(year), month, day, hour, minute, second)?,
+        nanos,
+        offset,
+    })
+}
+
+/// A zone as it is written after a time: `Z`, or a sign and hours with or
+/// without minutes, with or without a colon between. In seconds ahead of
+/// UTC.
+fn zone(text: &str) -> Option<i64> {
+    if text == "Z" {
+        return Some(0);
+    }
+    let sign = match text.as_bytes().first()? {
+        b'+' => 1,
+        b'-' => -1,
+        _ => return None,
+    };
+    let rest = &text[1..];
+    let (hours, minutes) = match rest.split_once(':') {
+        Some(split) => split,
+        None if rest.len() == 4 => rest.split_at(2),
+        None => (rest, "0"),
+    };
+    let seconds = i64::from(digits(hours)?) * 3600 + i64::from(digits(minutes)?) * 60;
+    (seconds <= WIDEST_ZONE).then_some(sign * seconds)
+}
+
+/// A run of ASCII digits as a number, and nothing else as one.
+fn digits(text: &str) -> Option<u32> {
+    if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    text.parse().ok()
+}
+
+/// A civil date and time, where each field is one a calendar has: a
+/// camera that was never set writes zeros, which are not a date.
+fn civil(year: i64, month: u32, day: u32, hour: u32, minute: u32, second: u32) -> Option<Civil> {
+    ((1..=12).contains(&month)
+        && (1..=31).contains(&day)
+        && year > 0
+        && hour <= 23
+        && minute <= 59
+        && second <= 60)
+        .then_some(Civil {
+            year,
+            month,
+            day,
+            hour,
+            minute,
+            second,
+        })
+}
+
+/// The moment of the GPS fix, in seconds since the epoch, from its UTC
+/// date and time.
+fn gps_utc(exif: &exif::Exif) -> Option<i64> {
+    let Value::Ascii(parts) = &primary(exif, Tag::GPSDateStamp)?.value else {
+        return None;
+    };
+    let date = std::str::from_utf8(parts.first()?).ok()?.trim();
+    let mut fields = date.split(':');
+    let (year, month, day) = (
+        digits(fields.next()?)?,
+        digits(fields.next()?)?,
+        digits(fields.next()?)?,
+    );
+    let Value::Rational(time) = &primary(exif, Tag::GPSTimeStamp)?.value else {
+        return None;
+    };
+    let [hour, minute, second] = time[..] else {
+        return None;
+    };
+    let [hour, minute, second] = [hour, minute, second].map(|part| part.to_f64());
+    if !(hour.is_finite() && minute.is_finite() && second.is_finite()) {
+        return None;
+    }
+    let midnight = clock::seconds(civil(i64::from(year), month, day, 0, 0, 0)?);
+    Some(midnight + (hour * 3600.0 + minute * 60.0 + second).floor() as i64)
+}
+
+/// The zone a clock reading `wall` at the UTC moment `utc` was set to: how
+/// far ahead it was, to the quarter hour every zone is a whole number of,
+/// where it is that near a quarter hour and no further out than a zone
+/// runs.
+fn zone_from_utc(wall: Civil, utc: i64) -> Option<i64> {
+    const QUARTER: i64 = 15 * 60;
+    let ahead = clock::seconds(wall) - utc;
+    let offset = (ahead as f64 / QUARTER as f64).round() as i64 * QUARTER;
+    ((ahead - offset).abs() <= GPS_SLACK && offset.abs() <= WIDEST_ZONE).then_some(offset)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1529,6 +1813,216 @@ mod tests {
             out.extend_from_slice(&self.pool);
             out
         }
+    }
+
+    /// A block of an `IFD0` pointing at an EXIF directory of `exif`'s ASCII
+    /// fields and, where `gps` is given, a GPS one of its date and its time
+    /// of day, parsed.
+    fn dated(exif: &[(u16, &str)], gps: Option<(&str, [(u32, u32); 3])>) -> exif::Exif {
+        let mut sub = Block::new();
+        for (tag, text) in exif {
+            sub.ascii(*tag, text);
+        }
+        let mut gps_block = Block::new();
+        if let Some((date, time)) = gps {
+            gps_block.rational(0x0007, &time); // GPSTimeStamp
+            gps_block.ascii(0x001d, date); // GPSDateStamp
+        }
+        const HEADER: usize = 8;
+        let pointers = if gps.is_some() { 2 } else { 1 };
+        let exif_at = HEADER + Block::length_of(pointers, 0);
+        let gps_at = exif_at + sub.length();
+        let mut ifd0 = Block::new();
+        ifd0.entry(0x8769, 4, 1, (exif_at as u32).to_le_bytes()); // ExifIFDPointer
+        if gps.is_some() {
+            ifd0.entry(0x8825, 4, 1, (gps_at as u32).to_le_bytes()); // GPSInfoIFDPointer
+        }
+        let mut block = b"II\x2a\x00\x08\x00\x00\x00".to_vec();
+        block.extend_from_slice(&ifd0.at(HEADER));
+        block.extend_from_slice(&sub.at(exif_at));
+        if gps.is_some() {
+            block.extend_from_slice(&gps_block.at(gps_at));
+        }
+        exif::Reader::new()
+            .read_raw(block)
+            .expect("the block parses")
+    }
+
+    fn wall(text: &str) -> Civil {
+        iso8601(text).expect("a date").wall
+    }
+
+    /// The moment a date written with its zone stands for.
+    fn at(text: &str) -> SystemTime {
+        clock::parse(text).expect("a date with its zone")
+    }
+
+    fn packet(property: &str, value: &str) -> Xmp {
+        Xmp::parse(
+            format!(
+                r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF
+ xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description
+ xmlns:exif="http://ns.adobe.com/exif/1.0/"
+ xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/"
+ xmlns:xmp="http://ns.adobe.com/xap/1.0/" {property}="{value}"/></rdf:RDF></x:xmpmeta>"#
+            )
+            .as_bytes(),
+        )
+        .expect("the packet parses")
+    }
+
+    /// The camera's date with its zone is the moment, its fraction of a
+    /// second counted in; the wall clock is what the camera read.
+    #[test]
+    fn a_date_with_its_zone_is_the_moment_it_says() {
+        let block = dated(
+            &[
+                (0x9003, "2026:08:27 20:06:17"), // DateTimeOriginal
+                (0x9291, "25"),                  // SubSecTimeOriginal
+                (0x9011, "+12:00"),              // OffsetTimeOriginal
+            ],
+            None,
+        );
+        let taken = taken_of(Some(&block), &Xmp::default(), || None).expect("taken");
+        assert_eq!(
+            taken.moment,
+            at("2026-08-27 08:06:17 +00:00") + Duration::from_millis(250)
+        );
+        assert_eq!(taken.wall, wall("2026-08-27 20:06:17"));
+    }
+
+    /// With no zone written, the GPS fix's UTC beside the date says which
+    /// zone the camera's clock was in, to the quarter hour.
+    #[test]
+    fn the_gps_fix_says_the_zone_the_camera_did_not() {
+        let block = dated(
+            &[(0x9003, "2026:08:27 20:06:17")],
+            Some(("2026:08:27", [(7, 1), (21, 1), (1500, 100)])),
+        );
+        let taken = taken_of(Some(&block), &Xmp::default(), || None).expect("taken");
+        assert_eq!(taken.moment, at("2026-08-27 20:06:17 +12:45"), "Chatham");
+    }
+
+    /// A fix too far from a quarter hour off the clock — stale, or of
+    /// another day — says nothing of the zone, and the date is read in this
+    /// machine's.
+    #[test]
+    fn a_stale_fix_is_not_taken_for_the_zone() {
+        for gps in [
+            ("2026:08:27", [(7, 1), (13, 1), (0, 1)]),
+            ("2026:08:20", [(8, 1), (6, 1), (17, 1)]),
+        ] {
+            let block = dated(&[(0x9003, "2026:08:27 20:06:17")], Some(gps));
+            let taken = taken_of(Some(&block), &Xmp::default(), || None).expect("taken");
+            assert_eq!(
+                Some(taken.moment),
+                clock::moment(wall("2026-08-27 20:06:17"), None),
+                "{gps:?}"
+            );
+        }
+    }
+
+    /// An XMP date that carries its zone is preferred to an EXIF one that
+    /// does not, and one that does not is still a date where the EXIF has
+    /// none; the digitized date stands in for the original.
+    #[test]
+    fn a_zone_is_looked_for_wherever_the_file_keeps_a_date() {
+        let zoneless = dated(&[(0x9003, "2026:08:27 20:06:17")], None);
+        let zoned = packet("photoshop:DateCreated", "2026-08-27T20:06:17+12:00");
+        let taken = taken_of(Some(&zoneless), &zoned, || None).expect("taken");
+        assert_eq!(taken.moment, at("2026-08-27 20:06:17 +12:00"));
+
+        let packet_only = packet("xmp:CreateDate", "2026-08-27T20:06:17.5");
+        let taken = taken_of(None, &packet_only, || None).expect("taken");
+        assert_eq!(
+            Some(taken.moment),
+            clock::moment(wall("2026-08-27 20:06:17"), None)
+                .map(|moment| moment + Duration::from_millis(500))
+        );
+
+        let digitized = dated(
+            &[
+                (0x9004, "2026:08:27 20:06:17"), // DateTimeDigitized
+                (0x9012, "-03:30"),              // OffsetTimeDigitized
+            ],
+            None,
+        );
+        let taken = taken_of(Some(&digitized), &Xmp::default(), || None).expect("taken");
+        assert_eq!(taken.moment, at("2026-08-27 20:06:17 -03:30"));
+    }
+
+    /// A raw whose date only its decoder reached is read from the decoder's
+    /// facts, which are asked for only then.
+    #[test]
+    fn the_decoders_date_is_the_last_resort() {
+        let facts = || Some(vec![Entry::new(TAKEN, "2026-08-27 20:06:17")]);
+        let taken = taken_of(None, &Xmp::default(), facts).expect("taken");
+        assert_eq!(taken.wall, wall("2026-08-27 20:06:17"));
+
+        let block = dated(&[(0x9003, "2026:08:27 20:06:17")], None);
+        let asked = std::cell::Cell::new(false);
+        taken_of(Some(&block), &Xmp::default(), || {
+            asked.set(true);
+            None
+        });
+        assert!(!asked.get(), "the EXIF said");
+    }
+
+    /// A camera that was never set writes zeros, which are no date.
+    #[test]
+    fn an_unset_clock_is_no_date() {
+        for unset in [
+            "0000:00:00 00:00:00",
+            "    :  :     :  :  ",
+            "2026:13:01 00:00:00",
+        ] {
+            let block = dated(&[(0x9003, unset)], None);
+            assert_eq!(
+                taken_of(Some(&block), &Xmp::default(), || None),
+                None,
+                "{unset:?}"
+            );
+        }
+    }
+
+    /// ISO 8601 as XMP writes it, every part after the date optional, and
+    /// a zone in each of its spellings.
+    #[test]
+    fn xmp_dates_are_read_in_each_of_their_forms() {
+        let read = |text| iso8601(text).map(|reading| (reading.nanos, reading.offset));
+        assert_eq!(read("2026-08-27"), Some((0, None)));
+        assert_eq!(read("2026-08-27T20:06"), Some((0, None)));
+        assert_eq!(read("2026-08-27T20:06:17Z"), Some((0, Some(0))));
+        assert_eq!(
+            read("2026-08-27T20:06:17.25+12:00"),
+            Some((250_000_000, Some(43_200)))
+        );
+        assert_eq!(read("2026-08-27T20:06:17-0330"), Some((0, Some(-12_600))));
+        assert_eq!(read("2026-08-27T20:06+05"), Some((0, Some(18_000))));
+        assert_eq!(read("2026-08-27 20:06:17"), Some((0, None)));
+        for bad in [
+            "",
+            "2026",
+            "2026-08-27T20",
+            "2026-08-27T20:06:17+15:00",
+            "2026:08:27 20:06:17",
+            "2026-08-27T20:06:17 NZST",
+        ] {
+            assert_eq!(read(bad), None, "{bad:?}");
+        }
+    }
+
+    /// The panel's read keeps the moment too, for the file list to learn
+    /// of the file on screen.
+    #[test]
+    fn the_whole_read_says_when_it_was_taken() {
+        let path = written("taken.jpg", &jpeg_with(photograph()));
+        let exif = Exif::read(&path);
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(
+            exif.taken.map(|taken| taken.moment),
+            Some(at("2026-08-27 20:06:17 +12:00"))
+        );
     }
 
     /// A JPEG carrying `block` and nothing else. The parser wants the

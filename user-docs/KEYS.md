@@ -192,7 +192,8 @@ list up once it is in, and otherwise does nothing you can see.
 
 The menu at the head of the strip says how the list stands. It sorts the
 files by name, by path, by kind of file, by when the file
-was last changed, by size on disk, or by width, height or area in pixels,
+was last changed, by when the picture was taken, by size on disk, or by
+width, height or area in pixels,
 and its last two rows run the sort ascending or descending; the button
 wears which. Sorted by anything but the name, each thumbnail wears the
 value it is sorted by across its foot — for the path, the folder, cut in
@@ -200,10 +201,21 @@ its middle where it is long. The list itself is put in
 that order: the keys, the count in the bar and the chooser all walk what
 the strip shows. A sort keeps the order of files it cannot tell apart, so
 sorting by size and then by kind leaves each kind in size order, the way
-sorting a spreadsheet twice does. The kind of a file, its size, its date
+sorting a spreadsheet twice does. The kind of a file, its size, its dates
 and its dimensions are read from its header in the background, and a file whose
 header has not been read yet sorts after those that have, and moves
-into place once it is. The list opens in the order you last put it in,
+into place once it is. A file that does not say when it was taken — a
+screenshot, an export that dropped its metadata — sorts after every file
+that does, whichever way the sort runs.
+
+The capture date is the moment the picture was taken, so pictures from
+cameras set to different time zones interleave in the order they were
+really taken. Where the file records its camera's time zone, or a GPS fix
+it can be worked out from, that moment is exact. Most cameras record
+neither, and then the time is read as if it were in your computer's time
+zone, which is right for pictures taken where you are and an hour or more
+out for one camera set elsewhere against another. The thumbnail shows the
+time as the camera's clock read it. The list opens in the order you last put it in,
 or in name order the first time, whatever order the files were named in,
 and the first file shown is the first in that order. Sorted by anything
 but name or path, a long list is read for its order before its first file

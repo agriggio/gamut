@@ -239,6 +239,7 @@ impl Filmstrip {
                     size: known.size,
                     bytes: known.bytes,
                     modified: known.modified,
+                    taken: known.taken,
                     thumb: thumbs.get(path),
                 }
             })
@@ -280,6 +281,7 @@ mod tests {
             format,
             bytes: None,
             modified: None,
+            taken: None,
         }
     }
 
@@ -325,6 +327,7 @@ mod tests {
                 size: None,
                 bytes: None,
                 modified: None,
+                taken: None,
                 thumb: None,
             }
         );

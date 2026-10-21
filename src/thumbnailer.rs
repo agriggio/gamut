@@ -41,9 +41,10 @@ use anyhow::{Context, Result, anyhow};
 
 use crate::image::decode::{self, Overrides};
 use crate::image::display::{Display, Startup};
+use crate::image::exif::{self, Taken};
 use crate::image::sequence::Sequence;
 use crate::image::xmp::{self, Xmp};
-use crate::image::{Channels, DecodedImage, Region, Stats, encode, exif, resample};
+use crate::image::{Channels, DecodedImage, Region, Stats, encode, resample};
 use crate::loader::guard;
 use crate::thumbnail::{self, Dirs, Key, Lookup};
 
@@ -98,6 +99,8 @@ pub struct Facts {
     /// When it was last written, or `None` where the file system does not
     /// say.
     pub modified: Option<SystemTime>,
+    /// When it was taken, or `None` where the file does not say.
+    pub taken: Option<Taken>,
 }
 
 /// The copies for the screen, each fitted from the same pixels to one of
@@ -433,20 +436,22 @@ fn header(path: &Path) -> Result<Facts> {
     let metadata = std::fs::metadata(&absolute).ok();
     guard("reading the header", || {
         let mut opened = decode::Opened::new(&absolute)?;
+        let packet = Xmp::read_from(&absolute, Some(&mut opened));
         Ok(Facts {
             size: opened.dimensions()?,
             sequence: opened.sequence()?,
-            title: title(&absolute, &mut opened),
+            title: title(&packet),
             format: Some(opened.format()),
             bytes: metadata.as_ref().map(std::fs::Metadata::len),
             modified: metadata.and_then(|metadata| metadata.modified().ok()),
+            taken: exif::taken(&absolute, Some(&mut opened), &packet),
         })
     })
 }
 
 /// The file's title as the info panel would show it, or nothing.
-fn title(path: &Path, opened: &mut decode::Opened) -> Option<String> {
-    Xmp::read_from(path, Some(opened))
+fn title(packet: &Xmp) -> Option<String> {
+    packet
         .property(xmp::DC, "title")?
         .first()
         .map(|title| exif::shorten(title))
@@ -788,6 +793,7 @@ mod tests {
             format: None,
             bytes: None,
             modified: None,
+            taken: None,
         };
         let mut queue = Queue::default();
         queue.take(Ask::Enqueue(vec![
@@ -893,6 +899,7 @@ mod tests {
                 format: decode::reader(&picture),
                 bytes: Some(std::fs::metadata(&picture).unwrap().len()),
                 modified: std::fs::metadata(&picture).unwrap().modified().ok(),
+                taken: None,
             }
         );
         assert!(facts.format.is_some(), "a PNG has a decoder that claims it");

@@ -20,7 +20,8 @@ use anyhow::Result;
 use super::App;
 use super::files::SLOW_READ;
 use super::input::{self, Effect};
-use crate::image::decode;
+use crate::image::xmp::Xmp;
+use crate::image::{decode, exif};
 use crate::ui::Control;
 use crate::ui::filmstrip::Sort;
 use crate::ui::toast::{Level, Toast};
@@ -92,10 +93,11 @@ pub struct Glimpse {
     pub bytes: Option<u64>,
     pub size: Option<(u32, u32)>,
     pub modified: Option<SystemTime>,
+    pub taken: Option<exif::Taken>,
 }
 
 impl Glimpse {
-    /// The glimpse a header read gives: the same four facts, out of what
+    /// The glimpse a header read gives: the same five facts, out of what
     /// the thumbnail thread learned of the file.
     pub fn of(facts: &crate::thumbnailer::Facts) -> Self {
         Self {
@@ -103,6 +105,7 @@ impl Glimpse {
             bytes: facts.bytes,
             size: facts.size,
             modified: facts.modified,
+            taken: facts.taken,
         }
     }
 }
@@ -189,14 +192,14 @@ pub(super) fn glimpse_all(
 }
 
 /// What `sort` needs of `path`, and nothing more: the file system's word
-/// for a date or a size, the leading bytes for a type, the header for the
-/// dimensions. The last two parse bytes chosen by whoever wrote the file,
-/// so they run under the loader's guard, a panic being a glimpse of
-/// nothing.
+/// for a date or a size, the leading bytes for a type, the metadata for
+/// when it was taken, the header for the dimensions. The last three parse
+/// bytes chosen by whoever wrote the file, so they run under the loader's
+/// guard, a panic being a glimpse of nothing.
 fn glimpse(path: &Path, sort: Sort) -> Glimpse {
     match sort {
         Sort::Name | Sort::Path => Glimpse::default(),
-        Sort::Date | Sort::Size => {
+        Sort::Modified | Sort::Size => {
             let metadata = std::fs::metadata(path).ok();
             Glimpse {
                 bytes: metadata.as_ref().map(std::fs::Metadata::len),
@@ -208,6 +211,16 @@ fn glimpse(path: &Path, sort: Sort) -> Glimpse {
             format: crate::loader::guard("reading the type", || Ok(decode::reader(path)))
                 .ok()
                 .flatten(),
+            ..Glimpse::default()
+        },
+        Sort::Taken => Glimpse {
+            taken: crate::loader::guard("reading when it was taken", || {
+                let mut opened = decode::Opened::new(path).ok();
+                let packet = Xmp::read_from(path, opened.as_mut());
+                Ok(exif::taken(path, opened.as_mut(), &packet))
+            })
+            .ok()
+            .flatten(),
             ..Glimpse::default()
         },
         Sort::Width | Sort::Height | Sort::Area => Glimpse {

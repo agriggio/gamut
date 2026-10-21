@@ -8,6 +8,13 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
 
 ### Added
 
+- The file list sorts by *Capture Date*: when the picture was taken, from
+  its metadata, as a moment, so that pictures from cameras set to
+  different time zones interleave as they were taken. The zone is the
+  one the camera wrote, or one worked out from the GPS fix's time, and
+  otherwise this computer's. A file that does not say sorts last either
+  way the sort runs. Each thumbnail shows the time as the camera's clock
+  read it.
 - The horizon grid, `b` or the compass button, for a picture that records
   its compass heading but not how its camera was tilted, as a Pixel's
   does: a ring at the middle of the picture with the heading over it.
@@ -129,6 +136,8 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
 
 ### Changed
 
+- The file list's *Date* sort is called *Modified Date*, beside the new
+  *Capture Date*.
 - Stepping to a page of another size that is the same shape — the pages
   of a pyramidal TIFF, each a reduction of the one before — keeps the
   same detail at the center of the window, at the size it was on screen,

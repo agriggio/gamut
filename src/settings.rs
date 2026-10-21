@@ -1061,7 +1061,7 @@ mod tests {
             horizon_step: 15.0,
             ui_scale: 1.5,
             order: filmstrip::Order {
-                sort: filmstrip::Sort::Date,
+                sort: filmstrip::Sort::Modified,
                 direction: filmstrip::Direction::Descending,
             },
             camera_jpeg: true,

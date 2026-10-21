@@ -30,6 +30,8 @@ use super::chrome::{BAR_HEIGHT, BAR_PADDING, BUTTON_GAP, Corners, Pass, STEP_SEA
 use super::control::{Command, Control};
 use super::style::{ACTIVE_BUTTON_WASH, SCROLLBAR_GUTTER, SCROLLBAR_WIDTH};
 use super::{TEXT_SIZE, fonts, icon, menu};
+use crate::clock::Civil;
+use crate::image::exif::Taken;
 
 /// The width each thumbnail is fitted into, at its narrowest: the
 /// thumbnail thread's smallest display copy, drawn at its own size.
@@ -119,7 +121,8 @@ pub enum Sort {
     Name,
     Path,
     Type,
-    Date,
+    Modified,
+    Taken,
     Size,
     Width,
     Height,
@@ -128,11 +131,12 @@ pub enum Sort {
 
 impl Sort {
     /// In the order the menu offers them.
-    pub const ALL: [Sort; 8] = [
+    pub const ALL: [Sort; 9] = [
         Sort::Name,
         Sort::Path,
         Sort::Type,
-        Sort::Date,
+        Sort::Modified,
+        Sort::Taken,
         Sort::Size,
         Sort::Width,
         Sort::Height,
@@ -146,7 +150,8 @@ impl Sort {
             Sort::Path => "Path",
             Sort::Type => "Type",
             Sort::Size => "Size",
-            Sort::Date => "Date",
+            Sort::Modified => "Modified Date",
+            Sort::Taken => "Capture Date",
             Sort::Width => "Width",
             Sort::Height => "Height",
             Sort::Area => "Area",
@@ -160,7 +165,8 @@ impl Sort {
             Sort::Path => "Sort by absolute path",
             Sort::Type => "Sort by image type",
             Sort::Size => "Sort by file size",
-            Sort::Date => "Sort by file last modified time",
+            Sort::Modified => "Sort by file last modified time",
+            Sort::Taken => "Sort by picture capture date",
             Sort::Width => "Sort by pixel width",
             Sort::Height => "Sort by pixel height",
             Sort::Area => "Sort by total pixels",
@@ -174,7 +180,9 @@ impl Sort {
             Sort::Path => "path",
             Sort::Type => "type",
             Sort::Size => "size",
-            Sort::Date => "date",
+            // What it was kept under when it was the one date there was.
+            Sort::Modified => "date",
+            Sort::Taken => "taken",
             Sort::Width => "width",
             Sort::Height => "height",
             Sort::Area => "area",
@@ -268,6 +276,8 @@ pub struct Row {
     pub size: Option<(u32, u32)>,
     pub bytes: Option<u64>,
     pub modified: Option<SystemTime>,
+    /// When it was taken, where the file says.
+    pub taken: Option<Taken>,
     /// Its thumbnail, once one has arrived and while the screen still
     /// holds it.
     pub thumb: Option<super::Thumb>,
@@ -570,6 +580,7 @@ fn file(
         size,
         bytes,
         modified,
+        taken,
         thumb,
     } = input.rows[row];
     let known = Known {
@@ -577,6 +588,7 @@ fn file(
         size,
         bytes,
         modified,
+        taken,
     };
     let theme = pass.theme;
     let control = Control::Thumb(row);
@@ -686,6 +698,7 @@ struct Known {
     size: Option<(u32, u32)>,
     bytes: Option<u64>,
     modified: Option<SystemTime>,
+    taken: Option<Taken>,
 }
 
 impl Known {
@@ -719,7 +732,8 @@ impl Known {
             Sort::Name => None,
             Sort::Path => folder(path),
             Sort::Type => self.format.map(str::to_string),
-            Sort::Date => self.modified.map(local_time),
+            Sort::Modified => self.modified.map(local_time),
+            Sort::Taken => self.taken.map(|taken| minutes(taken.wall)),
             Sort::Size => self.bytes.map(super::info::round_bytes),
             Sort::Width | Sort::Height => self.size.map(dimensions),
             Sort::Area => self.size.map(|(width, height)| {
@@ -747,7 +761,12 @@ fn dimensions((width, height): (u32, u32)) -> String {
 /// here, beside the files, where the info panel's UTC is bound for
 /// wherever its reader is.
 fn local_time(time: SystemTime) -> String {
-    let at = crate::clock::local(time);
+    minutes(crate::clock::local(time))
+}
+
+/// A date and time to the minute, as the row writes one: when a file was
+/// taken is written as the camera's clock read, whatever zone that was.
+fn minutes(at: Civil) -> String {
     format!(
         "{:04}-{:02}-{:02} {:02}:{:02}",
         at.year, at.month, at.day, at.hour, at.minute
@@ -878,6 +897,11 @@ mod tests {
             size: Some((1920, 1080)),
             bytes: Some(1_258_291),
             modified: Some(when),
+            // Taken at 21:32 on a clock twelve hours ahead.
+            taken: Some(Taken {
+                moment: when,
+                wall: crate::clock::utc(when + std::time::Duration::from_secs(12 * 3600)),
+            }),
         };
         let about = everything.about("a/b.png");
         assert_eq!(
@@ -890,6 +914,7 @@ mod tests {
             size: None,
             bytes: None,
             modified: None,
+            taken: None,
         };
         assert_eq!(
             nothing.about("b.png"),
@@ -915,7 +940,13 @@ mod tests {
             sorted(everything, Sort::Width).as_deref(),
             Some("1920 \u{d7} 1080")
         );
-        assert_eq!(sorted(nothing, Sort::Date), None, "not known yet");
+        assert_eq!(sorted(nothing, Sort::Modified), None, "not known yet");
+        assert_eq!(
+            sorted(everything, Sort::Taken).as_deref(),
+            Some("2025-08-31 21:32"),
+            "as the camera's clock read"
+        );
+        assert_eq!(sorted(nothing, Sort::Taken), None, "not known yet");
     }
 
     #[test]

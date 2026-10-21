@@ -14,6 +14,7 @@ use std::path::Path;
 use std::time::SystemTime;
 
 use super::folder::Glimpse;
+use crate::image::exif::Taken;
 use crate::thumbnailer::Facts;
 use crate::ui::filmstrip::{Direction, Order, Sort};
 
@@ -30,6 +31,8 @@ pub(super) struct Key<'a> {
     pub size: Option<(u32, u32)>,
     /// When it was last written.
     pub modified: Option<SystemTime>,
+    /// When it was taken.
+    pub taken: Option<Taken>,
 }
 
 impl<'a> Key<'a> {
@@ -44,6 +47,7 @@ impl<'a> Key<'a> {
             bytes,
             size,
             modified,
+            taken,
         } = facts
             .map(Glimpse::of)
             .or_else(|| glimpse.copied())
@@ -54,6 +58,7 @@ impl<'a> Key<'a> {
             bytes,
             size,
             modified,
+            taken,
         }
     }
 
@@ -80,7 +85,8 @@ fn rank(key: &Key, sort: Sort) -> Option<Rank> {
         Sort::Path => Rank::Word(key.path.display().to_string()),
         Sort::Type => Rank::Word(key.format?.to_string()),
         Sort::Size => Rank::Number(key.bytes?),
-        Sort::Date => Rank::Moment(key.modified?),
+        Sort::Modified => Rank::Moment(key.modified?),
+        Sort::Taken => Rank::Moment(key.taken?.moment),
         Sort::Width => Rank::Number(u64::from(key.size?.0)),
         Sort::Height => Rank::Number(u64::from(key.size?.1)),
         Sort::Area => {
@@ -134,6 +140,7 @@ mod tests {
         bytes: Option<u64>,
         size: Option<(u32, u32)>,
         modified: Option<SystemTime>,
+        taken: Option<Taken>,
     }
 
     fn file(
@@ -148,6 +155,7 @@ mod tests {
             bytes,
             size,
             modified: None,
+            taken: None,
         }
     }
 
@@ -158,6 +166,7 @@ mod tests {
             bytes: files[index].bytes,
             size: files[index].size,
             modified: files[index].modified,
+            taken: files[index].taken,
         }
     }
 
@@ -205,9 +214,15 @@ mod tests {
             file("c/one.gif", None, Some(100), None),
             file("a/four.png", Some("PNG"), Some(200), Some((20, 20))),
         ];
+        let moment = |seconds| SystemTime::UNIX_EPOCH + Duration::from_secs(seconds);
         for (file, seconds) in files.iter_mut().zip([Some(50), Some(10), None, Some(30)]) {
-            file.modified =
-                seconds.map(|seconds| SystemTime::UNIX_EPOCH + Duration::from_secs(seconds));
+            file.modified = seconds.map(moment);
+        }
+        for (file, seconds) in files.iter_mut().zip([Some(20), None, Some(40), Some(5)]) {
+            file.taken = seconds.map(|seconds| Taken {
+                moment: moment(seconds),
+                wall: crate::clock::utc(moment(seconds)),
+            });
         }
         let arranged = |sort| arrange(files.len(), order(sort), key(&files));
         assert_eq!(arranged(Sort::Name), [3, 2, 1, 0], "four, one, three, two");
@@ -223,8 +238,13 @@ mod tests {
             "100, 200, 300, then unknown"
         );
         assert_eq!(
-            arranged(Sort::Date),
+            arranged(Sort::Modified),
             [1, 3, 0, 2],
+            "earliest first, then unknown"
+        );
+        assert_eq!(
+            arranged(Sort::Taken),
+            [3, 0, 2, 1],
             "earliest first, then unknown"
         );
         assert_eq!(arranged(Sort::Width), [0, 3, 1, 2]);
