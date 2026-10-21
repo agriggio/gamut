@@ -26,9 +26,23 @@ runs in, which turns the comparison round rather than the list, so that
 ties keep their order either way and the unknown stays last. `app/order.rs`
 turns one into a permutation, `arrange`. It compares keys with a `None`
 on either side sorting after every `Some`, so that a file whose
-header has not been read yet — its type, its date, its size on disk and
+header has not been read yet — its type, its dates, its size on disk and
 its dimensions all come from `thumbnailer::Facts`, which arrive in the
-background — goes to the end and moves into place when its header does. The
+background — goes to the end and moves into place when its header does,
+and a file whose header says nothing of the key, as a screenshot says
+nothing of when it was taken, stays there.
+
+A sort by capture date ranks by `exif::Taken::moment`, an instant, so that
+files from clocks in different zones interleave as they were taken, and
+the row shows `Taken::wall`, what the camera's clock read, as the info
+panel's *Taken* row does. `exif::taken` pins the moment down as far as
+the file allows: the EXIF date with the zone written beside it, an XMP
+date carrying its zone, the EXIF date with the zone worked out from the
+GPS fix's UTC — to the quarter hour, and only where the fix is within a
+few minutes of one, a stale fix saying more about the receiver than the
+zone — and last a date with no zone at all, read in this machine's zone
+as LibRaw reads a raw's. That last is wrong by the difference for a
+camera set elsewhere, and nothing in such a file can correct it. The
 sort is `slice::sort_by` on indices, which is stable, and the list is
 sorted in place from wherever it stands, so files one key cannot tell
 apart keep the order the last key put them in: sorting by size and then by
@@ -47,7 +61,8 @@ whichever file came first by name, landing the user in the middle of it.
 An order of names needs nothing read, and `main` puts the command line's
 list in it with `app::arranged` ahead of `cli::first_readable`. Any other
 order needs something of every file — a `stat` for a date or a size, the
-leading bytes for a type, the header for the dimensions — and a folder of
+leading bytes for a type, the metadata for a capture date, the header for
+the dimensions — and a folder of
 large raws is too much to read before the window opens, so `App::new`
 hands the list to `app/arranging.rs` instead of asking for its first file:
 the window opens on nothing, neither empty nor loading, the read runs on

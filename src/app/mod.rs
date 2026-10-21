@@ -2881,6 +2881,7 @@ impl App {
                 format: facts.reader,
                 bytes: facts.bytes,
                 modified: facts.modified,
+                taken: exif.taken,
             },
         );
         // Made from the picture itself, decoded already, rather than read

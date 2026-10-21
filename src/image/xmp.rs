@@ -58,6 +58,15 @@ const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 /// and the rights go.
 pub const DC: &str = "http://purl.org/dc/elements/1.1/";
 
+/// XMP's own basic properties, among them when the file was made.
+pub const BASIC: &str = "http://ns.adobe.com/xap/1.0/";
+
+/// The EXIF fields as XMP writes them, for a file whose EXIF is its packet.
+pub const EXIF: &str = "http://ns.adobe.com/exif/1.0/";
+
+/// Photoshop's properties, among them when what is pictured was made.
+pub const PHOTOSHOP: &str = "http://ns.adobe.com/photoshop/1.0/";
+
 /// The Metadata Working Group's regions: the list, and each region's name,
 /// kind and words.
 pub const MWG_RS: &str = "http://www.metadataworkinggroup.com/schemas/regions/";

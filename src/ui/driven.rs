@@ -1250,6 +1250,7 @@ fn strip(count: usize, current: Option<usize>, reveal: bool) -> filmstrip::Input
             size: None,
             bytes: None,
             modified: None,
+            taken: None,
             thumb: None,
         })
         .collect();

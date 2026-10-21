@@ -88,10 +88,14 @@ pub fn parse(text: &str) -> Option<SystemTime> {
     {
         return None;
     }
-    let wall = days_from_civil(year, month as u32, day as u32) * 86_400
-        + hour * 3600
-        + minute * 60
-        + second;
+    let wall = Civil {
+        year,
+        month: month as u32,
+        day: day as u32,
+        hour: hour as u32,
+        minute: minute as u32,
+        second: second as u32,
+    };
     let offset = match zone {
         Some(zone) => {
             let (sign, rest) = match zone.as_bytes().first()? {
@@ -100,17 +104,34 @@ pub fn parse(text: &str) -> Option<SystemTime> {
                 _ => return None,
             };
             let [hours, minutes]: [i64; 2] = numbers(rest, ':')?[..].try_into().ok()?;
-            sign * (hours * 3600 + minutes * 60)
+            Some(sign * (hours * 3600 + minutes * 60))
         }
-        None => offset_at(wall),
+        None => None,
     };
-    let seconds = wall - offset;
+    moment(wall, offset)
+}
+
+/// The moment a clock reading `wall` stood for, the clock being `offset`
+/// seconds ahead of UTC — or, where `offset` is `None`, this machine's
+/// clock. `None` only where the moment is past what a `SystemTime` holds.
+pub fn moment(wall: Civil, offset: Option<i64>) -> Option<SystemTime> {
+    let wall = seconds(wall);
+    let seconds = wall - offset.unwrap_or_else(|| offset_at(wall));
     let magnitude = std::time::Duration::from_secs(seconds.unsigned_abs());
     if seconds >= 0 {
         SystemTime::UNIX_EPOCH.checked_add(magnitude)
     } else {
         SystemTime::UNIX_EPOCH.checked_sub(magnitude)
     }
+}
+
+/// The seconds since the epoch `civil` is, read as a reading of a clock in
+/// UTC: what a reading of another clock is shifted from.
+pub fn seconds(civil: Civil) -> i64 {
+    days_from_civil(civil.year, civil.month, civil.day) * 86_400
+        + i64::from(civil.hour) * 3600
+        + i64::from(civil.minute) * 60
+        + i64::from(civil.second)
 }
 
 /// The days from 1970-01-01 to a civil date: [`civil_from_days`] the other

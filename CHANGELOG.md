@@ -8,6 +8,13 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
 
 ### Added
 
+- The file list sorts by *Capture Date*: when the picture was taken, from
+  its metadata, as a moment, so that pictures from cameras set to
+  different time zones interleave as they were taken. The zone is the
+  one the camera wrote, or one worked out from the GPS fix's time, and
+  otherwise this computer's. A file that does not say sorts last either
+  way the sort runs. Each thumbnail shows the time as the camera's clock
+  read it.
 - The horizon grid, `b` or the compass button, for a picture that records
   its compass heading but not how its camera was tilted, as a Pixel's
   does: a ring at the middle of the picture with the heading over it.
@@ -129,6 +136,8 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
 
 ### Changed
 
+- The file list's *Date* sort is called *Modified Date*, beside the new
+  *Capture Date*.
 - The window opens with room for the picture at least half the screen's
   height on each side, and at least as wide as it is tall: a small picture
   no longer opens in a window the size of a stamp, and a folder that starts
@@ -296,6 +305,9 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
 
 ### Fixed
 
+- A Canon CRW's *Taken* date is the time on the camera's clock, as
+  ExifTool reads it, rather than that time moved by this computer's
+  time zone.
 - While a raw's mosaic is shown, the Display and Output histograms' gray
   plane plots each photosite's count, and the window the mosaic opens on is
   set from those counts. It was the counts weighted as luminance, which put a
