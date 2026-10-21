@@ -2500,6 +2500,7 @@ impl App {
         }
         timing::window_open();
         window::show_icon();
+        window::bring_forward();
 
         let main_device = self
             .output
