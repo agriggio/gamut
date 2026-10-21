@@ -226,6 +226,28 @@ pub(super) fn show_icon() {
     }
 }
 
+/// Makes the program the one in front. The window can open a while after
+/// launch — once the command line's list is in order, or once Finder's
+/// files arrive — and by then the activation winit asks for at launch has
+/// come and gone with no window to bring forward, which leaves the window
+/// behind the terminal it was started from. Elsewhere the window manager
+/// decides, and this does nothing.
+pub(super) fn bring_forward() {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2::MainThreadMarker;
+        use objc2_app_kit::NSApplication;
+
+        let Some(main) = MainThreadMarker::new() else {
+            return;
+        };
+        // `activate`, its replacement, is macOS 14's, and the bundle runs
+        // on 11.
+        #[allow(deprecated)]
+        NSApplication::sharedApplication(main).activateIgnoringOtherApps(true);
+    }
+}
+
 /// The icon as an image AppKit can draw at any size, or `None` where this
 /// macOS cannot read SVG.
 #[cfg(target_os = "macos")]
