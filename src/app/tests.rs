@@ -2080,6 +2080,7 @@ fn thumbnailed(app: &mut App, path: &Path, size: (u32, u32)) {
             format: None,
             bytes: None,
             modified: None,
+            taken: None,
         },
     );
     let ctx = egui::Context::default();
@@ -2261,6 +2262,7 @@ fn the_transport_bar_is_the_arriving_files_from_the_key() {
             format: None,
             bytes: None,
             modified: None,
+            taken: None,
         },
     );
     assert_eq!(
@@ -2312,6 +2314,7 @@ fn a_kind_that_was_slow_is_said_to_be_slow_at_once() {
             format: Some(format),
             bytes: None,
             modified: None,
+            taken: None,
         },
     );
     let _ = app.step(true);
@@ -2330,6 +2333,7 @@ fn a_kind_that_was_slow_is_said_to_be_slow_at_once() {
             format: Some(format),
             bytes: None,
             modified: None,
+            taken: None,
         },
     );
     assert!(said(&app).is_none());
@@ -3353,6 +3357,7 @@ fn the_list_is_put_in_order_between_reads_and_the_file_on_screen_stays() {
             format: Some("PNG"),
             bytes: None,
             modified: None,
+            taken: None,
         }),
     };
     app.take_thumbnail(learned("a.png", 4));

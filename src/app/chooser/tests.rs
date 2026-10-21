@@ -212,6 +212,7 @@ fn the_rows_fill_in_as_facts_arrive() {
 
             bytes: None,
             modified: None,
+            taken: None,
         },
     ));
     chooser.take(Delivered {
@@ -228,6 +229,7 @@ fn the_rows_fill_in_as_facts_arrive() {
 
             bytes: None,
             modified: None,
+            taken: None,
         }),
     });
     let input = chooser.input(&thumbs, None);
@@ -269,6 +271,7 @@ fn a_title_is_matched_on_once_it_is_known() {
 
         bytes: None,
         modified: None,
+        taken: None,
     };
     chooser.take(Delivered {
         path: PathBuf::from("buteo-buteo-2.webp"),
@@ -369,6 +372,7 @@ fn the_visible_rows_ask_for_what_they_lack() {
 
             bytes: None,
             modified: None,
+            taken: None,
         },
     );
     assert_eq!(chooser.wanted(0..3, &thumbs), paths(&["a.png"]));
@@ -384,6 +388,7 @@ fn the_visible_rows_ask_for_what_they_lack() {
 
         bytes: None,
         modified: None,
+        taken: None,
     };
     assert!(chooser.learn(Path::new("b.png"), facts.clone()));
     assert!(!chooser.learn(Path::new("b.png"), facts));
