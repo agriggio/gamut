@@ -19,6 +19,18 @@ whichever screen it lands on. Where none of them fits everywhere — a monitor
 smaller than `MIN_WINDOW`, say — the smallest answer is taken as the least bad
 of them.
 
+In each monitor's answer, the room for the picture is made at least
+`MIN_PICTURE_FRACTION` — half — of the monitor's height on each side, and at
+least as wide as it is tall, as far as `MAX_WINDOW_FRACTION` allows. The first is for a small picture, which
+would otherwise open in a window the size of a stamp, and is stretched to fit
+the room it is given. The second is for the
+files after the first: the window is sized once, for the first file, so a
+folder that opens on a portrait picture would show every landscape one after
+it at the portrait's width. A square holds the portrait as large as before and
+gives a landscape one the width of that height. Looking ahead at the shapes of
+the next files would do better on a folder of portraits, at the cost of reading
+their headers before the window can settle.
+
 The whole calculation is in the monitor's logical pixels. The image's own
 pixels are physical, so a monitor's scale converts them — that scale alone,
 since the picture is not the interface's to grow. The panel constants are in

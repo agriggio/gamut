@@ -138,6 +138,10 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
 
 - The file list's *Date* sort is called *Modified Date*, beside the new
   *Capture Date*.
+- The window opens with room for the picture at least half the screen's
+  height on each side, and at least as wide as it is tall: a small picture
+  no longer opens in a window the size of a stamp, and a folder that starts
+  on a portrait picture has the width for the landscape ones after it.
 - Stepping to a page of another size that is the same shape — the pages
   of a pyramidal TIFF, each a reduction of the one before — keeps the
   same detail at the center of the window, at the size it was on screen,
