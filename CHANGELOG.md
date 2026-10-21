@@ -4,6 +4,12 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.12.1 - 2026-10-21
+
+### Fixed
+
+- Fixed package build.
+
 ## 0.12.0 - 2026-10-21
 
 ### Added

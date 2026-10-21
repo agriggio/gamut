@@ -42,5 +42,11 @@ fn main() {
         .file("src/image/decode/raw/shim.c")
         .includes(&library.include_paths)
         .warnings(true)
+        // makepkg puts -flto in CFLAGS, which would leave only GCC's bytecode
+        // in the archive, and Rust's linker, lld, reads none of it: the
+        // accessors would go missing at the link. CFLAGS comes after the
+        // flags given here, so -fno-lto would lose to it; fat objects carry
+        // machine code beside the bytecode whichever order the two are in.
+        .flag_if_supported("-ffat-lto-objects")
         .compile("gamut_libraw_shim");
 }
