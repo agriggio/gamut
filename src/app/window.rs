@@ -18,6 +18,11 @@ use crate::ui::chrome::{BAR_HEIGHT, SIDE_WIDTH};
 /// rather than above and below it.
 const MAX_WINDOW_FRACTION: [f64; 2] = [0.75, 0.85];
 
+/// Fraction of a monitor's height the room for the picture opens at least
+/// at, across and down, so that a small picture is fitted to a window of
+/// some size rather than one the size of a stamp.
+const MIN_PICTURE_FRACTION: f64 = 0.5;
+
 /// What the panels take out of the window, in the points they are laid out
 /// in: a side on each edge and a bar top and bottom. A window is sized in the
 /// monitor's logical pixels, which are a point only while the interface is
@@ -314,6 +319,13 @@ impl Monitor {
 /// The window this monitor would want: the image at its own pixels, held
 /// inside [`MAX_WINDOW_FRACTION`] of the monitor's room, plus the chrome.
 ///
+/// The room for the picture is then made at least [`MIN_PICTURE_FRACTION`]
+/// of the monitor's height on each side, and at least as wide as it is
+/// tall, as far as the fraction allows. A portrait picture opens no larger
+/// for it, but with room beside it: the window is sized once, for the first
+/// file, and a landscape one stepped to after it would otherwise be shown at
+/// the portrait's width.
+///
 /// The panels take their room out of the image rather than lying over it, so
 /// the window asks for the image *plus* the chrome around it — otherwise a
 /// picture that would open at 100% would open slightly reduced. The fraction
@@ -342,6 +354,13 @@ fn wanted_window(monitor: Monitor, image: [f32; 2], chrome: Chrome) -> [f64; 2] 
         let shrink = (max_width / width).min(max_height / height).min(1.0);
         width *= shrink;
         height *= shrink;
+        if room[1].is_finite() {
+            let least = (room[1] * MIN_PICTURE_FRACTION)
+                .min(max_width)
+                .min(max_height);
+            height = height.max(least);
+            width = width.max(height.min(max_width));
+        }
     }
 
     let floor = chrome.floor_for(room);
@@ -568,12 +587,50 @@ mod tests {
     /// it, held inside the monitor.
     #[test]
     fn without_one_the_image_decides() {
-        let small = window_size(&MONITOR, Some([640.0, 480.0]), None, Chrome::default());
-        assert_eq!(small.width, 640 + 2 * SIDE_WIDTH as u32);
-        assert_eq!(small.height, 480 + 2 * BAR_HEIGHT as u32);
+        let small = window_size(&MONITOR, Some([1200.0, 900.0]), None, Chrome::default());
+        assert_eq!(small.width, 1200 + 2 * SIDE_WIDTH as u32);
+        assert_eq!(small.height, 900 + 2 * BAR_HEIGHT as u32);
 
         let large = window_size(&MONITOR, Some([8000.0, 6000.0]), None, Chrome::default());
         assert!(large.width <= 2560 && large.height <= 1440);
+    }
+
+    /// A picture smaller than half the monitor's height opens with room for
+    /// the picture that tall and as wide.
+    #[test]
+    fn a_small_picture_opens_half_the_monitor_high_and_square() {
+        let size = window_size(&MONITOR, Some([640.0, 480.0]), None, Chrome::default());
+        assert_eq!(size.width, 720 + 2 * SIDE_WIDTH as u32);
+        assert_eq!(size.height, 720 + 2 * BAR_HEIGHT as u32);
+    }
+
+    /// A portrait picture opens with room at least as wide as it is tall, so
+    /// that a landscape one stepped to after it is not shown at its width.
+    /// The portrait itself is held where it was, by the height.
+    #[test]
+    fn a_portrait_picture_opens_at_least_square() {
+        let size = window_size(&MONITOR, Some([3024.0, 4032.0]), None, Chrome::default());
+        let height = (1440.0 * 0.85_f64).round() as u32;
+        assert!(size.height.abs_diff(height) <= 1, "{size:?}");
+        let picture = size.height - 2 * BAR_HEIGHT as u32;
+        assert!(
+            (size.width - 2 * SIDE_WIDTH as u32).abs_diff(picture) <= 1,
+            "{size:?}"
+        );
+
+        // A landscape one is left its own shape.
+        let wide = window_size(&MONITOR, Some([1500.0, 1000.0]), None, Chrome::default());
+        assert_eq!(wide.height, 1000 + 2 * BAR_HEIGHT as u32);
+    }
+
+    /// On a monitor turned on its side, the square stops at the share of the
+    /// width a window may have.
+    #[test]
+    fn on_a_portrait_monitor_the_square_stops_at_the_width() {
+        let upright = [monitor(1440, 2560, 1.0)];
+        let size = window_size(&upright, Some([3024.0, 4032.0]), None, Chrome::default());
+        assert_eq!(size.width, 1080);
+        assert!(size.height > size.width, "{size:?}");
     }
 
     /// A picture smaller than the interface still opens a window the
@@ -628,8 +685,8 @@ mod tests {
     /// The compositor's own account of a monitor carries the scale it is
     /// really running, which the event loop rounds up to a whole number on
     /// Wayland. A 4K monitor laid out at 2400 × 1350 is at 1.6, and an
-    /// 800-pixel picture on it is 500 logical pixels wide, not the 400 that
-    /// a scale of 2 would make it — a window that opens at 80%.
+    /// 1600-pixel picture on it is 1000 logical pixels wide, not the 800
+    /// that a scale of 2 would make it — a window that opens at 80%.
     #[test]
     fn a_measured_monitor_has_its_fractional_scale() {
         let measured = Monitor::measured(Room {
@@ -640,16 +697,16 @@ mod tests {
         assert_eq!(measured.room, [2400.0, 1350.0]);
         assert!((measured.scale - 1.6).abs() < 1e-9, "{measured:?}");
 
-        let size = window_size(&[measured], Some([800.0, 480.0]), None, Chrome::default());
-        assert_eq!(size.width, 500 + 2 * SIDE_WIDTH as u32);
+        let size = window_size(&[measured], Some([1600.0, 1200.0]), None, Chrome::default());
+        assert_eq!(size.width, 1000 + 2 * SIDE_WIDTH as u32);
 
         let rounded = window_size(
             &[monitor(3840, 2160, 2.0)],
-            Some([800.0, 480.0]),
+            Some([1600.0, 1200.0]),
             None,
             Chrome::default(),
         );
-        assert_eq!(rounded.width, 400 + 2 * SIDE_WIDTH as u32);
+        assert_eq!(rounded.width, 800 + 2 * SIDE_WIDTH as u32);
     }
 
     /// A room the compositor has not finished describing is no monitor yet.

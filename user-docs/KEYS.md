@@ -1190,7 +1190,10 @@ without it. An animation starts playing; `--paused` starts it stopped.
 window was up. No path at all opens an empty window, with the buttons that
 give it something — see [Opening something else](#opening-something-else).
 
-The window itself opens at the image's size, shrunk to fit the screen.
+The window itself opens at the image's size, shrunk to fit the screen, and
+no smaller than half the screen's height on each side. The room for the
+picture is at least as wide as it is tall, so a folder that starts with a
+portrait picture still has the width for the landscape ones after it.
 `--size <W> <H>` opens it at a size you choose instead, in the pixels your
 desktop measures windows in. A tiling window manager takes it as the size to
 use when the window floats, and may lay the window out its own way regardless.
