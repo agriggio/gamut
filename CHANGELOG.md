@@ -301,6 +301,9 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
 
 ### Fixed
 
+- A Canon CRW's *Taken* date is the time on the camera's clock, as
+  ExifTool reads it, rather than that time moved by this computer's
+  time zone.
 - While a raw's mosaic is shown, the Display and Output histograms' gray
   plane plots each photosite's count, and the window the mosaic opens on is
   set from those counts. It was the counts weighted as luminance, which put a

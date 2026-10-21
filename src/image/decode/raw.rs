@@ -243,8 +243,13 @@ impl super::Decoder for Raw {
 /// temperature the camera balanced for, which only the library's reading
 /// of the sensor can work out.
 pub(super) fn facts(source: &mut dyn super::ReadSeek) -> Result<Vec<Entry>> {
+    use std::io::SeekFrom;
+    let mut header = [0u8; 14];
+    source.seek(SeekFrom::Start(0))?;
+    let ciff = source.read_exact(&mut header).is_ok() && is_ciff(&header);
+    source.seek(SeekFrom::Start(0))?;
     with_handle(source, |handle| {
-        let mut rows = handle.camera();
+        let mut rows = handle.camera(ciff);
         push(
             &mut rows,
             crate::image::exif::COLOR_TEMPERATURE,
@@ -361,18 +366,27 @@ impl Handle {
     /// What took the picture and how, as LibRaw parsed it: the panel's
     /// `Camera` section for a file the EXIF reader found nothing in, in the
     /// EXIF reader's order and under its names, so that either fills in
-    /// what the other left out a row at a time.
-    fn camera(&self) -> Vec<Entry> {
+    /// what the other left out a row at a time. `ciff` is whether the file
+    /// is a CRW, whose date LibRaw reads otherwise than every other's.
+    fn camera(&self, ciff: bool) -> Vec<Entry> {
         use crate::image::exif::{APERTURE, CAMERA, FOCAL_LENGTH, ISO, LENS, SHUTTER, TAKEN};
         let mut rows = Vec::new();
         let params = self.params();
         let other = self.other();
         if other.timestamp > 0 {
-            // dcraw makes the camera's date a `time_t` as if it were in this
-            // machine's zone, so the same zone gives the camera's fields back.
-            let taken = crate::clock::local(
-                std::time::UNIX_EPOCH + std::time::Duration::from_secs(other.timestamp as u64),
-            );
+            // dcraw makes a date written out in fields a `time_t` as if it
+            // were in this machine's zone, so the same zone gives the
+            // camera's fields back. A CRW writes no fields: it keeps the
+            // camera's clock as a count of seconds since 1970 on that clock,
+            // which LibRaw hands over as it is, so the fields are the
+            // count's in UTC, whatever zone the camera or this machine is in.
+            let count =
+                std::time::UNIX_EPOCH + std::time::Duration::from_secs(other.timestamp as u64);
+            let taken = if ciff {
+                crate::clock::utc(count)
+            } else {
+                crate::clock::local(count)
+            };
             push(
                 &mut rows,
                 TAKEN,
@@ -979,7 +993,7 @@ fn has_signature(header: &[u8]) -> bool {
         // Canon CR3: an ISO base media file of the `crx ` brand.
         || (at(4, b"ftyp") && at(8, b"crx "))
         // Canon CRW, the format before CR2.
-        || at(6, b"HEAPCCDR")
+        || is_ciff(header)
         // Olympus, either byte order.
         || at(0, b"IIRO") || at(0, b"IIRS") || at(0, b"MMOR")
         // Panasonic and Leica.
@@ -991,6 +1005,11 @@ fn has_signature(header: &[u8]) -> bool {
         // Phase One: a TIFF header, then its own block at byte 8, whose
         // directory is at the far end of the file where no header reaches.
         || at(8, b"IIII") || at(8, b"MMMM")
+}
+
+/// Whether `header` is a Canon CRW's: a CIFF heap, its signature at byte 6.
+fn is_ciff(header: &[u8]) -> bool {
+    header.get(6..14) == Some(b"HEAPCCDR")
 }
 
 /// Every answer [`raw_format`] gives, and the decoder's own name for the
@@ -1031,7 +1050,7 @@ fn raw_format(header: &[u8]) -> Option<&'static str> {
     if at(4, b"ftyp") && at(8, b"crx ") {
         return Some("cr3");
     }
-    if at(6, b"HEAPCCDR") {
+    if is_ciff(header) {
         return Some("crw");
     }
     if at(0, b"IIRO") || at(0, b"IIRS") || at(0, b"MMOR") {
@@ -1532,6 +1551,17 @@ mod tests {
             );
 
             let exif = crate::image::exif::Exif::read(&path);
+            // A CRW's date is the camera's clock whatever zone this machine
+            // is in, as ExifTool reads it.
+            if name == "Canon_EOS_300D.CRW" {
+                let taken = exif
+                    .sections
+                    .iter()
+                    .flat_map(|section| &section.entries)
+                    .find(|entry| entry.name == crate::image::exif::TAKEN)
+                    .map(|entry| entry.value.as_str());
+                assert_eq!(taken, Some("2007-06-18 17:37:18"), "{name}");
+            }
             let sections: Vec<String> = exif
                 .sections
                 .iter()
