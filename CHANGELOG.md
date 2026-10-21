@@ -4,7 +4,7 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.12.0 - 2026-10-21
 
 ### Added
 
@@ -69,7 +69,6 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
   section previews it. A file that does not give its focal length as a
   35 mm equivalent, as a Canon's does not, has it worked out from the
   lens's focal length and the sensor's size.
-
 - A camera raw with a color filter over its sensor can be shown as its
   mosaic: what the sensor counted, one value to a photosite, each in its
   filter's color and running from the black level to white, before the
@@ -195,7 +194,6 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
 - `--transfer` now changes how the file opens as well as how it is
   decoded: a 16-bit TIFF read with `--transfer srgb` opens as stored, as a
   photo, rather than on a trimmed window.
-
 - The histogram always plots both the luminance and the color planes. The
   two buttons at the head of its panel that turned each off, their keys
   (`j` and `k`, `keys.interface.luma` and `keys.interface.planes`) and the
@@ -204,7 +202,6 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
 - A picture with a gain map on an HDR surface whose monitor has not said
   how much room it has above white is shown with the whole of its lift.
   It used to be shown with none of it, as on an SDR monitor.
-
 - With the gain map shown in the picture's place, the histogram leaves its
   Image section out. It plotted the map a second time, as a bare
   measurement between its measured ends, under the Gain map section that
