@@ -77,8 +77,8 @@ pub(super) struct Files {
     listing: u64,
     /// Files written while the program was running — a picture pasted from
     /// the clipboard — which live where pictures are kept rather than
-    /// wherever we were told to look. No directory named on the command line
-    /// accounts for one, so [`Files::relist`] has to put them back itself.
+    /// wherever we were told to look. No directory named accounts for one,
+    /// so [`Files::remove`] never takes one off however a directory changes.
     adopted: Vec<PathBuf>,
     /// The file on screen.
     index: usize,
@@ -90,7 +90,7 @@ pub(super) struct Files {
     leaving: Option<PathBuf>,
     /// Files taken off the list this session with nothing done to them on
     /// disk. A directory read again would list each of them as before, and
-    /// [`Files::relist`] leaves them out; opening one by name again is what
+    /// [`Files::add`] leaves them out; opening one by name again is what
     /// puts it back.
     hidden: HashSet<PathBuf>,
     /// Numbers the requests. Only the newest one's reply is acted on.
@@ -236,10 +236,9 @@ impl Files {
     ///
     /// `source` is where the first file's bytes come from. `--paste` puts a
     /// file at the head of the list that the clipboard is still to fill, and
-    /// it is kept as a paste made later would be — through a relist, which no
-    /// named directory would otherwise put it back into. A paste that will
-    /// not arrive is walked past like a file that will not decode: the rest
-    /// of the list was asked for too.
+    /// it is kept as a paste made later would be, whatever a directory
+    /// says. A paste that will not arrive is walked past like a file that
+    /// will not decode: the rest of the list was asked for too.
     pub(super) fn open_first(&mut self, source: Source) -> Asked {
         if let Source::Clipboard(_) = source {
             self.adopted.push(self.paths[self.index].clone());
@@ -604,93 +603,87 @@ impl Files {
             .take_if(|pending| pending.generation == generation)
     }
 
-    /// Takes in a list read again from the directories the command line
-    /// named. Returns whether it differs from the one already held, which is
-    /// what the bar's count and the file's place in it depend on.
+    /// Adds to the end of the list the paths it does not hold — what a walk
+    /// through a directory found — and returns them, in the order given.
+    /// Asks for nothing, so that a walk taking files in batch by batch never
+    /// moves the screen, and leaves the order to the caller: the list's
+    /// order is a stable sort, which puts a newcomer where its key has it.
     ///
-    /// The list keeps the order it stands in: the rebuild says what is on
-    /// it, not where. A directory is read in name order, and the list may
-    /// have been sorted some other way since — by size, by type — with the
-    /// files one sort cannot tell apart left in the order the sort before
-    /// put them, so that sorts compose. Taking the rebuild's order would
-    /// throw that away on every read. So every file the rebuild still lists
-    /// stays where it is, and a newcomer goes in after the nearest file
-    /// that comes before it in the rebuild, which for a list in name order
-    /// is exactly where the directory has it.
-    ///
-    /// Two kinds of file survive a rebuild that does not mention them. The
-    /// file on screen stays wherever it has gone: its pixels are up and
-    /// correct, and dropping the path they came from would leave the title,
-    /// the bars and the information panel describing a file that is not the
-    /// one being shown. A file that was pasted stays because no directory
-    /// named on the command line was ever going to list it — it was written
-    /// where pictures are kept — and a rebuild is no reason for a picture the
-    /// user made this session to fall out of the walk. Each keeps its place
-    /// among its neighbors, so that `]` lands on whatever has taken its
-    /// position rather than on a file already seen; a newcomer passes one
-    /// of them by name, the order the directory itself was read in.
-    ///
-    /// A file taken off the list this session is left out however often
-    /// the directory lists it.
-    ///
-    /// Between reads only: this moves the file on screen to a new index, and a
-    /// request in flight is aimed at the old one.
-    pub(super) fn relist(&mut self, mut paths: Vec<PathBuf>) -> bool {
-        debug_assert!(self.is_idle(), "the list is rebuilt between reads");
-        paths.retain(|path| !self.hidden.contains(path));
-        // Nothing to keep from an empty list: it is what the rebuild says.
-        if self.paths.is_empty() {
-            let changed = !paths.is_empty();
-            self.paths = paths;
-            self.reindex();
-            return changed;
-        }
-        let listed: HashSet<&Path> = paths.iter().map(PathBuf::as_path).collect();
-        let mut merged: Vec<PathBuf> = self
-            .paths
-            .iter()
-            .enumerate()
-            .filter(|(index, path)| {
-                *index == self.index
-                    || self.adopted.contains(path)
-                    || listed.contains(path.as_path())
+    /// A file taken off the list this session stays off it, however often
+    /// a directory lists it; opening it by name is what puts it back.
+    pub(super) fn add(&mut self, paths: Vec<PathBuf>) -> Vec<PathBuf> {
+        let mut seen = HashSet::new();
+        let fresh: Vec<PathBuf> = paths
+            .into_iter()
+            .filter(|path| {
+                !self.places.contains_key(path)
+                    && !self.hidden.contains(path)
+                    && seen.insert(path.clone())
             })
-            .map(|(_, path)| path.clone())
             .collect();
-        // Where the next newcomer goes: just after the last file of the
-        // rebuild that the list already holds.
-        let mut cursor = 0;
-        for path in &paths {
-            if let Some(at) = merged.iter().position(|held| held == path) {
-                cursor = at + 1;
-                continue;
-            }
-            while let Some(kept) = merged.get(cursor)
-                && !listed.contains(kept.as_path())
-                && kept < path
-            {
-                cursor += 1;
-            }
-            merged.insert(cursor, path.clone());
-            cursor += 1;
+        if !fresh.is_empty() {
+            self.paths.extend(fresh.iter().cloned());
+            self.reindex();
         }
+        fresh
+    }
 
-        let shown = &self.paths[self.index];
-        self.index = merged
-            .iter()
-            .position(|path| path == shown)
-            .expect("the file on screen was kept whatever the rebuild dropped");
-        let changed = merged != self.paths;
-        self.paths = merged;
+    /// Lets every one of `paths` back on the list that was taken off it this
+    /// session: what a directory opened by name, or walked because it was,
+    /// does for what it finds — opening a file by name being what puts a
+    /// file taken off the list back.
+    pub(super) fn unhide(&mut self, paths: &[PathBuf]) {
+        if self.hidden.is_empty() {
+            return;
+        }
+        for path in paths {
+            self.hidden.remove(path);
+        }
+    }
+
+    /// Takes off the list every path in `gone` that is on it: what a watched
+    /// directory no longer holds. Returns whether anything left.
+    ///
+    /// Two kinds of file stay whatever the directory says. The file on
+    /// screen: its pixels are up and correct, and dropping the path they
+    /// came from would leave the title, the bars and the information panel
+    /// describing a file that is not the one being shown. It keeps its
+    /// place among its neighbors, so that `]` lands on whatever has taken
+    /// its position rather than on a file already seen. And a file that was
+    /// pasted, which no directory was ever going to list — it was written
+    /// where pictures are kept — and which is no less a picture the user
+    /// made this session for that.
+    ///
+    /// Between reads only: this moves the file on screen to a new index,
+    /// and a request in flight is aimed at the old one.
+    pub(super) fn remove(&mut self, gone: &HashSet<PathBuf>) -> bool {
+        debug_assert!(self.is_idle(), "the list is changed between reads");
+        let shown = self.shown_path().map(Path::to_path_buf);
+        let before = self.paths.len();
+        let mut index = self.index;
+        let mut at = 0;
+        self.paths.retain(|path| {
+            let keep =
+                !gone.contains(path) || Some(path) == shown.as_ref() || self.adopted.contains(path);
+            if !keep && at < self.index {
+                index -= 1;
+            }
+            at += 1;
+            keep
+        });
+        if self.paths.len() == before {
+            return false;
+        }
+        self.index = index;
         self.reindex();
-        changed
+        true
     }
 
     /// Puts the list in the order `places` gives — each entry the index, as
     /// the list stands, of the file that goes there — keeping the file on
     /// screen the file on screen. Returns whether anything moved.
     ///
-    /// Between reads only, as [`Files::relist`] is: a request in flight is
+    /// Between reads only, as [`Files::remove`] is: a request in flight is
     /// aimed at an index.
     pub(super) fn reorder(&mut self, places: &[usize]) -> bool {
         debug_assert!(self.is_idle(), "the list is reordered between reads");

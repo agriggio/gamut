@@ -158,8 +158,8 @@ never arrives is walked past like a file that fails to decode, since the
 opening request is a walk — which is also why the paste goes first: with
 nothing on screen yet there is no neighbor to sit beside, and the user asked
 for the clipboard's picture rather than the first path. `Files::open_first`
-marks it adopted so that a relist keeps it, as `Files::adopt` does for a
-paste made later.
+marks it adopted so that no change in a directory takes it off the list,
+as `Files::adopt` does for a paste made later.
 
 The panels are opaque and the image is fitted inside them rather than passing
 behind them, so `` ` `` changes how much room a fitted image has and it re-fits
@@ -1936,17 +1936,31 @@ refused before anything is allocated for it if it claims more than the
 specification's maximum, and every read is bounded by the body's length,
 since what is on the other end is a peer this program did not write.
 
+A folder dialog carries a box beside its own controls asking for the
+folder's subfolders too, which is `--recursive` for the folder chosen.
+Through the portal it is `OpenFile`'s `choices` option, one entry with no
+options of its own, which is how the portal spells a check box; its state
+comes back among the response's results as `choices`, read by
+`freedesktop.rs::choice`. A desktop whose dialog has nowhere to show it
+leaves it out of the answer, and it is taken as unticked. On a Mac it is an
+`NSButton` check box hung on the panel as its accessory view, disclosed so
+that it is not folded away behind an Options button. Either way it comes
+back as `Picked::subfolders`, which `App::picked` keeps in
+`Trees::include_subfolders` — and the state file, as `include_subfolders`
+— so that the box is put up as it was last left.
+
 What the dialog chose is opened as a command line naming it after the
-rest would have: `App::open_named` runs the names through
-`listing::expand` — a folder for the images in it, and a folder holding
-none refused before anything moves — and `Files::append` puts the
-newcomers at the end of the list, a path already on it not twice, and
-asks for the first of them as a walk over the newcomers alone, so a file
-that will not decode is stepped over as it is at start-up. The names join
-`App::named` as well, those not already there, so a chosen directory is
-watched and a rebuild of the list keeps the newcomers in the order they
-were chosen; where nothing chosen is new, the first of it is gone to by
-name, the way a row of the chooser is. Opening adds rather than replaces:
+rest would have. `App::open_named` hands a folder to `App::start_tree`, to
+be walked for its images as a directory named is (see
+[live reload](live-reload.md#what-a-path-stands-for)); the first images the
+walk finds are gone to as they land, and a folder holding none is said to
+be empty once the walk is over, nothing having moved. The files chosen go
+to `Files::append`, which puts them at the end of the list, a path already
+on it not twice, and asks for the first of them as a walk over the
+newcomers alone, so a file that will not decode is stepped over as it is
+at start-up. The names join `App::named` as well, those not already there,
+so a folder chosen twice is walked once; where no file chosen is new, the
+first of them is gone to by name, the way a row of the chooser is. Opening adds rather than replaces:
 the session is the list, `]` and the chooser walk all of it, and a
 picture opened is one the user can step back to. The picture on screen
 stays until the first newcomer arrives, exactly as for a step, and a file

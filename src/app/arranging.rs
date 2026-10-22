@@ -192,7 +192,7 @@ impl App {
     /// the empty window's for files Finder sent — and an empty window is
     /// sized to it at once rather than once the picture arrives, which
     /// sizes it again only if it turns out another size.
-    fn open_at(&mut self, first: &Path) {
+    pub(super) fn open_at(&mut self, first: &Path) {
         if self.current.is_some() || (self.shown.is_some() && !self.sizing.to_next) {
             return;
         }
@@ -224,12 +224,17 @@ impl App {
 
     /// When the window stops waiting for the list it opens on to be put in
     /// order, while it is being: the moment the wait would be said.
+    /// Or, where only directories were named, for the first image a walk
+    /// finds in them.
     pub(super) fn window_due(&self) -> Option<Instant> {
         self.arranging
             .jobs
             .iter()
             .find(|each| self.opens_on(each))
             .map(|each| each.since + SLOW_READ)
+            .into_iter()
+            .chain(self.tree_opening_due())
+            .min()
     }
 
     /// Whether a list is being put in order before any of it is shown.

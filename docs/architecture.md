@@ -63,18 +63,18 @@ column, the menus — is [the interface](interface.md).
 | --- | --- |
 | `src/main.rs` | Event-loop setup |
 | `src/cli.rs` | Argument parsing and `--help`, whose key sections come from the keymap |
-| `src/app/` | Window lifecycle and the event loop's state: `files.rs` is the file list and the read in flight, `input.rs` the keymap and what the interface asked for, `gui.rs` egui's context and its winit adapter, `window.rs` titles and opening size, `playback.rs` the clock an animation plays by, `chooser.rs` the file chooser's query, matches and cursor |
+| `src/app/` | Window lifecycle and the event loop's state: `files.rs` is the file list and the read in flight, `input.rs` the keymap and what the interface asked for, `gui.rs` egui's context and its winit adapter, `window.rs` titles and opening size, `playback.rs` the clock an animation plays by, `chooser.rs` the file chooser's query, matches and cursor, `walker.rs` the thread walking and watching the directories named, and `tree.rs` what the application does with what it finds |
 | `src/player.rs` | The thread that decodes an animation's frames ahead of the clock, and the cache it keeps them in under a budget |
 | `src/thumbnailer.rs` | The thread that thumbnails every file of the session for the chooser, at low priority, into the desktop's cache |
 | `src/thumbnail.rs` | The freedesktop thumbnail cache: the GLib-spelled URI a file is keyed by, MD5, the chunks, and the temporary-then-rename write |
 | `src/fuzzy.rs` | The chooser's matcher, behind a trait with skim's own signature; the one file that names the crate |
 | `src/ui/` | Laying each frame's interface out with egui: `chrome.rs` the panels, one file per widget, `pixel.rs` the pointer's readout, `status.rs` the words in the bars, `style.rs` the theme as egui's style, `fonts/` the desktop's faces, `chooser.rs` the file chooser's popup |
 | `src/view.rs` | Zoom / pan / fit geometry — pure maths |
-| `src/listing.rs` | What a path on the command line stands for: a directory is the images inside it, read again while the program runs |
-| `src/watch.rs` | Noticing that the file on screen has been rewritten, or that a directory named on the command line holds something else now |
+| `src/listing.rs` | What a directory holds: its images, and the subdirectories a walk goes into |
+| `src/watch.rs` | Noticing that the file on screen has been rewritten, or that a directory holds something else now |
 | `src/clipboard/` | The clipboard and `file:` URIs, held by a process of its own so a copy outlives the window; and reading a pasted picture off it |
 | `src/pasted.rs` | Where a pasted picture is written and what it is called, by the desktop's own conventions |
-| `src/portal/` | The desktop's file dialog, through the file chooser portal: what is asked for, and the paths that come back |
+| `src/portal/` | The desktop's file dialog, through the file chooser portal: what is asked for, and the paths that come back with the folder dialog's box for subfolders |
 | `src/dbus.rs` | The session bus, spoken directly: the wire format, and a blocking connection that calls a method and waits for a signal |
 | `src/clock.rs` | A moment as a date and time, in UTC or in the zone the system is set to |
 | `src/theme/` | `palette.rs` reads the desktop's palette; `mod.rs` derives the colors drawn from it |

@@ -31,10 +31,32 @@ fn opening(name: &str, files: &[(&str, u32, u32)]) -> (App, PathBuf) {
 }
 
 /// The same, opened the way `gamut some-dir/` opens it: the directory is
-/// what was named, and the files in it are only what it held at the time.
+/// what was named, walked for what it held at the time, and watched.
 fn opening_directory(name: &str, files: &[(&str, u32, u32)]) -> (App, PathBuf) {
     let (dir, paths) = written(name, files);
-    (open(paths, vec![dir.clone()]), dir)
+    let mut app = open(paths, vec![dir.clone()]);
+    let _ = walk(&mut app);
+    (app, dir)
+}
+
+/// What the walker thread would have said by now, said: every walk asked
+/// for done, and what it found taken in.
+fn walk(app: &mut App) -> Effect {
+    let events = app.trees.walker.walk_here();
+    told(app, events)
+}
+
+/// One tick of the walker's watching, and what it saw taken in: what the
+/// directory watch on the loop's own cadence once was.
+fn poll_directories(app: &mut App) -> Effect {
+    let events = app.trees.walker.poll_here();
+    told(app, events)
+}
+
+fn told(app: &mut App, events: Vec<walker::Event>) -> Effect {
+    events.into_iter().fold(Effect::Nothing, |effect, event| {
+        effect.also(app.tree_event(event))
+    })
 }
 
 fn written(name: &str, files: &[(&str, u32, u32)]) -> (PathBuf, Vec<PathBuf>) {
@@ -169,6 +191,7 @@ fn options() -> Options {
             show_histogram: false,
             show_info: false,
             browse_folder: true,
+            max_files: crate::settings::MAX_FILES,
             open_map_link: crate::settings::OPEN_MAP_LINK.to_string(),
             open_map_bounds_link: crate::settings::OPEN_MAP_BOUNDS_LINK.to_string(),
             exiftool: "exiftool".to_string(),
@@ -178,6 +201,7 @@ fn options() -> Options {
         upscale: Upscale::default(),
         size: None,
         paused: false,
+        recursive: false,
     }
 }
 
@@ -194,6 +218,7 @@ fn threads() -> Threads {
         arranged: Arc::new(|_| {}),
         measured: Arc::new(|_| {}),
         tags: Arc::new(|_| {}),
+        walker: walker::Walker::detached(crate::settings::MAX_FILES),
     }
 }
 
@@ -435,6 +460,7 @@ fn the_empty_window_offers_the_last_folder() {
     );
 
     let _ = app.act(ui::Command::Press(ui::Control::OpenLastFolder));
+    let _ = walk(&mut app);
     assert_eq!(app.files.len(), 2);
     assert!(app.files.pending().is_some(), "the first of them asked for");
 
@@ -529,7 +555,7 @@ fn files_chosen_open_on_the_first_in_the_order() {
     app.filmstrip.set_order(order);
     let _ = app.apply_order();
 
-    app.open_named(vec![more.clone()]);
+    app.open_named(paths.clone(), false);
     assert_eq!(app.files.len(), 1, "not on the list until read for");
     let read = arranging::read_now(app.arranging.next_job, paths.clone(), order.sort);
     let _ = app.arranged_read(read);
@@ -586,11 +612,9 @@ fn choosing_a_row_asks_for_its_file() {
     // The list rebuilt under the popup: the chooser sees the new file,
     // and a row still resolves to its file by name.
     write_png(&dir, "d.png", 8, 8);
-    assert!(
-        app.files
-            .relist(crate::listing::relist(std::slice::from_ref(&dir)))
-    );
-    app.list_changed();
+    let new = app.files.add(crate::listing::images_in(&dir).unwrap());
+    assert_eq!(new.len(), 1);
+    app.list_grew(new);
     app.chooser.follow(&app.files);
     let input = app.chooser.input(&app.thumbs, app.files.shown_path());
     assert_eq!(input.rows.len(), 4);
@@ -624,7 +648,8 @@ fn opened_on_nothing_the_window_is_empty_and_the_file_keys_are_dead() {
     assert_eq!(app.files.len(), 0);
     assert!(app.reading().is_none());
     assert_eq!(Effect::Nothing, app.poll_file());
-    assert_eq!(Effect::Nothing, app.poll_directories());
+    assert_eq!(Effect::Nothing, poll_directories(&mut app));
+    assert_eq!(Effect::Nothing, app.settle_trees());
 
     for action in [
         Action::CopyName,
@@ -671,7 +696,7 @@ fn files_sent_before_the_window_size_it() {
     assert!(app.sizing.to_next);
     assert_eq!(app.opening_size(), None);
 
-    app.open_named(paths.clone());
+    app.open_named(paths.clone(), false);
     assert_eq!(app.opening_size(), Some([640.0, 320.0]));
     assert_eq!(
         app.sizing.sized_for,
@@ -712,6 +737,40 @@ fn a_single_file_sent_steps_on_into_its_folder() {
     std::fs::remove_dir_all(dir).expect("we just wrote it");
 }
 
+/// A folder chosen with its box for subfolders ticked is walked whole, and
+/// the box is put up the next time as it was left — the state file keeping
+/// it between runs; one chosen with it unticked is the folder alone.
+#[test]
+fn the_box_for_subfolders_is_followed_and_remembered() {
+    let (dir, _) = written("chosen-deep", &[("a.png", 8, 8)]);
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    write_png(&dir.join("sub"), "b.png", 8, 8);
+
+    let mut app = opened_on_nothing();
+    assert!(!app.trees.include_subfolders);
+    let _ = app.picked(Picked {
+        outcome: Ok(Some(vec![dir.clone()])),
+        subfolders: Some(true),
+    });
+    let _ = walk(&mut app);
+    answer(&mut app, Reload::Fresh);
+    assert_eq!(app.files.len(), 2);
+    assert!(app.trees.include_subfolders);
+    assert!(app.kept_state().include_subfolders);
+
+    let mut app = opened_on_nothing();
+    app.trees.include_subfolders = true;
+    let _ = app.picked(Picked {
+        outcome: Ok(Some(vec![dir.clone()])),
+        subfolders: Some(false),
+    });
+    let _ = walk(&mut app);
+    answer(&mut app, Reload::Fresh);
+    assert_eq!(app.files.len(), 1);
+    assert!(!app.kept_state().include_subfolders);
+    std::fs::remove_dir_all(dir).expect("we just wrote it");
+}
+
 /// What the dialog chose is opened as a command line naming it beside
 /// the rest would be: a folder for the images in it, the newcomers
 /// joining the end of the list and the first of them asked for as a
@@ -727,7 +786,10 @@ fn what_the_dialog_chose_joins_the_list() {
 
     // Dismissed: nothing changes.
     app.picking = true;
-    let _ = app.picked(Picked { outcome: Ok(None) });
+    let _ = app.picked(Picked {
+        outcome: Ok(None),
+        subfolders: None,
+    });
     assert!(!app.picking);
     assert!(app.is_empty());
     assert!(app.toasts.showing().is_none());
@@ -735,7 +797,9 @@ fn what_the_dialog_chose_joins_the_list() {
     // The dialog could not be had: said, and the window stays empty.
     let _ = app.picked(Picked {
         outcome: Err(anyhow::anyhow!("no portal")),
+        subfolders: None,
     });
+
     assert!(app.is_empty());
     assert!(app.toasts.showing().is_some());
     app.toasts.dismiss();
@@ -743,6 +807,7 @@ fn what_the_dialog_chose_joins_the_list() {
     // One file: the list is that file, on its way.
     let _ = app.picked(Picked {
         outcome: Ok(Some(vec![paths[1].clone()])),
+        subfolders: None,
     });
     assert!(!app.is_empty(), "a read is in flight");
     assert_eq!(app.files.len(), 1);
@@ -757,25 +822,27 @@ fn what_the_dialog_chose_joins_the_list() {
     let zoomed = app.view.zoom(app.image_size(), app.viewport());
     let zoom = |app: &App| app.view.zoom(app.image_size(), app.viewport());
 
-    // A folder chosen while a picture is up: the images in it join the
-    // end of the list — the one already there not twice — the folder
-    // is watched, the first newcomer is on its way, and the picture
-    // stays until it arrives, kept as it was left.
-    app.open_named(vec![dir.clone()]);
+    // A folder chosen while a picture is up: walked, and the images in it
+    // join the list — the one already there not twice — the first
+    // newcomer is on its way, and the picture stays until it arrives,
+    // kept as it was left.
+    app.open_named(vec![dir.clone()], false);
+    assert!(app.walking());
+    let _ = walk(&mut app);
     assert!(app.current.is_some());
     assert_eq!(app.files.len(), 2);
-    assert_eq!(app.files.path(1), paths[0]);
     assert_eq!(app.named, vec![paths[1].clone(), dir.clone()]);
-    assert_eq!(app.directories.len(), 1, "the folder is watched");
-    assert_eq!(app.files.pending().map(|pending| pending.index), Some(1));
+    let pending = app.files.pending().expect("the newcomer asked for");
+    assert_eq!(app.files.path(pending.index), paths[0]);
     answer(&mut app, Reload::Fresh);
+    assert!(!app.walking(), "the walk's end taken in once the read was");
     assert_eq!(app.files.shown_path(), Some(paths[0].as_path()));
     assert!(app.kept.left(&paths[1]).is_some());
     assert_ne!(zoom(&app), zoomed, "a new shape, fitted afresh");
 
     // The first again, through the dialog: nothing new to add, so it
     // is gone to by name, and comes back as it was left.
-    app.open_named(vec![paths[1].clone()]);
+    app.open_named(vec![paths[1].clone()], false);
     assert_eq!(app.files.len(), 2);
     assert_eq!(app.named.len(), 2, "named once already");
     answer(&mut app, Reload::Fresh);
@@ -783,23 +850,29 @@ fn what_the_dialog_chose_joins_the_list() {
     assert_eq!(zoom(&app), zoomed);
 
     // The file on screen chosen: nothing to ask for.
-    app.open_named(vec![paths[1].clone()]);
+    app.open_named(vec![paths[1].clone()], false);
     assert!(app.files.is_idle());
 
-    // A folder with no images in it is refused before anything moves.
+    // A folder with no images in it is said to be empty, and nothing moves.
     let empty = dir.join("empty");
     std::fs::create_dir_all(&empty).expect("the temporary directory is writable");
-    app.open_named(vec![empty]);
+    app.open_named(vec![empty], false);
+    let _ = walk(&mut app);
     assert!(app.current.is_some());
+    assert!(app.files.is_idle());
     assert_eq!(app.files.len(), 2);
-    assert!(app.toasts.showing().is_some());
+    assert!(
+        app.toasts
+            .showing()
+            .is_some_and(|toast| toast.message == "No images in empty"),
+    );
     app.toasts.dismiss();
 
     // A file that will not read: it joins the list, the walk over it
     // fails, and the picture stays up with the reason under it.
     let broken = dir.join("broken.png");
     std::fs::write(&broken, b"not a png at all").expect("the file is writable");
-    app.open_named(vec![broken]);
+    app.open_named(vec![broken], false);
     assert_eq!(app.files.len(), 3);
     answer(&mut app, Reload::Fresh);
     assert!(app.current.is_some());
@@ -1847,17 +1920,17 @@ fn a_directory_is_read_again_when_what_is_in_it_changes() {
     assert_eq!(app.files.len(), 2);
     assert_eq!(
         Effect::Nothing,
-        app.poll_directories(),
+        poll_directories(&mut app),
         "nothing has happened to it"
     );
 
     write_png(&dir, "c.png", 8, 8);
     assert_eq!(
         Effect::Nothing,
-        app.poll_directories(),
+        poll_directories(&mut app),
         "the change has not settled yet"
     );
-    assert_eq!(Effect::Redraw, app.poll_directories());
+    assert_eq!(Effect::Redraw, poll_directories(&mut app));
     assert_eq!(app.files.len(), 3);
     assert_eq!(app.files.path(2), dir.join("c.png"));
     assert_eq!(
@@ -1869,13 +1942,122 @@ fn a_directory_is_read_again_when_what_is_in_it_changes() {
     std::fs::remove_file(dir.join("b.png")).expect("we just wrote it");
     assert_eq!(
         Effect::Nothing,
-        app.poll_directories(),
+        poll_directories(&mut app),
         "the change has not settled yet"
     );
-    assert_eq!(Effect::Redraw, app.poll_directories());
+    assert_eq!(Effect::Redraw, poll_directories(&mut app));
     assert_eq!(app.files.len(), 2);
     assert_eq!(app.files.path(1), dir.join("c.png"));
 
+    std::fs::remove_dir_all(dir).expect("we just wrote it");
+}
+
+/// The application as `gamut some-dir/` opens it, with `--recursive` or
+/// without: nothing on the list, nothing asked for, and the directories
+/// waiting to be walked.
+fn open_directories(named: Vec<PathBuf>, recursive: bool, cap: usize) -> App {
+    let mut threads = threads();
+    threads.walker = walker::Walker::detached(cap);
+    App::new(
+        Vec::new(),
+        named,
+        None,
+        Options {
+            recursive,
+            ..options()
+        },
+        StateFile::none(),
+        threads,
+    )
+}
+
+/// A directory named alone opens on nothing, and on the first image the
+/// walk finds the moment it is found: asked for as the opening of a list
+/// is, and the window sized for it, while the walk goes on.
+#[test]
+fn a_directory_opens_on_the_first_image_found() {
+    let (dir, paths) = written("walked", &[("b.png", 64, 32), ("a.png", 16, 8)]);
+    let mut app = open_directories(vec![dir.clone()], false, 100);
+    assert!(app.files.is_idle(), "nothing to ask for yet");
+    assert!(app.walking());
+    assert!(!app.is_empty(), "no buttons while a walk is going");
+    assert!(app.showed_nothing());
+    assert!(app.window_due().is_some(), "the window waits for it");
+
+    let _ = walk(&mut app);
+    let pending = app.files.pending().expect("the first found asked for");
+    assert_eq!(app.files.path(pending.index), paths[1], "first by name");
+    assert_eq!(
+        app.sizing.header,
+        Some([16.0, 8.0]),
+        "the window opens at it"
+    );
+    assert!(app.window_due().is_none(), "nothing more to wait for");
+    answer(&mut app, Reload::Fresh);
+    assert!(!app.walking());
+    assert_eq!(app.files.len(), 2);
+    assert!(!app.showed_nothing());
+    std::fs::remove_dir_all(dir).expect("we just wrote it");
+}
+
+/// A command line naming only a directory with no images in it has
+/// nothing coming once the walk is over, and is answered by leaving.
+#[test]
+fn a_command_line_of_an_empty_directory_leaves() {
+    let (dir, _) = written("walked-empty", &[]);
+    let mut app = open_directories(vec![dir.clone()], false, 100);
+    assert_eq!(walk(&mut app), Effect::Quit);
+    assert!(app.showed_nothing());
+    std::fs::remove_dir_all(dir).expect("we just wrote it");
+}
+
+/// `--recursive` takes in every image under the directory, and only that
+/// way: without it, what is in its subfolders is not on the list.
+#[test]
+fn a_recursive_directory_is_every_image_under_it() {
+    let (dir, _) = written("walked-deep", &[("a.png", 8, 8)]);
+    std::fs::create_dir_all(dir.join("sub/deeper")).unwrap();
+    write_png(&dir.join("sub"), "b.png", 8, 8);
+    write_png(&dir.join("sub/deeper"), "c.png", 8, 8);
+
+    let mut app = open_directories(vec![dir.clone()], false, 100);
+    let _ = walk(&mut app);
+    answer(&mut app, Reload::Fresh);
+    assert_eq!(app.files.len(), 1);
+
+    let mut app = open_directories(vec![dir.clone()], true, 100);
+    let _ = walk(&mut app);
+    answer(&mut app, Reload::Fresh);
+    assert_eq!(app.files.len(), 3);
+    assert_eq!(app.files.shown_path(), Some(dir.join("a.png").as_path()));
+
+    // An image arriving deep down joins it too.
+    write_png(&dir.join("sub/deeper"), "d.png", 8, 8);
+    for _ in 0..4 {
+        let _ = poll_directories(&mut app);
+    }
+    assert_eq!(app.files.len(), 4);
+    std::fs::remove_dir_all(dir).expect("we just wrote it");
+}
+
+/// Reaching the cap stops the walk and says so; what it let through is
+/// on the list.
+#[test]
+fn reaching_the_cap_is_said() {
+    let (dir, _) = written(
+        "walked-cap",
+        &[("a.png", 8, 8), ("b.png", 8, 8), ("c.png", 8, 8)],
+    );
+    let mut app = open_directories(vec![dir.clone()], true, 2);
+    let _ = walk(&mut app);
+    answer(&mut app, Reload::Fresh);
+    assert_eq!(app.files.len(), 2);
+    assert!(!app.walking());
+    assert!(
+        app.toasts
+            .showing()
+            .is_some_and(|toast| toast.message == "Stopped at 2 images"),
+    );
     std::fs::remove_dir_all(dir).expect("we just wrote it");
 }
 
@@ -1915,8 +2097,8 @@ fn a_deleted_file_stays_on_screen_and_is_marked() {
     // The list still names it, and still steps around it. Rebuilding it
     // changes nothing: the file on screen goes back in where it was, so
     // the count in the bar and the walk are the same as they were.
-    assert_eq!(Effect::Nothing, app.poll_directories());
-    assert_eq!(Effect::Nothing, app.poll_directories());
+    assert_eq!(Effect::Nothing, poll_directories(&mut app));
+    assert_eq!(Effect::Nothing, poll_directories(&mut app));
     assert_eq!(app.files.len(), 2);
     assert_eq!(app.files.shown_path(), Some(dir.join("a.png").as_path()));
     let _ = app.step(true);
@@ -1929,9 +2111,10 @@ fn a_deleted_file_stays_on_screen_and_is_marked() {
     std::fs::remove_dir_all(dir).expect("we just wrote it");
 }
 
-/// The list is rebuilt between reads and not during one: a rebuild moves
-/// the file on screen to a new index, and the reply on its way is aimed at
-/// the old one. The change is not lost — the watch has not seen it yet.
+/// The list changes between reads and not during one: a change moves the
+/// file on screen to a new index, and the reply on its way is aimed at the
+/// old one. The change is not lost — it waits, and is taken in the moment
+/// the read is over.
 #[test]
 fn a_directory_is_not_rebuilt_under_a_read_in_flight() {
     let (mut app, dir) = opening_directory("mid-read", &[("a.png", 8, 8), ("b.png", 8, 8)]);
@@ -1943,19 +2126,13 @@ fn a_directory_is_not_rebuilt_under_a_read_in_flight() {
     for _ in 0..4 {
         assert_eq!(
             Effect::Nothing,
-            app.poll_directories(),
+            poll_directories(&mut app),
             "not while a read is in flight"
         );
     }
     assert_eq!(app.files.len(), 2);
 
     answer(&mut app, Reload::Fresh);
-    assert_eq!(
-        Effect::Nothing,
-        app.poll_directories(),
-        "the first look at the change"
-    );
-    assert_eq!(Effect::Redraw, app.poll_directories());
     assert_eq!(app.files.len(), 3);
 
     std::fs::remove_dir_all(dir).expect("we just wrote it");
@@ -3207,8 +3384,12 @@ fn a_removed_file_leaves_the_list_and_stays_off_it_until_undo() {
 
     // The directory read again lists it, and the list leaves it out.
     write_png(&dir, "d.png", 8, 8);
-    assert_eq!(Effect::Nothing, app.poll_directories(), "not settled yet");
-    assert_eq!(Effect::Redraw, app.poll_directories());
+    assert_eq!(
+        Effect::Nothing,
+        poll_directories(&mut app),
+        "not settled yet"
+    );
+    assert_eq!(Effect::Redraw, poll_directories(&mut app));
     assert_eq!(
         app.files.paths(),
         &[dir.join("a.png"), dir.join("c.png"), dir.join("d.png")]
@@ -3226,10 +3407,10 @@ fn a_removed_file_leaves_the_list_and_stays_off_it_until_undo() {
     answer(&mut app, Reload::Fresh);
     assert_eq!(app.files.shown_path(), Some(dir.join("b.png").as_path()));
     assert!(!app.conditions().undoable);
-    assert_eq!(Effect::Nothing, app.poll_directories());
+    assert_eq!(Effect::Nothing, poll_directories(&mut app));
     assert_eq!(
         Effect::Nothing,
-        app.poll_directories(),
+        poll_directories(&mut app),
         "listed again, it stays"
     );
     assert_eq!(app.files.len(), 4);
@@ -3302,8 +3483,12 @@ fn a_removal_waits_and_a_file_on_its_way_out_is_refused_again() {
     assert_eq!(app.files.len(), 2);
     assert!(app.files.is_idle(), "never left, so nothing to ask for");
     assert!(!app.files.is_hidden(&dir.join("a.png")));
-    assert_eq!(Effect::Nothing, app.poll_directories());
-    assert_eq!(Effect::Nothing, app.poll_directories(), "listed as before");
+    assert_eq!(Effect::Nothing, poll_directories(&mut app));
+    assert_eq!(
+        Effect::Nothing,
+        poll_directories(&mut app),
+        "listed as before"
+    );
 
     std::fs::remove_dir_all(dir).expect("we just wrote it");
 }

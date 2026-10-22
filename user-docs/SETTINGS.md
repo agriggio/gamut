@@ -35,6 +35,7 @@ settings are:
 | `show_histogram` | `false` | The histogram, in the panel down the right; it wins over `show_info` when both are on |
 | `show_info` | `false` | The file information, in the panel down the right |
 | `browse_folder` | `true` | A single file opened by itself steps on through the other images in its folder |
+| `max_files` | `10000` | How many images opening folders may add to the list in one run. A folder opened with its subfolders stops being searched once this many have been found, and the window says so; images that later arrive in a folder already open still join |
 | `exiftool` | `exiftool` | The program the info panel's *Raw Data* tab reads every tag with: a name looked for on your `PATH` and where packages put it, or a path to it |
 | `open_map_link` | `https://geojson.io/#data=data:application/json,%7B%22type%22%3A%22Feature%22%2C%22properties%22%3A%7B%7D%2C%22geometry%22%3A%7B%22type%22%3A%22Point%22%2C%22coordinates%22%3A%5B{lng}%2C{lat}%5D%7D%7D` | The web page the map button in the info panel's *Location* section opens, and the pin button in its *Georeference* section. `{lat}` and `{lng}` become where the picture was taken, or the center of what a map covers, in degrees, negative south and west; the link must have both |
 | `open_map_bounds_link` | `https://geojson.io/#data=data:application/json,%7B%22type%22%3A%22Feature%22%2C%22properties%22%3A%7B%7D%2C%22geometry%22%3A%7B%22type%22%3A%22Polygon%22%2C%22coordinates%22%3A%5B%5B%5B{lng_ll}%2C{lat_ll}%5D%2C%5B{lng_lr}%2C{lat_lr}%5D%2C%5B{lng_ur}%2C{lat_ur}%5D%2C%5B{lng_ul}%2C{lat_ul}%5D%2C%5B{lng_ll}%2C{lat_ll}%5D%5D%5D%7D%7D` | The web page the corners button in the info panel's *Georeference* section opens. `{lat_ul}` and `{lng_ul}` become the latitude and longitude of the picture's upper left corner, in degrees, negative south and west, and the same with `ur`, `lr` and `ll` for its upper right, lower right and lower left; the link must have at least one latitude and one longitude |
@@ -190,7 +191,7 @@ Saving the file puts the keys, the gestures, `open_map_link`,
 `open_map_bounds_link` and `exiftool` in it in force at once, and the window says it was reloaded, or names the first line
 it could not use.
 Everything else in it is how the window opens: the panels stay as you have
-them, and `browse_folder` waits for the next start.
+them, and `browse_folder` and `max_files` wait for the next start.
 
 ## The state file
 
@@ -198,7 +199,8 @@ them, and `browse_folder` waits for the next start.
 `~/Library/Application Support/gamut/state` on a Mac, is where
 `gamut` remembers settings you change by hand: how wide you dragged the file
 list, what the list is sorted by and which way, how far the loupe
-magnifies, how large you made the interface, whether a raw opens as the camera's JPEG, and how the pixel
+magnifies, how large you made the interface, whether a raw opens as the camera's JPEG,
+whether the folder dialog's *Include subfolders* box was left ticked, and how the pixel
 under the pointer is read out: its value, and for a map its place and how a
 latitude is written. It is written when the window closes and read when the next window
 opens. You never need to edit it, and deleting it resets them all to their

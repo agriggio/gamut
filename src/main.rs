@@ -204,7 +204,7 @@ fn run() -> Result<ExitCode> {
     }
     let event_loop = builder.build()?;
     event_loop.set_control_flow(ControlFlow::Wait);
-    let threads = app::Threads::new(&event_loop, options.overrides);
+    let threads = app::Threads::new(&event_loop, options.overrides, options.config.max_files);
     // Files Finder opens arrive after the program has started, as an Apple
     // Event rather than as arguments.
     #[cfg(target_os = "macos")]

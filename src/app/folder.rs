@@ -25,7 +25,6 @@ use crate::image::{decode, exif};
 use crate::ui::Control;
 use crate::ui::filmstrip::Sort;
 use crate::ui::toast::{Level, Toast};
-use crate::watch::Watch;
 
 /// What the folder read is for: what it does once it is in.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -244,7 +243,7 @@ impl App {
             }
             _ => None,
         };
-        self.open_named(named);
+        self.open_named(named, false);
         // Named only once it opened: a file that could not be listed
         // leaves the window as it was.
         if let Some(file) = alone
@@ -301,7 +300,7 @@ impl App {
 
     /// Takes a folder read in: the folder goes among the names in the
     /// file's place and is watched, what it glimpsed of each image is
-    /// kept, and the list is built again with it. What was waiting on
+    /// kept, and its images join the list. What was waiting on
     /// the read comes back to be done; otherwise what the window owes —
     /// nothing where there was nothing to take in, a frame where a
     /// failure or a folder of one was said.
@@ -340,10 +339,10 @@ impl App {
                 return Err(Effect::Redraw);
             }
         };
-        // The folder takes the file's place among the names, so that it is
-        // watched and a rebuild reads it again. The file stays named beside
-        // it where the folder does not list it: one read for what it holds
-        // rather than what it is called.
+        // The folder takes the file's place among the names, as a folder
+        // named would be there. The file stays named beside it where the
+        // folder does not list it: one read for what it holds rather than
+        // what it is called.
         if let Some(at) = self.named.iter().position(|named| *named == file) {
             let mut instead = vec![dir.clone()];
             if !images.contains(&file) {
@@ -351,22 +350,19 @@ impl App {
             }
             self.named.splice(at..=at, instead);
         }
-        self.directories
-            .push(Watch::new(crate::listing::opened(&dir)));
         self.glimpsed.extend(glimpses);
-        // The folder as it was just read rather than read again here: the
-        // point of the thread was to keep the listing off this one.
-        let mut list = Vec::new();
-        for named in &self.named {
-            if *named == dir {
-                list.extend(images.iter().cloned());
-            } else {
-                list.extend(crate::listing::relist(std::slice::from_ref(named)));
-            }
+        // The folder as it was just read rather than read again: the point
+        // of the thread was to keep the listing off this one. The walker
+        // watches it from here, without reading it again.
+        let new = self.files.add(images.clone());
+        if !new.is_empty() {
+            self.list_grew(new);
         }
-        if self.files.relist(list) {
-            self.list_changed();
-        }
+        self.trees.walker.ask(super::walker::Ask::Watch {
+            dir: dir.clone(),
+            images,
+            sort: self.filmstrip.order().sort,
+        });
         let _ = self.apply_order();
         if self.files.len() < 2 {
             self.toast(format!("No other images in {}", name(&dir)), Level::Message);

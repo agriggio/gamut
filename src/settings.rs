@@ -51,6 +51,11 @@ pub struct Config {
     /// Whether a single file named on the command line steps on through
     /// the other images in its folder.
     pub browse_folder: bool,
+    /// How many images walking the directories named may add to the list
+    /// in a session before it stops: a walk started at the top of a disk
+    /// by mistake would otherwise read headers and make thumbnails for
+    /// hours.
+    pub max_files: usize,
     /// The web address the `Location` section's map button opens, with
     /// `{lat}` and `{lng}` standing for the coordinates in signed degrees.
     pub open_map_link: String,
@@ -74,6 +79,7 @@ impl Default for Config {
             show_histogram: false,
             show_info: false,
             browse_folder: true,
+            max_files: MAX_FILES,
             open_map_link: OPEN_MAP_LINK.to_string(),
             open_map_bounds_link: OPEN_MAP_BOUNDS_LINK.to_string(),
             exiftool: "exiftool".to_string(),
@@ -99,7 +105,7 @@ struct Setting {
 /// Every setting the configuration file takes, in the order the template
 /// lists them. [`Config::template`] writes each one's value, and
 /// [`Config::parse`] reads it back.
-const SETTINGS: [Setting; 9] = [
+const SETTINGS: [Setting; 10] = [
     Setting {
         name: "show_ui",
         words: "The panels around the picture.",
@@ -135,6 +141,18 @@ const SETTINGS: [Setting; 9] = [
         words: "A single file opened alone steps on through the other images in its folder.",
         get: |config| config.browse_folder.to_string(),
         set: |config, value| flag(&mut config.browse_folder, value),
+    },
+    Setting {
+        name: "max_files",
+        words: "How many images a folder and its subfolders may add to the list before the search for more stops.",
+        get: |config| config.max_files.to_string(),
+        set: |config, value| match value.parse::<usize>() {
+            Ok(count) if count > 0 => {
+                config.max_files = count;
+                Ok(())
+            }
+            _ => Err(format!("is a whole number above zero, not `{value}`")),
+        },
     },
     Setting {
         name: "open_map_link",
@@ -179,6 +197,9 @@ const SETTINGS: [Setting; 9] = [
         },
     },
 ];
+
+/// How many images a walk may find unless the configuration says otherwise.
+pub const MAX_FILES: usize = 10_000;
 
 /// A setting that is on or off, as the file writes one.
 fn flag(field: &mut bool, value: &str) -> Result<(), String> {
@@ -445,6 +466,8 @@ pub struct State {
     pub coordinate_format: CoordinateFormat,
     /// And a latitude and longitude, where it was one.
     pub geographic_format: GeographicFormat,
+    /// Whether the folder dialog's box for subfolders was last left ticked.
+    pub include_subfolders: bool,
 }
 
 impl Default for State {
@@ -457,6 +480,7 @@ impl Default for State {
             order: filmstrip::Order::default(),
             camera_jpeg: false,
             profile: true,
+            include_subfolders: false,
             pixel_format: PixelFormat::default(),
             coordinate_format: CoordinateFormat::default(),
             geographic_format: GeographicFormat::default(),
@@ -476,7 +500,7 @@ struct Kept {
 }
 
 /// Every line of the state file, in the order it is written.
-const KEPT: [Kept; 11] = [
+const KEPT: [Kept; 12] = [
     Kept {
         name: "filmstrip_width",
         get: |state| state.filmstrip_width.to_string(),
@@ -545,6 +569,13 @@ const KEPT: [Kept; 11] = [
         get: |state| state.camera_jpeg.to_string(),
         set: |state, value| {
             let _ = flag(&mut state.camera_jpeg, value);
+        },
+    },
+    Kept {
+        name: "include_subfolders",
+        get: |state| state.include_subfolders.to_string(),
+        set: |state, value| {
+            let _ = flag(&mut state.include_subfolders, value);
         },
     },
     Kept {
@@ -973,6 +1004,7 @@ mod tests {
             show_histogram: !defaults.show_histogram,
             show_info: !defaults.show_info,
             browse_folder: !defaults.browse_folder,
+            max_files: 50,
             open_map_link: "https://www.openstreetmap.org/?mlat={lat}&mlon={lng}".to_string(),
             open_map_bounds_link: "https://example.com/?bbox={lng_ll},{lat_ll},{lng_ur},{lat_ur}"
                 .to_string(),
@@ -1066,6 +1098,7 @@ mod tests {
             },
             camera_jpeg: true,
             profile: false,
+            include_subfolders: true,
             pixel_format: PixelFormat::Depth,
             coordinate_format: CoordinateFormat::Geographic,
             geographic_format: GeographicFormat::Dms,
@@ -1117,6 +1150,7 @@ mod tests {
              sort = shoe size\n\
              sort_direction = sideways\n\
              camera_jpeg = maybe\n\
+             include_subfolders = perhaps\n\
              profile = sometimes\n\
              garbage\n",
         );

@@ -18,8 +18,8 @@ it stands. Everything that walks the list — the keys, `Files::step_away`
 after a deletion, the counter in the bar, the chooser's `:12` — then
 agrees about what comes next, and none of it has to know that an order
 exists. The cost is that `Files` has to keep the file on screen the file
-on screen across a reorder, which it does by re-finding its path, exactly
-as `Files::relist` already did for a rebuild.
+on screen across a reorder, which it does by re-finding its path, as
+`Files::remove` does when files leave it.
 
 The order is `ui::filmstrip::Order`: a `Sort`, and the `Direction` it
 runs in, which turns the comparison round rather than the list, so that
@@ -47,11 +47,11 @@ sort is `slice::sort_by` on indices, which is stable, and the list is
 sorted in place from wherever it stands, so files one key cannot tell
 apart keep the order the last key put them in: sorting by size and then by
 type leaves each type in size order, as sorting a spreadsheet twice does.
-That is also why `Files::relist` keeps the order the list stands in rather
-than taking the rebuild's: a directory is read in name order, and a rebuild
-that came back in it would undo every sort on every look. Survivors keep the order they stand in, and
-a newcomer goes in after the nearest file the rebuild lists before it,
-which for a list in name order is where the directory has it.
+That is also why a file a directory gains goes in at the end of the list,
+through `Files::add`, and is put in its place by applying the order again
+rather than by the directory's own order: the stable sort places the
+newcomer where its key has it and leaves every other file as it stands, so
+a file arriving never undoes a sort.
 
 The order is remembered between runs in `State`, and a list about to be
 opened is put in it before the first of it is chosen, so that the first
@@ -90,11 +90,11 @@ coalesces the headers: every `News::Facts` the thumbnail thread delivers
 could change where a file sorts, and on a list of thousands that is
 thousands of arrivals in the first seconds, so `App::facts_learned` marks
 the strip stale — only when the order reads facts at all — and the list is
-sorted once per poll rather than once per header. `App::list_changed`
-marks it stale too, for a rebuild that came back merged and for a file put
-back by undo, which `Files::reinstate` lands at its old index; and
-`App::poll_directories` applies the order at once after a rebuild, being
-idle by construction.
+sorted once per poll rather than once per header. `App::list_changed` and
+`App::list_grew` mark it stale too, for files a walk found and for a file
+put back by undo, which `Files::reinstate` lands at its old index; and
+`App::settle_trees` applies the order at once after each batch a walk hands
+over, being idle by construction.
 
 ## What the strip is drawn from
 
@@ -135,10 +135,15 @@ and when the same files arrive with other `tops` it sets the offset
 its middle where it was on the screen and is then brought wholly into
 view; otherwise the row at the top keeps the share of it above the edge.
 "The same files" is `Input::listing`, a count `Filmstrip::relist` bumps
-whenever the list's files or their order change; a new listing is not
-anchored, since row `n` is then another file, and is left to the reveal
-that a reorder or a step brings. A resize does not reveal: on every step
-of a drag it would snap the file on screen to an edge.
+whenever the list's files or their order change. A new listing is a
+different thing: row `n` is then another file, so there is no row at the
+top to keep. What `anchored` keeps instead is the file on screen, by its
+own row before and after, where its row was in view: a directory being
+walked hands its files over a batch at a time, many of them landing above
+the one being looked at, and without it the rows under the pointer would
+slide down the strip with every batch. Off screen, the new listing is left
+to the reveal that a reorder or a step brings. A resize does not reveal: on
+every step of a drag it would snap the file on screen to an edge.
 
 The panel is part of the chrome rather than floating over the picture: the picture
 is fitted beside it, so its width has to be known before egui lays
@@ -201,9 +206,10 @@ disk. It leaves through the trash's door — `Files::hide` puts the path in
 [editing](editing.md#the-list-keeps-a-trashed-file-until-something-replaces-it)
 follows — because the reasons a deleted file stays on screen until its
 neighbor is up apply to a removed one exactly. What is remembered is the
-set: `Files::relist` leaves a hidden path out however often the directory
-lists it, since the user has just said they did not want it there, and
-`append` and `adopt` take a path back out of the set, since opening a file
-by name is the user saying the opposite. Undo is `Edit::Removed`, which
+set: `Files::add` leaves a hidden path out however often a watched
+directory lists it, since the user has just said they did not want it
+there, and `append`, `adopt` and `unhide` take a path back out of the set,
+since opening a file by name — or a directory, whose walk calls `unhide`
+for what it finds — is the user saying the opposite. Undo is `Edit::Removed`, which
 `reinstate`s the file where it stood, and that takes it out of the set
 too.
