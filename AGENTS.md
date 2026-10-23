@@ -115,6 +115,9 @@ ui/            lays each frame's interface out with egui; no wgpu or winit impor
   minimap.rs / grid.rs   one widget each, drawn with egui's painter
   loupe.rs       the loupe: place() puts its two circles beside the pointer inside the content
                  area, glass() is the magnified draw the image layer makes of it, show() the rings
+  region_panel.rs  the panel up while a region is: its fit, copy and cross,
+                 the aspect's box, menu and swap, and the boxes for its place
+                 and size, each handing over what is typed only when let go
   region.rs      the region marked out on the picture: where its outline and
                  eight handles go, which handle the pointer is on, and the
                  words it wears while the pointer is on it — its size at its
@@ -262,7 +265,10 @@ image/         the data model, nothing GPU
                  in its source's Units, and placed(), where it is in the picture as shown
   region.rs      Region, a rectangle of the image's own pixels, and every
                  pure change to one: drawn, moved, pulled by a handle, grown,
-                 nudged, turned
+                 nudged, turned, shaped, sized — each held to a ratio where
+                 one is given, through Region::held
+  aspect.rs      Aspect: what a region is held to — free, the picture's own
+                 shape, or a ratio — its presets, and a ratio typed
   orient.rs      the turn an orientation tag asks for, applied to any layout and to the
                  gain map beside it; Turn, the quarter turns the user asks for, which are
                  read through rather than applied
@@ -402,6 +408,7 @@ still agrees with both, so renaming either is editing the constant —
 | The chooser: what a row shows, how the query is matched, what a key does in it | `ui/chooser.rs` for the popup and the keys it reads before its field can; `app/chooser.rs` for the ranking, the relative paths, the title beside them (`candidate`) and the cursor; a new fact for a row is a field of `thumbnailer::Facts`, read in `thumbnailer::header`, which the file list orders by too, through `Chooser::facts_of`; `App::press` for `Control::Chooser` and `Control::Choose`, and `App::act` for `Command::{Query, Cursor, Visible}`. Its open state is egui's, under `ui::chooser::id()`. A different matcher is a new `impl Matcher` in `fuzzy.rs` |
 | A thumbnail: what is made, where it goes, what the row gets | `thumbnailer.rs` for the stages and the queue, `thumbnail.rs` for the cache's naming, chunks and write; `image/resample.rs` for the filter; `App::hold_thumb` for the texture and `app/chooser.rs::Thumbs` for how many the screen keeps |
 | What a region does, or what a key does while one is up | `image/region.rs` for the change to the rectangle; `app/region.rs::Marking` for what the application holds about it and what a drag makes of it (`grab`, `pull`, `release`), tested with no picture; `App::perform_on_region` in `app/input.rs` for the keys a region takes; `ui/region.rs` for where it is drawn and which handle the pointer is on; `Pass::region_gestures` in `ui/mod.rs` for which drag is the region's and which the view's |
+| The region panel, or the aspect a region is held to | `ui/region_panel.rs` for the panel — `panel()` for where it goes, `Field` for its boxes — and `ui/menu.rs::aspect_items` for the menu; `image/aspect.rs` for `Aspect`, `PRESETS` and what can be typed; `Marking::aspect`, `hold_to` and `swap` for what is held; the presses in `App::press` (`Control::{RegionClose, RegionCopy, RegionFit, RegionSwap, Aspect}`) and `App::type_region` for `Command::RegionField`; a held change to the rectangle goes through `Region::held` |
 | What deleting, renaming or removing a file does, or what undo puts back | `app/edits.rs`: `App::delete_shown` moves the file to the trash through `trash::put` and steps away, `App::rename_shown` renames through `no_replace::rename_no_replace`, `App::remove_shown` takes the file off the list through `Files::hide` and steps away, and each pushes an `Edit` that `App::undo` pops. The list's side is `app/files.rs`: a trashed or removed file is `condemn`ed and leaves in `shown` — or, the last on the list, in `remove_shown` at once — comes back by `reinstate`, and a renamed one is `rename`d in place; a removed one is remembered in `hidden`, which `add` leaves out and `append`, `adopt` and `unhide` take a file back out of. The dialog is `ui/rename.rs` — its words, and `judge` for what is wrong with a name — with `App::set_rename_name` asking the directory whether the name is taken. The menu is `menu::file_items`, hung off `status::file_button` |
 | What a paste accepts, or where it is written | `clipboard/mod.rs::IMAGE_TYPES` for the MIME types and the extensions they are saved under, `pasted.rs` for the directory and the name; `App::paste` starts it and `app/files.rs::adopt` puts it in the list. Whether the button for it is on screen is `FrameInput::paste`, which `App::frame_input_under` sets from what `clipboard::watch`'s thread last said — kept by `App::clipboard_changed` — and whether the interface is showing |
 | A color-space source (a new tag a format carries) | `image/color/` |

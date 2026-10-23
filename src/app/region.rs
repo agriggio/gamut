@@ -5,7 +5,12 @@
 //! and which handle the pointer is on are `ui::region`'s. This is the
 //! state between the two, and the gestures that move it, with no picture
 //! and no window: a drag is a hold and a pull in image pixels.
+//!
+//! The aspect the region is held to is here too, and outlives the region:
+//! chosen once, it holds every region drawn after it, on this file or the
+//! next, until another is chosen or the program ends.
 
+use crate::image::aspect::Aspect;
 use crate::image::orient::Turn;
 use crate::image::region::{Grip, Region};
 use crate::ui::{Grab, Selection};
@@ -77,6 +82,9 @@ pub(super) struct Marking {
     /// pass, if any — said back by the frame, and what the region's words
     /// are written for.
     pub grip: Option<Grip>,
+    /// The shape every region is held to, drawn or changed: kept when the
+    /// region is taken off and when the file changes.
+    pub aspect: Aspect,
 }
 
 impl Default for Marking {
@@ -88,6 +96,7 @@ impl Default for Marking {
             framing: Framing::FIRST,
             zoom_box: None,
             grip: None,
+            aspect: Aspect::Free,
         }
     }
 }
@@ -105,9 +114,15 @@ impl Marking {
     /// goes back to the middle rather than being turned with it — an edge
     /// that was the top is the right one now, and the arrows that move it
     /// would move it the other way — and a drag under way lets go.
+    ///
+    /// A ratio the region was held to turns with it, so that the region is
+    /// still the shape it is held to.
     pub fn turned(&mut self, turn: Turn, shown: [u32; 2]) {
         if let Selection::Shown(region) = self.selection {
             self.selection = Selection::Shown(region.turned(turn, shown));
+        }
+        if turn.quarters() % 2 == 1 {
+            self.aspect = self.aspect.quarter_turned();
         }
         self.handle = Grip::Middle;
         self.grabbing = None;
@@ -115,7 +130,36 @@ impl Marking {
         self.grip = None;
     }
 
-    /// Takes the region off, and the mode with it.
+    /// Holds the region to `aspect` from now on, on a picture `image`
+    /// pixels across and down: the region on screen takes that shape about
+    /// its middle.
+    pub fn hold_to(&mut self, aspect: Aspect, image: [u32; 2]) {
+        self.aspect = aspect;
+        if let (Selection::Shown(region), Some(ratio)) = (self.selection, aspect.ratio(image)) {
+            self.select(region.shaped(ratio, image));
+        }
+    }
+
+    /// Turns the aspect, and the region on screen, the other way up about
+    /// its middle. A free region is turned all the same.
+    pub fn swap(&mut self, image: [u32; 2]) {
+        self.aspect = self.aspect.swapped();
+        if let Selection::Shown(region) = self.selection {
+            let swapped = match self.aspect.ratio(image) {
+                Some(ratio) => region.shaped(ratio, image),
+                None => region.swapped(image),
+            };
+            self.select(swapped);
+        }
+    }
+
+    /// The ratio of width to height the region is held to on a picture
+    /// `image` pixels across and down, if any.
+    pub fn ratio(&self, image: [u32; 2]) -> Option<f64> {
+        self.aspect.ratio(image)
+    }
+
+    /// Takes the region off, and the mode with it. The aspect stays.
     pub fn clear(&mut self) {
         self.selection = Selection::Off;
         self.handle = Grip::Middle;
@@ -170,6 +214,7 @@ impl Marking {
         let Some(Grabbing { grab, origin, from }) = self.grabbing else {
             return;
         };
+        let ratio = self.ratio(image);
         let region = match (grab, origin) {
             // The box is drawn as a new region is, but is not the
             // selection: it is kept apart, and taken by the release.
@@ -179,12 +224,12 @@ impl Marking {
                 }
                 return;
             }
-            (Grab::New, _) => Region::from_corners(from, to, image),
+            (Grab::New, _) => Region::drawn(from, to, ratio, image),
             (Grab::Handle(Grip::Middle | Grip::Inside), Some(origin)) => {
                 let by = |axis: usize| (to[axis] - from[axis]).round() as i64;
                 Some(origin.moved_by(by(0), by(1), image))
             }
-            (Grab::Handle(grip), Some(origin)) => Some(origin.pulled(grip, to, image)),
+            (Grab::Handle(grip), Some(origin)) => Some(origin.pulled(grip, to, ratio, image)),
             (Grab::Handle(_), None) => None,
         };
         if let Some(region) = region {

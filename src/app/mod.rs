@@ -2160,6 +2160,7 @@ impl App {
             modifiers: self.pointer.modifiers,
             gestures: Rc::clone(&self.gestures),
             zoom_box: self.marking.zoom_box(),
+            aspect: self.marking.aspect,
             transport: self.transport(),
             filmstrip,
             side: self.side_showing(),

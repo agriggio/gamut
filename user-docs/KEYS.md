@@ -1069,6 +1069,49 @@ settings applied exactly as they would be to the whole.
 message is off, and before it quits. Stepping to another file leaves the
 region behind: it belongs to the picture it was drawn on.
 
+### The region panel
+
+While a region is asked for or on screen, a small panel stands at the top
+left of the picture, beside the region button. Its head has three buttons:
+one fits the region in the window, as the first press of `Space` does; one
+copies it, as `Ctrl+C` does; and the cross takes it off, as `x` does. The
+first two do nothing until a region is drawn.
+
+**Aspect** holds the region to a shape. Open the menu at the end of its box
+for **Free**, which is any shape and where it starts; **Original**, the
+image's own shape; or one of 1:1, 5:4, 4:3, 3:2 and 16:9. Or type a ratio
+into the box: `16:10`, `16/10` and `16x10` all work, as does one number such
+as `2.39`, which means 2.39 to 1. Choosing a shape while a region is on
+screen reshapes it about its center, keeping about the same number of pixels.
+
+While an aspect is chosen, everything that changes the region keeps it to
+that shape. A new drag reaches from where it started as far as the pointer
+has gone along whichever side it has gone further along. A corner's handle
+keeps the opposite corner where it is. An edge's handle moves that edge,
+and the two edges beside it follow, keeping the region centered across.
+The arrows with `Ctrl` or `Ctrl`+`Shift` grow and shrink it a pixel at a
+time along the side they move, and the other side follows. A region held to
+a shape stops at the edge of the image and gives up size there rather than
+shape.
+
+The button after the menu swaps the region's width and height about its
+center, and swaps the aspect with them: 3:2 becomes 2:3. The menu then
+offers its ratios the tall way up. Rotating the picture turns a chosen ratio
+with the region, so the region keeps its shape. **Original** follows the
+image instead, whichever way it is turned and whichever file is on screen.
+
+The aspect stays chosen when the region is taken off and when you step to
+another file, until you choose another or quit.
+
+**X** and **Y** are where the region's top left corner is in the image, and
+**W** and **H** its width and height, all in the image's own pixels. Type a
+number into one and press `Enter` or `Tab`, or click elsewhere, to apply it.
+`Esc` puts the box back as it was. A new position moves the region without
+resizing it. A new width or height keeps the top left corner where it is,
+and with an aspect chosen the other side follows. A region does not reach
+past the edge of the image, so a number too large for the room there stops
+at that edge.
+
 ## The mouse
 
 | Action | What it does | Slot |

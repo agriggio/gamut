@@ -1562,6 +1562,81 @@ fn a_region_takes_the_keys_that_move_the_picture() {
     std::fs::remove_dir_all(dir).expect("we just wrote it");
 }
 
+/// The region panel's presses: an aspect chosen reshapes the region about
+/// its middle and holds every change after it — a drag, a key — to that
+/// shape, through taking the region off and drawing another; the swap
+/// turns both the other way up; a size typed keeps the corner and the
+/// shape; and the aspect turns with the picture.
+#[test]
+fn an_aspect_holds_the_region_from_the_panel_on() {
+    use crate::image::aspect::Aspect;
+    use crate::ui::region_panel::Field;
+    use input::{Action, Direction, Effect};
+    use ui::{Command, Control, Grab};
+
+    let (mut app, dir) = app_over("aspect", &[("a.png", 64, 48)]);
+    // Chosen with nothing drawn, it waits for the region.
+    let square = Aspect::Ratio(1.0, 1.0);
+    assert_eq!(
+        app.press(Control::Region),
+        Effect::Redraw,
+        "the region asked for"
+    );
+    assert_eq!(app.press(Control::Aspect(square)), Effect::Redraw);
+    assert_eq!(app.marking.aspect, square);
+    let _ = app.act(Command::Grab {
+        grab: Grab::New,
+        at: [10.0, 10.0],
+    });
+    let _ = app.act(Command::Pull([30.0, 15.0]));
+    let _ = app.act(Command::Release);
+    let drawn = app.marking.selection.region().expect("drawn");
+    assert_eq!(
+        (drawn.x, drawn.y, drawn.width, drawn.height),
+        (10, 10, 20, 20)
+    );
+
+    // A key grows it a pixel each way it has to.
+    let _ = app.perform(Action::GrowRegion(Direction::Right));
+    let grown = app.marking.selection.region().unwrap();
+    assert_eq!((grown.width, grown.height), (21, 21));
+
+    // Another aspect reshapes it about its middle.
+    let _ = app.press(Control::Aspect(Aspect::Ratio(2.0, 1.0)));
+    let wide = app.marking.selection.region().unwrap();
+    assert_eq!(wide.width, 2 * wide.height, "{wide:?}");
+
+    // The swap turns both the other way up.
+    let _ = app.press(Control::RegionSwap);
+    assert_eq!(app.marking.aspect, Aspect::Ratio(1.0, 2.0));
+    let tall = app.marking.selection.region().unwrap();
+    assert_eq!(tall.height, 2 * tall.width, "{tall:?}");
+
+    // A width typed keeps the corner, and the height follows.
+    let _ = app.act(Command::RegionField(Field::Width, 10));
+    let typed = app.marking.selection.region().unwrap();
+    assert_eq!(
+        (typed.x, typed.y, typed.width, typed.height),
+        (tall.x, tall.y, 10, 20)
+    );
+    let _ = app.act(Command::RegionField(Field::X, 0));
+    assert_eq!(app.marking.selection.region().unwrap().x, 0);
+
+    // The picture turned, the ratio turns with the region.
+    let _ = app.perform(Action::TurnRight);
+    assert_eq!(app.marking.aspect, Aspect::Ratio(2.0, 1.0));
+
+    // Taken off by the panel's cross, the aspect stays for the next one.
+    assert_eq!(app.press(Control::RegionClose), Effect::Redraw);
+    assert_eq!(app.marking.selection, Selection::Off);
+    assert_eq!(app.marking.aspect, Aspect::Ratio(2.0, 1.0));
+    // And with nothing drawn, the copy and the fit are refused.
+    assert!(app.refuses(Control::RegionCopy));
+    assert!(app.refuses(Control::RegionFit));
+    assert!(!app.refuses(Control::RegionSwap), "an aspect to swap");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `Space` is answered on its way up, so that a drag while it is held
 /// can draw a box to zoom to without the view moving first: a tap fits,
 /// a hold with a box drawn under it does not, and the key's repeats are

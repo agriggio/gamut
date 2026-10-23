@@ -17,6 +17,11 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
 - `max_files` in the configuration file: how many images opening folders
   may add to the list in one run, 10,000 unless it says otherwise. The
   search stops there, and the window says so.
+- A panel beside the region button while a region is up: buttons that fit
+  the window to the region, copy it and take it off; an aspect to hold the
+  region to, either Free, the image's Original shape, a preset or a typed
+  ratio, with a button that swaps width and height; and boxes for its
+  position and size in the image's pixels.
 
 ### Changed
 
