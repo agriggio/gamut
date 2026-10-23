@@ -1,0 +1,137 @@
+name: macOS bottle
+
+# Builds the Homebrew bottle of a release on each macOS the formula is
+# installed on, and attaches the bottles to that release together with
+# gamut.rb, the formula with its `bottle do` block, which is what goes into the
+# tap, dcervelli/homebrew-gamut.
+#
+# It follows the `Release` workflow rather than the tag, because the source
+# tarball the formula names exists only once that has made the release; and it
+# is not triggered by the release itself, since a release made with the
+# workflow token starts nothing. `workflow_dispatch` builds a tag again.
+on:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The release to build bottles for, as vX.Y.Z
+        required: true
+
+env:
+  # The tag is the push's for a run that follows `Release`, and the one given
+  # for a run by hand.
+  TAG: ${{ inputs.tag || github.event.workflow_run.head_branch }}
+  HOMEBREW_NO_AUTO_UPDATE: 1
+  HOMEBREW_NO_ANALYTICS: 1
+  HOMEBREW_NO_INSTALL_CLEANUP: 1
+
+jobs:
+  bottle:
+    name: Bottle on ${{ matrix.os }}
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    strategy:
+      fail-fast: false
+      matrix:
+        # A bottle is for one macOS and one architecture: Homebrew names it
+        # by the release it was built on, and a Mac on another builds from
+        # source.
+        os: [macos-15, macos-26]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Put the formula in a tap of its own
+        # `brew bottle` works on a formula that came from a tap. The one in
+        # the tree carries the previous release's checksum until
+        # `bin/pkgbuild-sha` has run, so the copy is pointed at this tag's
+        # tarball, which is what the formula installs from.
+        run: |
+          brew tap-new --no-git local/gamut
+          formula="$(brew --repository local/gamut)/Formula/gamut.rb"
+          cp packaging/gamut.rb "$formula"
+
+          url="https://github.com/$GITHUB_REPOSITORY/archive/refs/tags/$TAG.tar.gz"
+          curl -fsSL --retry 5 --retry-delay 3 "$url" -o "$RUNNER_TEMP/src.tar.gz"
+          sha=$(shasum -a 256 "$RUNNER_TEMP/src.tar.gz" | cut -d' ' -f1)
+          sed -i '' \
+            -e "s|^  url \".*\"|  url \"$url\"|" \
+            -e "s|^  sha256 \".*\"|  sha256 \"$sha\"|" \
+            "$formula"
+          grep -E '^  (url|sha256) ' "$formula"
+
+      - name: Build
+        run: brew install --build-bottle --verbose local/gamut/gamut
+
+      - name: Test
+        run: brew test local/gamut/gamut
+
+      - name: Bottle
+        run: |
+          mkdir bottles
+          cd bottles
+          brew bottle --json --no-rebuild \
+            --root-url="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG" \
+            local/gamut/gamut
+          # Homebrew writes `gamut--VERSION.TAG.bottle.tar.gz` and names it
+          # `gamut-VERSION…` in the block, as GitHub serves it; the upload
+          # has to be called what the block says.
+          for f in gamut--*.bottle.tar.gz; do
+            mv "$f" "${f/--/-}"
+          done
+          ls -l
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bottle-${{ matrix.os }}
+          path: bottles/*
+          if-no-files-found: error
+
+  publish:
+    name: Attach the bottles to the release
+    needs: bottle
+    runs-on: macos-15
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: bottles
+          pattern: bottle-*
+          merge-multiple: true
+
+      - name: Write the bottles into the formula
+        # `--merge` reads each bottle's JSON, adds the `bottle do` block to
+        # the formula and rewrites it, with the checksums the bottles have.
+        run: |
+          brew tap-new --no-git local/gamut
+          formula="$(brew --repository local/gamut)/Formula/gamut.rb"
+          cp packaging/gamut.rb "$formula"
+
+          url="https://github.com/$GITHUB_REPOSITORY/archive/refs/tags/$TAG.tar.gz"
+          curl -fsSL --retry 5 --retry-delay 3 "$url" -o "$RUNNER_TEMP/src.tar.gz"
+          sha=$(shasum -a 256 "$RUNNER_TEMP/src.tar.gz" | cut -d' ' -f1)
+          sed -i '' \
+            -e "s|^  url \".*\"|  url \"$url\"|" \
+            -e "s|^  sha256 \".*\"|  sha256 \"$sha\"|" \
+            "$formula"
+
+          brew bottle --merge --write --no-commit bottles/*.json
+          cp "$formula" bottles/gamut.rb
+          cat "$formula"
+
+      - name: Upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$TAG" bottles/*.bottle.tar.gz bottles/*.json bottles/gamut.rb \
+            --clobber
