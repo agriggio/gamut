@@ -42,6 +42,36 @@ keeps them linear with no transfer function to think about and no 8-bit floor
 under premultiplied color: half floats, or 32-bit ones above a 32-bit float
 source, where the range and the low bits are the point of the file.
 
+## No data
+
+A raster with a no-data sentinel (`DecodedImage::nodata`, a GeoTIFF's
+`GDAL_NODATA`) is mostly not picture: a map of drainage divides or streams is
+one-pixel lines across a field of the sentinel. Averaged with the sentinel, a
+line crossing a 4×4 block keeps a quarter of its value, and the window, which
+the statistics set from the data alone, takes that to black. The line goes
+from the screen at 25% without having gone from the file.
+
+So the area filter leaves the sentinel out, as `image::resample` does for the
+thumbnails: a pixel is the mean of the data under it, and where there is none
+it is the sentinel, which the window draws as it draws the sentinel at full
+size. To keep that exact across levels of the chain, each level carries the
+share of its block that is data, where alpha would be, with the data
+premultiplied by it — the arithmetic of premultiplied alpha, and the reason a
+mean of means weighted by coverage is the mean of the data. A gray chain takes
+a second component for the share (`Layout::level_format`), and a color one has
+its fourth. `covered`, `with_coverage` and `resolved` in `shaders/texel.wgsl`
+are the three steps; `shader_codes::coverage` says which a pass takes.
+
+The sentinel is compared with each texel of the picture as uploaded, so
+`upload::sentinel` works it out as that texture reads: through the same scale,
+table or curve `upload::plan` stored the samples by, with half the gap to the
+next code's value as the tolerance for an integer picture, whose bytes the
+device decodes with a rounding of its own. A color texel is the sentinel only
+in all three channels. A picture with an alpha channel has no sentinel here:
+its coverage already says where the picture is, and its levels have no channel
+left for another. Magnified, the filters read the texels as they are, so the
+sentinel shows as the file holds it.
+
 
 ## The export's resize, on the CPU
 

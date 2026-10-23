@@ -3,6 +3,8 @@
 // map, and premultiplies it. Prepended to `image.wgsl` and `reduce.wgsl` by
 // `render::mod`, so that the two cannot drift; each declares the `params`,
 // `source`, `gain_map` and `gain_table` this reads, at the names used here.
+// `covered` and its two neighbors are the no-data sentinel's: what an area
+// average leaves out, as the thumbnails' `image::resample` leaves it out.
 
 // Color premultiplied by alpha, in the component layout the texture stores.
 // Every filter that reads it is a weighted sum of texels, and weighting
@@ -69,3 +71,50 @@ fn load(coord: vec2<i32>) -> vec4<f32> {
     return premultiplied(texel);
 }
 
+
+// Whether the texel at `coord` of the picture as uploaded is data rather than
+// the file's no-data sentinel, as 1 or 0: held to `nodata`, the sentinel as
+// a texel reads and how far one may be from it (see `upload::Sentinel`),
+// before any lift, since the sentinel is a value the file stores. A color
+// texel is the sentinel only in all three channels, as
+// `DecodedImage::is_nodata` has it, so that a pure red in a picture whose
+// sentinel is zero is still red.
+fn covered(coord: vec2<i32>) -> f32 {
+    let limit = vec2<i32>(textureDimensions(source)) - vec2<i32>(1);
+    let texel = textureLoad(source, clamp(coord, vec2<i32>(0), limit), 0);
+    let near = abs(texel.rgb - vec3<f32>(params.nodata.x)) <= vec3<f32>(params.nodata.y);
+    if params.swizzle == 0u {
+        return select(1.0, 0.0, near.r);
+    }
+    return select(1.0, 0.0, all(near));
+}
+
+// `texel`, as `load` gave it, in the form a coarse level of a picture with a
+// sentinel holds: the color times the share `covered` of it that is data,
+// and that share where alpha would be — the second component for gray, the
+// fourth for color. Only a picture with no alpha has a sentinel, so the
+// slot is free. Averaging texels in this form is exact however many levels
+// down: the mean of the data, times the share that is data.
+fn with_coverage(texel: vec4<f32>, covered: f32) -> vec4<f32> {
+    var out = texel * covered;
+    if params.swizzle == 0u {
+        out.g = covered;
+    } else {
+        out.a = covered;
+    }
+    return out;
+}
+
+// A texel in that form, resolved back into the picture's own: the mean of
+// the data under it, opaque, or — where none of it is data — the sentinel,
+// which the window then draws as it draws the sentinel at full size. So a
+// thin line among no data keeps its own value however far out the view is,
+// as it does in the thumbnails, rather than being averaged into the
+// sentinel until the window loses it.
+fn resolved(texel: vec4<f32>) -> vec4<f32> {
+    let share = select(texel.a, texel.g, params.swizzle == 0u);
+    if share <= 0.0 {
+        return vec4<f32>(vec3<f32>(params.nodata.x), 1.0);
+    }
+    return vec4<f32>(texel.rgb / share, 1.0);
+}

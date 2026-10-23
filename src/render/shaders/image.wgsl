@@ -35,6 +35,8 @@ struct Params {
     clip: vec4<f32>,             // (x, y, radius, cut) of the circle the quad is cut to; radius 0 for no cut,
                                  // cut 0 for the disc a pixel short of the edge, 1 for the last pixel of it
     picture: vec4<f32>,          // (x, y, width, height) of the image on the target, for a cut quad
+    nodata: vec2<f32>,           // (value, tolerance): the no-data sentinel as a texel reads
+    coverage: u32,               // 0 no sentinel, 1 the picture as uploaded, 2 a coarse level with its coverage
 };
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -97,7 +99,9 @@ fn vs_main(@builtin(vertex_index) index: u32) -> VertexOut {
 // Exact area average: every source texel under the output pixel, each weighted
 // by how much of it the pixel actually covers. The count of taps is bounded by
 // the coarse chain, which keeps `texels_per_pixel` at four or under however far
-// the view zooms out; the clamp is a backstop, not a working limit.
+// the view zooms out; the clamp is a backstop, not a working limit. For a
+// picture with a no-data sentinel, the average is in the form a coarse level
+// holds, its coverage beside it, for `resample` to resolve.
 fn area(uv: vec2<f32>) -> vec4<f32> {
     let half = min(params.texels_per_pixel, vec2<f32>(64.0)) * 0.5;
     let center = uv * params.extent;
@@ -120,7 +124,11 @@ fn area(uv: vec2<f32>) -> vec4<f32> {
                 continue;
             }
             let weight = wx * wy;
-            sum = sum + load(vec2<i32>(x, y)) * weight;
+            var texel = load(vec2<i32>(x, y));
+            if params.coverage == 1u {
+                texel = with_coverage(texel, covered(vec2<i32>(x, y)));
+            }
+            sum = sum + texel * weight;
             total = total + weight;
         }
     }
@@ -177,12 +185,22 @@ fn bicubic(uv: vec2<f32>) -> vec4<f32> {
     return sum;
 }
 
+// The picture at `uv`, by the filter in force. A minified draw of a picture
+// with a sentinel, and any draw from a coarse level of one, comes back from
+// the filter with its coverage beside it, and is resolved here into the
+// picture's own form; a magnified draw of the picture itself is left alone,
+// and shows the sentinel as the file holds it.
 fn resample(uv: vec2<f32>) -> vec4<f32> {
+    var texel: vec4<f32>;
     switch params.resampler {
-        case 1u: { return antialiased_nearest(uv); }
-        case 2u: { return bicubic(uv); }
-        default: { return area(uv); }
+        case 1u: { texel = antialiased_nearest(uv); }
+        case 2u: { texel = bicubic(uv); }
+        default: { texel = area(uv); }
     }
+    if params.coverage == 2u || (params.coverage == 1u && params.resampler == 0u) {
+        return resolved(texel);
+    }
+    return texel;
 }
 
 // The ramps, one row per map, as `image_layer` wrote them from

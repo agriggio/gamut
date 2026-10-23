@@ -66,6 +66,19 @@ pub fn level_alpha(alpha: AlphaMode) -> u32 {
     }
 }
 
+/// How a pass reads the no-data texels of the level it reads, as `coverage`
+/// in `shaders/texel.wgsl` has it: 0 for a picture with no sentinel; 1 for
+/// the picture as uploaded, whose texels are held to the sentinel one by
+/// one; and 2 for a coarse level, which holds the share of each block that
+/// is data where alpha would be, and the data premultiplied by it.
+pub fn coverage(sentinel: bool, level: usize) -> u32 {
+    match (sentinel, level) {
+        (false, _) => 0,
+        (true, 0) => 1,
+        (true, _) => 2,
+    }
+}
+
 /// What `colormap` in `shaders/image.wgsl` reads the ramp a gray pixel is
 /// read through by — `Display::ramp`'s answer — and, less one, which row of
 /// the ramps texture `image_layer` writes holds it. 0 is no ramp: the pixel

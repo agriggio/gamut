@@ -116,15 +116,24 @@ impl Layout {
     /// to think about, and premultiplied color without an 8-bit floor under
     /// it. Half floats everywhere except under a 32-bit float source, where
     /// the range and the low bits are the point of the file.
-    pub fn level_format(self) -> wgpu::TextureFormat {
+    ///
+    /// `coverage` for a picture with a no-data sentinel, whose levels carry
+    /// the share of each block that is data where alpha would be: a gray
+    /// picture's levels take a second component for it, and a color one's
+    /// have the fourth already.
+    pub fn level_format(self, coverage: bool) -> wgpu::TextureFormat {
         let storage = match self.storage {
             Storage::Float32 => Storage::Float32,
             Storage::Srgb8 | Storage::Unorm8 | Storage::Unorm16 | Storage::Float16 => {
                 Storage::Float16
             }
         };
+        let components = match self.components {
+            Components::One if coverage => Components::Two,
+            components => components,
+        };
         Layout {
-            components: self.components,
+            components,
             storage,
         }
         .format()
@@ -349,6 +358,96 @@ pub fn plan(image: &DecodedImage, capabilities: Capabilities) -> Plan<'_> {
             )
         }
     }
+}
+
+/// The picture's no-data sentinel as a texel of its texture reads, for the
+/// draws and the coarse chain to leave out of their averages as
+/// `image::resample` leaves it out of a thumbnail's: the value the sentinel
+/// comes out as through the same table, curve or scaling `plan` stores its
+/// samples by, and how far a texel may be from it and still be it.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Sentinel {
+    pub value: f32,
+    /// Half the distance to the nearest other code's value, for an integer
+    /// picture, whose texels the device decodes from bytes with a rounding
+    /// of its own; nothing for a float one, whose texels are the very bits
+    /// worked out here.
+    pub tolerance: f32,
+}
+
+/// The sentinel `image` says stands for no data, as a texture of `layout`
+/// holding its samples reads — see [`Sentinel`]. `None` for a picture with
+/// none; for one no texel of which can hold it, an integer picture given a
+/// fraction or a value past its full scale, or a float one given a NaN,
+/// which equals nothing; and for one with an alpha channel, whose coverage
+/// already says where the picture is, and whose levels have no channel
+/// left to carry another.
+pub fn sentinel(image: &DecodedImage, layout: Layout) -> Option<Sentinel> {
+    let value = image.nodata?;
+    if image.channels().alpha_index().is_some() {
+        return None;
+    }
+    let transfer = image.color.transfer;
+    match (&image.samples, layout.storage) {
+        (Samples::U8 { .. }, Storage::Srgb8) => coded(value, u8::MAX as u32, |code| {
+            transfer.to_linear(code as f32 / u8::MAX as f32)
+        }),
+        (Samples::U8 { .. }, Storage::Unorm8) => {
+            coded(value, u8::MAX as u32, |code| code as f32 / u8::MAX as f32)
+        }
+        (Samples::U16 { .. }, Storage::Unorm16) => {
+            coded(value, u16::MAX as u32, |code| code as f32 / u16::MAX as f32)
+        }
+        (Samples::U8 { .. }, _) => {
+            let lut = lut(transfer, u8::MAX as u32);
+            coded(value, u8::MAX as u32, |code| lut[code as usize].to_f32())
+        }
+        (Samples::U16 { .. }, _) => {
+            let lut = lut(transfer, u16::MAX as u32);
+            coded(value, u16::MAX as u32, |code| lut[code as usize].to_f32())
+        }
+        (Samples::F32 { .. }, storage) => {
+            if value.is_nan() {
+                return None;
+            }
+            let linear = if transfer.is_linear() {
+                value
+            } else {
+                transfer.to_linear(value)
+            };
+            let value = match storage {
+                Storage::Float16 => f16::from_f32(linear).to_f32(),
+                _ => linear,
+            };
+            Some(Sentinel {
+                value,
+                tolerance: 0.0,
+            })
+        }
+    }
+}
+
+/// The sentinel of an integer picture, `value` being one of its codes
+/// `0..=full_scale`, each of which a texel reads as `read` says.
+fn coded(value: f32, full_scale: u32, read: impl Fn(u32) -> f32) -> Option<Sentinel> {
+    if value.fract() != 0.0 || !(0.0..=full_scale as f32).contains(&value) {
+        return None;
+    }
+    let code = value as u32;
+    let at = read(code);
+    // Codes a table has rounded into the sentinel's own value are the
+    // sentinel on the device whatever is done here, so the gap is to the
+    // nearest code that reads as anything else.
+    let gap = [code.checked_sub(1), (code < full_scale).then_some(code + 1)]
+        .into_iter()
+        .flatten()
+        .map(|neighbor| (read(neighbor) - at).abs())
+        .filter(|gap| *gap > 0.0)
+        .fold(f32::INFINITY, f32::min);
+    Some(Sentinel {
+        value: at,
+        tolerance: if gap.is_finite() { gap / 2.0 } else { 0.0 },
+    })
 }
 
 /// How many linearizing tables are kept at once. Four covers the curves a
@@ -686,7 +785,7 @@ mod tests {
                 components,
                 storage,
             }
-            .level_format()
+            .level_format(false)
         };
         for storage in [Storage::Unorm8, Storage::Unorm16, Storage::Float16] {
             assert_eq!(level(Components::One, storage), F::R16Float);
@@ -697,6 +796,118 @@ mod tests {
         assert_eq!(level(Components::One, Storage::Float32), F::R32Float);
         assert_eq!(level(Components::Two, Storage::Float32), F::Rg32Float);
         assert_eq!(level(Components::Four, Storage::Float32), F::Rgba32Float);
+    }
+
+    /// A picture with a sentinel gives a gray chain a second component for
+    /// the coverage; a color one has its fourth already.
+    #[test]
+    fn a_coarse_level_of_a_picture_with_a_sentinel_has_room_for_its_coverage() {
+        use wgpu::TextureFormat as F;
+        let level = |components, storage| {
+            Layout {
+                components,
+                storage,
+            }
+            .level_format(true)
+        };
+        assert_eq!(level(Components::One, Storage::Unorm8), F::Rg16Float);
+        assert_eq!(level(Components::One, Storage::Float32), F::Rg32Float);
+        assert_eq!(level(Components::Four, Storage::Unorm8), F::Rgba16Float);
+    }
+
+    /// The sentinel as each layout's texels read it: a code over its full
+    /// scale, give or take half the way to the next code; a code through
+    /// the table its picture is linearized by; and a float as it is, or
+    /// rounded to the half float a device that cannot filter 32 bits stores.
+    #[test]
+    fn the_sentinel_is_read_as_the_texture_reads_it() {
+        let with = |samples, transfer, nodata| {
+            let mut decoded = image(samples, transfer);
+            decoded.nodata = Some(nodata);
+            decoded
+        };
+        let u8_gray = |nodata| {
+            with(
+                Samples::U8 {
+                    channels: Channels::Gray,
+                    data: vec![0, 255],
+                },
+                Transfer::Linear,
+                nodata,
+            )
+        };
+
+        let zero = u8_gray(0.0);
+        let found = sentinel(&zero, plan(&zero, FULL).layout).expect("a code");
+        assert_eq!(found.value, 0.0);
+        assert!((found.tolerance - 0.5 / 255.0).abs() < 1e-7);
+
+        let top = u8_gray(255.0);
+        let found = sentinel(&top, plan(&top, FULL).layout).expect("a code");
+        assert_eq!(found.value, 1.0);
+
+        let curved = with(
+            Samples::U16 {
+                channels: Channels::Gray,
+                data: vec![0, 1],
+            },
+            Transfer::Srgb,
+            1000.0,
+        );
+        let found = sentinel(&curved, plan(&curved, FULL).layout).expect("a code");
+        assert_eq!(
+            found.value,
+            lut(Transfer::Srgb, u16::MAX as u32)[1000].to_f32()
+        );
+
+        let float = |nodata| {
+            with(
+                Samples::F32 {
+                    channels: Channels::Gray,
+                    data: vec![0.0, 1.0],
+                },
+                Transfer::Linear,
+                nodata,
+            )
+        };
+        let sea = float(-9999.1);
+        let full = sentinel(&sea, plan(&sea, FULL).layout).expect("a float");
+        assert_eq!((full.value, full.tolerance), (-9999.1, 0.0));
+        let bare = sentinel(&sea, plan(&sea, BARE).layout).expect("a float");
+        assert_eq!(bare.value, f16::from_f32(-9999.1).to_f32());
+    }
+
+    /// A sentinel no texel can hold is no sentinel at all; nor is one beside
+    /// an alpha channel, whose coverage says where the picture is already.
+    #[test]
+    fn a_sentinel_no_texel_can_hold_is_none() {
+        let u8_with = |channels, nodata| {
+            let mut decoded = image(
+                Samples::U8 {
+                    channels,
+                    data: vec![0; channels.count()],
+                },
+                Transfer::Linear,
+            );
+            decoded.nodata = Some(nodata);
+            decoded
+        };
+        for nodata in [-9999.0, 256.0, 0.5] {
+            let decoded = u8_with(Channels::Gray, nodata);
+            assert_eq!(sentinel(&decoded, plan(&decoded, FULL).layout), None);
+        }
+        let alpha = u8_with(Channels::GrayAlpha, 0.0);
+        assert_eq!(sentinel(&alpha, plan(&alpha, FULL).layout), None);
+
+        let mut nan = image(
+            Samples::F32 {
+                channels: Channels::Gray,
+                data: vec![0.0],
+            },
+            Transfer::Linear,
+        );
+        nan.nodata = Some(f32::NAN);
+        assert_eq!(sentinel(&nan, plan(&nan, FULL).layout), None);
     }
 
     /// The same curve at the same depth is one table, made once.

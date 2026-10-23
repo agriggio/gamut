@@ -451,6 +451,116 @@ fn the_coarse_chain_agrees_with_a_direct_average() {
     }
 }
 
+/// The mean of the data in each of `blocks` by `blocks` blocks of a square
+/// picture `data`, leaving out every sample equal to `sentinel`, and the
+/// sentinel for a block with nothing else in it: what `image::resample`
+/// makes of a thumbnail, and what a minified draw of a picture with a
+/// sentinel has to show.
+fn means_of_data(data: &[f32], side: usize, blocks: usize, sentinel: f32) -> Vec<f32> {
+    let block = side / blocks;
+    let mut means = Vec::with_capacity(blocks * blocks);
+    for block_y in 0..blocks {
+        for block_x in 0..blocks {
+            let (mut total, mut count) = (0.0f32, 0usize);
+            for y in block_y * block..(block_y + 1) * block {
+                for x in block_x * block..(block_x + 1) * block {
+                    let value = data[y * side + x];
+                    if value != sentinel {
+                        total += value;
+                        count += 1;
+                    }
+                }
+            }
+            means.push(if count == 0 {
+                sentinel
+            } else {
+                total / count as f32
+            });
+        }
+    }
+    means
+}
+
+/// A picture of thin lines on no data — a map of divides, of streams —
+/// keeps its lines however far out it is drawn: each pixel is the mean of
+/// the data under it, the sentinel left out, rather than the line averaged
+/// into the sentinel around it until the window loses it. Where the pixel
+/// covers no data it is the sentinel, as at full size. At a shrink the
+/// draw's own filter does alone, at the levels of the chain exactly, and
+/// between them, where the draw averages a level's means; the line's two
+/// halves of different values, crossing blocks of the chain, say the mean
+/// comes out weighted by how much of each block was data.
+#[test]
+fn a_shrunk_picture_leaves_its_no_data_out() {
+    let Some(gpu) = gpu::test_context() else {
+        return;
+    };
+    const SIDE: usize = 64;
+    let mut codes = vec![0u8; SIDE * SIDE];
+    for y in 0..SIDE {
+        codes[y * SIDE + 5] = if y < 40 { 200 } else { 100 };
+    }
+    for (x, y) in [(40, 3), (41, 3), (50, 60), (20, 33)] {
+        codes[y * SIDE + x] = 250;
+    }
+    let mut image = gray_u8(SIDE as u32, SIDE as u32, codes.clone());
+    image.nodata = Some(0.0);
+    let linear: Vec<f32> = codes.iter().map(|code| *code as f32 / 255.0).collect();
+
+    for blocks in [32usize, 16, 4, 2, 1] {
+        let target = [blocks as u32; 2];
+        let pixels = draw(gpu, &image, target, whole(target, &image));
+        let expected = means_of_data(&linear, SIDE, blocks, 0.0);
+        for (index, (got, expected)) in pixels.iter().zip(&expected).enumerate() {
+            assert!(
+                close(got[0], *expected, 2e-3),
+                "{blocks} to a side, pixel {index}: got {}, expected {expected}",
+                got[0]
+            );
+        }
+    }
+}
+
+/// A float picture's sentinel is left out as an integer one's is, matched
+/// exactly, since its texels are the file's own values: a DEM's sea of
+/// -9999 neither drags the coast down nor shows as anything but itself.
+#[test]
+fn a_float_picture_s_sentinel_is_left_out_exactly() {
+    let Some(gpu) = gpu::test_context() else {
+        return;
+    };
+    const SIDE: usize = 64;
+    const SEA: f32 = -9999.0;
+    let data: Vec<f32> = (0..SIDE * SIDE)
+        .map(|index| {
+            let (x, y) = (index % SIDE, index / SIDE);
+            if x + y < 48 {
+                0.25 + (x * 7 + y * 3) as f32 / 1000.0
+            } else {
+                SEA
+            }
+        })
+        .collect();
+    let mut image = gray_f32(SIDE as u32, SIDE as u32, data.clone());
+    image.nodata = Some(SEA);
+
+    for blocks in [16usize, 4] {
+        let target = [blocks as u32; 2];
+        let pixels = draw(gpu, &image, target, whole(target, &image));
+        let expected = means_of_data(&data, SIDE, blocks, SEA);
+        for (index, (got, expected)) in pixels.iter().zip(&expected).enumerate() {
+            // The sea comes back through a half-float target, eight apart
+            // out there.
+            let tolerance = if *expected == SEA { 8.0 } else { 2e-3 };
+            assert!(
+                close(got[0], *expected, tolerance),
+                "{blocks} to a side, pixel {index}: got {}, expected {expected}",
+                got[0]
+            );
+        }
+    }
+}
+
 /// Antialiased nearest has to stay nearest where it matters: at a whole-number
 /// zoom every output pixel is a texel, with nothing blended in between.
 #[test]
