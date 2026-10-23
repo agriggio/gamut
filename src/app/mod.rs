@@ -2299,14 +2299,13 @@ impl App {
     /// that has something to point out. A view holding the whole image is
     /// already its own map, so the widget would be a second copy of what the
     /// window is showing, over the corner of it; it goes away instead, and
-    /// comes back on the zoom that first cuts something off. The toggle keeps
+    /// comes back on the zoom or the drag that first cuts something off. The toggle keeps
     /// its state through that, so the button stays lit and the minimap
     /// returns without being asked for again.
     fn minimap_on_screen_in(&self, sight: &Sight) -> bool {
-        // Panning and the minimap answer the same question: whether any of the
-        // image is off screen. Pan is clamped to the image, so a view with
-        // nowhere to go is one showing all of it.
-        self.panels.show_minimap && sight.view.can_pan(self.image_size(), sight.viewport)
+        // Not whether the view can pan: a fitted picture can be pulled some
+        // way past its edge, and has nothing off screen until it is.
+        self.panels.show_minimap && sight.view.off_screen(self.image_size(), sight.viewport)
     }
 
     /// Whether a button is held on the picture whose hold slot is the loupe,

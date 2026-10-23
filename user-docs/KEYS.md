@@ -78,7 +78,7 @@ configuration file in the application that opens plain text — see
 | `Shift`+`2`, `3`, `4` | 50%, 25%, 10% | `zoom.50`, `zoom.25`, `zoom.10` |
 | `+`, `=` | Zoom in one step, a factor of 1.25 | `zoom.in` |
 | `-`, `_` | Zoom out one step | `zoom.out` |
-| `Space` | Cycle through the whole image, the window filled, and actual size. With a region selected, fit the region, fill the window with it, then the image's three, in turn | `zoom.fit` |
+| `Space` | Cycle through the whole image, the window filled, and actual size; a fit dragged past the picture's edge goes back to the whole image first. With a region selected, fit the region, fill the window with it, then the image's three, in turn | `zoom.fit` |
 | `Space`+Drag | Zoom to the box you drag out | `zoom.fit`, held |
 | `p` | Cycle the filter used above 100%: nearest → bicubic | `zoom.filter` |
 | `Shift`+Arrows | Pan by 64 pixels | `pan.left` … `pan.down` |
@@ -94,7 +94,8 @@ The two fits are the whole image, which leaves a margin on one side, and the
 window filled, which runs the image off the ends of the other. Which axis
 either one works out to is the image's shape against the window's. `Space`
 runs through them and then actual size, and starts over at the whole image
-from any zoom you chose by hand, actual size included.
+from any zoom you chose by hand, actual size included, or from a fit you have
+dragged past the picture's edge.
 
 Every zoom works about the pointer while it is over the picture: the detail
 under the pointer stays where it is, whether the zoom came from a key, the
@@ -1073,7 +1074,7 @@ region behind: it belongs to the picture it was drawn on.
 
 | Action | What it does | Slot |
 | --- | --- | --- |
-| Drag | Pan, with the image following the pointer; with a region selected, draw it, or pull one of its handles — the one at its center moves the whole of it | `gesture.image.left.drag` |
+| Drag | Pan, with the image following the pointer, until its edge reaches the middle of the window — room to pull an edge out from under something covering it; with a region selected, draw it, or pull one of its handles — the one at its center moves the whole of it | `gesture.image.left.drag` |
 | `Shift`+Drag | Inside the region, move the whole of it | `gesture.image.shift+left.drag` |
 | Click a region handle | Make it the current handle, the one the arrows move | |
 | Double-click | Actual size, and from actual size back to the whole image | `gesture.image.left.double-click` |
