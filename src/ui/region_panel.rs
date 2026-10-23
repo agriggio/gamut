@@ -18,9 +18,10 @@ use egui::{Align, Key, Layout, Modifiers, RichText, Sense, Ui, vec2};
 
 use super::chrome::{BUTTON_SIZE, Corners, Pass};
 use super::control::{Command, Control};
+use super::info::HEADER_GAP;
 use super::rename::{Boxed, boxed_field, dialog_frame};
 use super::style::MENU_PADDING;
-use super::{Current, Rect, TEXT_SIZE, fonts, icon, menu, panel};
+use super::{Current, RULE_WIDTH, Rect, TEXT_SIZE, fonts, help, icon, menu, panel};
 use crate::image::aspect::Aspect;
 use crate::image::region::Region;
 
@@ -36,6 +37,9 @@ const APART: f32 = 12.0;
 const ASPECT_WORD: f32 = 44.0;
 /// The letter before each of the four boxes.
 const LETTER: f32 = 12.0;
+/// About as tall as the title's line, for the room the panel asks for:
+/// the line itself is the face's, known only once the fonts are.
+const HEAD: f32 = 18.0;
 
 /// One of the four boxes the region's place and size are typed in.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -111,7 +115,7 @@ pub fn id() -> egui::Id {
 pub fn panel(content: Rect) -> Option<Rect> {
     let size = [
         INSIDE + 2.0 * MENU_PADDING,
-        BUTTON_SIZE + 3.0 * (GAP + ROW) + 2.0 * MENU_PADDING,
+        HEAD + HEADER_GAP + 3.0 * ROW + 2.0 * GAP + 2.0 * MENU_PADDING,
     ];
     panel::fit(content, size, size, panel::Place::TopLeft)
 }
@@ -129,8 +133,23 @@ pub(super) fn show(pass: &mut Pass, ui: &mut Ui, current: &Current) {
     panel::area("region panel", rect, egui::Order::Middle).show(ui.ctx(), |ui| {
         dialog_frame(pass).show(ui, |ui| {
             ui.set_width(INSIDE);
-            ui.spacing_mut().item_spacing = vec2(0.0, GAP);
-            head(pass, ui, region.is_some());
+            // The head on the band a menu's title sits on, the same height
+            // and over the same hairline, painted under it once laid out.
+            let band = ui.painter().add(egui::Shape::Noop);
+            ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
+            let head = head(pass, ui, region.is_some());
+            ui.add_space((HEADER_GAP - RULE_WIDTH) / 2.0);
+            let edge = pass.grid.line_width(RULE_WIDTH);
+            let (rule, _) = ui.allocate_exact_size(vec2(INSIDE, edge), Sense::HOVER);
+            ui.add_space((HEADER_GAP - RULE_WIDTH) / 2.0);
+            ui.spacing_mut().item_spacing.y = GAP;
+            let inside = egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), head.y_range());
+            help::band(pass, ui, band, inside, rule.top());
+            ui.painter().rect_filled(
+                egui::Rect::from_x_y_ranges(inside.expand(MENU_PADDING).x_range(), rule.y_range()),
+                0.0,
+                pass.theme.border,
+            );
             aspect_row(pass, ui, region, image);
             for row in Field::ROWS {
                 field_row(pass, ui, row, region);
@@ -140,38 +159,42 @@ pub(super) fn show(pass: &mut Pass, ui: &mut Ui, current: &Current) {
 }
 
 /// The panel's name at the left, and at the right the window fitted to the
-/// region, its copy, and the cross that takes it off.
-fn head(pass: &mut Pass, ui: &mut Ui, drawn: bool) {
-    ui.horizontal(|ui| {
-        ui.set_min_height(BUTTON_SIZE);
+/// region, its copy, and the cross that takes it off — on one line of the
+/// title's own height, as a menu's title stands. The buttons are the
+/// ordinary size, standing over the line into the padding above it and
+/// the gap below: cut to the line, their marks are too small to read.
+fn head(pass: &mut Pass, ui: &mut Ui, drawn: bool) -> egui::Rect {
+    let font = egui::FontId::new(TEXT_SIZE, egui::FontFamily::Name(fonts::BOLD.into()));
+    let line = ui.fonts_mut(|fonts| fonts.row_height(&font));
+    // Exactly the line, where `horizontal` would make the row as tall as
+    // an ordinary button.
+    let row = vec2(INSIDE, line);
+    ui.allocate_ui_with_layout(row, Layout::left_to_right(Align::Center), |ui| {
+        ui.set_min_size(row);
         ui.label(
             RichText::new(Control::Region.label())
-                .family(egui::FontFamily::Name(fonts::BOLD.into()))
-                .size(TEXT_SIZE)
+                .font(font.clone())
                 .color(pass.theme.text_primary),
         );
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.spacing_mut().item_spacing = vec2(GAP / 2.0, 0.0);
-            pass.toggle(ui, icon::X, Control::RegionClose, false, true, Corners::All);
+            let button = |pass: &mut Pass, ui: &mut Ui, marks, control, enabled| {
+                // The line's height in the row, and the whole button in a
+                // child of its own over it, which the row does not grow by.
+                let (slot, _) = ui.allocate_exact_size(vec2(BUTTON_SIZE, line), Sense::HOVER);
+                let square =
+                    egui::Rect::from_center_size(slot.center(), vec2(BUTTON_SIZE, BUTTON_SIZE));
+                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(square));
+                pass.toggle(&mut child, marks, control, false, enabled, Corners::All);
+            };
+            button(pass, ui, icon::X, Control::RegionClose, true);
             ui.add_space(APART - GAP / 2.0);
-            pass.toggle(
-                ui,
-                icon::COPY,
-                Control::RegionCopy,
-                false,
-                drawn,
-                Corners::All,
-            );
-            pass.toggle(
-                ui,
-                icon::SCAN,
-                Control::RegionFit,
-                false,
-                drawn,
-                Corners::All,
-            );
+            button(pass, ui, icon::COPY, Control::RegionCopy, drawn);
+            button(pass, ui, icon::SCAN, Control::RegionFit, drawn);
         });
-    });
+    })
+    .response
+    .rect
 }
 
 /// The aspect: its word, the box it can be typed in, the menu of them at
