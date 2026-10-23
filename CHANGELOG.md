@@ -34,6 +34,12 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
 - On a display scaled by a fraction, such as 1.6, the words over the file
   list's thumbnails no longer flicker a pixel up and down while the list's
   pictures are read.
+- A file that appears in a watched folder before the program writing it has
+  finished gets its thumbnail once the writing is done, rather than keeping
+  the placeholder until the file is opened.
+- A file read while it was half written is no longer recorded in the
+  thumbnail cache as one that cannot be read when it was finished within the
+  same second.
 
 ## 0.12.2 - 2026-10-22
 

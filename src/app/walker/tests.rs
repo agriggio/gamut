@@ -212,6 +212,66 @@ fn a_change_in_a_watched_directory_is_a_diff() {
     assert!(settle(&mut walking, 2).is_empty(), "said once");
 }
 
+/// A file that arrived and is then written again — a renderer filling the
+/// file it opened — is said modified once the writing has held still for a
+/// look, and once only.
+#[test]
+fn a_file_written_after_it_arrived_is_modified() {
+    let tree = Tree::new("growing");
+    tree.files(&["a.png"]);
+    let mut walking = walking(100);
+    walk(&mut walking, &tree.0, false);
+    walk_out(&mut walking);
+
+    tree.files(&["c.png"]);
+    match &settle(&mut walking, 2)[..] {
+        [Event::Changed { added, .. }] => assert_eq!(added, &[tree.at("c.png")]),
+        other => panic!("{other:?}"),
+    }
+    std::fs::write(tree.at("c.png"), b"the rest of it").unwrap();
+    match &settle(&mut walking, 2)[..] {
+        [
+            Event::Changed {
+                added,
+                removed,
+                modified,
+                ..
+            },
+        ] => {
+            assert!(added.is_empty() && removed.is_empty());
+            assert_eq!(modified, &[tree.at("c.png")]);
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(settle(&mut walking, 2).is_empty(), "said once");
+}
+
+/// A file there when the directory was read is not watched by itself, and
+/// one that arrived is watched only until it has held still for `FRESH`.
+#[test]
+fn only_a_newcomer_is_watched_and_not_for_long() {
+    let tree = Tree::new("fresh");
+    tree.files(&["a.png"]);
+    let mut walking = walking(100);
+    walk(&mut walking, &tree.0, false);
+    walk_out(&mut walking);
+    std::fs::write(tree.at("a.png"), b"rewritten").unwrap();
+    assert!(
+        settle(&mut walking, 2).is_empty(),
+        "the walk's own files are not"
+    );
+
+    tree.files(&["c.png"]);
+    settle(&mut walking, 2);
+    assert!(walking.fresh.contains_key(&tree.at("c.png")));
+    assert!(
+        walking
+            .poll_fresh(Instant::now() + FRESH + Duration::from_secs(1))
+            .is_none()
+    );
+    assert!(walking.fresh.is_empty(), "held still for long enough");
+}
+
 /// Under a recursive walk a folder that arrives is walked into, and one
 /// that goes takes everything under it off the list with it.
 #[test]

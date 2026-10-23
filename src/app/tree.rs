@@ -151,6 +151,7 @@ impl App {
                 added,
                 glimpses,
                 removed,
+                modified,
             } => {
                 self.glimpsed.extend(glimpses);
                 let gone: HashSet<PathBuf> = removed.into_iter().collect();
@@ -160,7 +161,8 @@ impl App {
                 if grew {
                     self.list_grew(new);
                 }
-                if !left && !grew {
+                let rewritten = self.rewritten(modified);
+                if !left && !grew && !rewritten {
                     return Effect::Nothing;
                 }
                 self.apply_order().also(Effect::Redraw)
@@ -252,6 +254,29 @@ impl App {
     pub(super) fn list_grew(&mut self, new: Vec<PathBuf>) {
         self.filmstrip.mark_stale();
         self.thumbnailer.enqueue(new);
+    }
+
+    /// Files on the list written again since they arrived — read while
+    /// their writer was still going, as often as not — which the thumbnail
+    /// thread is asked for again, header and all, whatever it made of them
+    /// before. Says whether any was on the list.
+    fn rewritten(&mut self, modified: Vec<PathBuf>) -> bool {
+        let modified: Vec<PathBuf> = modified
+            .into_iter()
+            .filter(|path| self.files.position(path).is_some())
+            .collect();
+        if modified.is_empty() {
+            return false;
+        }
+        for path in &modified {
+            self.chooser.forget_failure(path);
+        }
+        // What it is sorted by may have changed with it.
+        if self.filmstrip.order().reads_facts() {
+            self.filmstrip.mark_stale();
+        }
+        self.thumbnailer.prioritize(modified);
+        true
     }
 
     /// Tells the walker which folder the file on screen is in, which it

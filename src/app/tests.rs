@@ -1952,6 +1952,36 @@ fn a_directory_is_read_again_when_what_is_in_it_changes() {
     std::fs::remove_dir_all(dir).expect("we just wrote it");
 }
 
+/// A file that arrived half written, which the thumbnail thread gave up
+/// on, is looked at again once its writer has finished it.
+#[test]
+fn a_file_finished_after_it_arrived_is_thumbnailed_again() {
+    let (mut app, dir) = opening_directory("finished", &[("a.png", 8, 8)]);
+    answer(&mut app, Reload::Fresh);
+    let late = dir.join("c.png");
+    std::fs::write(&late, b"\x89PNG").expect("the temporary directory is writable");
+    let _ = poll_directories(&mut app);
+    assert_eq!(Effect::Redraw, poll_directories(&mut app));
+    assert_eq!(app.files.position(&late), Some(1));
+    app.take_thumbnail(Delivered {
+        path: late.clone(),
+        news: News::Failed,
+    });
+    assert!(app.chooser.given_up(&late));
+
+    write_png(&dir, "c.png", 8, 8);
+    assert_eq!(
+        Effect::Nothing,
+        poll_directories(&mut app),
+        "the write has not settled yet"
+    );
+    assert_eq!(Effect::Redraw, poll_directories(&mut app));
+    assert!(!app.chooser.given_up(&late), "to be asked for again");
+    assert_eq!(app.files.len(), 2, "the same file, not another");
+
+    std::fs::remove_dir_all(dir).expect("we just wrote it");
+}
+
 /// The application as `gamut some-dir/` opens it, with `--recursive` or
 /// without: nothing on the list, nothing asked for, and the directories
 /// waiting to be walked.

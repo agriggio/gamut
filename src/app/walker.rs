@@ -22,6 +22,16 @@
 //! directory that changed is read again by itself, and what it gained and
 //! lost is reported as a diff, never as a list to rebuild.
 //!
+//! A directory's timestamp says nothing of a write to a file already in it,
+//! so a file that arrived while its writer was still going — a renderer
+//! that opens its output and fills it over seconds, or minutes — would be
+//! on the list as the few bytes it was when the directory was read. Each
+//! file that arrives is watched by itself until it has gone [`FRESH`]
+//! without changing, polled every tick: a handful of `stat`s, since only
+//! the newcomers are, and each change that has held still for a look is
+//! reported as the file modified, for its header and its thumbnail to be
+//! read again.
+//!
 //! Every image the walking finds counts against a cap for the session, the
 //! configuration's `max_files`: a walk started at the top of a disk by
 //! mistake would otherwise read headers and make thumbnails for hours.
@@ -41,7 +51,7 @@ use std::time::{Duration, Instant};
 use super::folder::{self, Glimpse};
 use crate::listing;
 use crate::ui::filmstrip::Sort;
-use crate::watch::{INTERVAL, Watch};
+use crate::watch::{INTERVAL, Signature, Watch};
 
 /// The longest a batch of found files waits before it is handed over. The
 /// first goes at once; after that, a list taking files in once a quarter
@@ -51,6 +61,12 @@ pub const BATCH: Duration = INTERVAL;
 
 /// How many of the directories outside the hot tier are polled each tick.
 pub const COLD_BUDGET: usize = 25;
+
+/// How long a file that arrived is watched by itself after it last changed:
+/// long enough for a writer that pauses between one part of a file and the
+/// next, and short enough that a directory filling for hours is not a
+/// directory whose every file is looked at every tick.
+pub const FRESH: Duration = Duration::from_secs(60);
 
 /// What the application asks of the thread.
 pub enum Ask {
@@ -84,10 +100,13 @@ pub enum Event {
     /// A watched directory changed: the images that arrived in it, and the
     /// ones that have gone, with everything under a subdirectory that went.
     /// A subdirectory that arrived is walked, and comes back as `Found`.
+    /// Or an image that arrived lately was written again since it was
+    /// said: `modified`, glimpsed afresh with the arrivals.
     Changed {
         added: Vec<PathBuf>,
         glimpses: Vec<(PathBuf, Glimpse)>,
         removed: Vec<PathBuf>,
+        modified: Vec<PathBuf>,
     },
     /// The walk of `root` is over, having found `found` images under it —
     /// all of them, or as many as the cap let through where `capped`.
@@ -331,6 +350,19 @@ struct Listed {
     absolute: PathBuf,
 }
 
+/// An image that arrived since the walk, watched by itself until it has
+/// held still for [`FRESH`].
+struct Fresh {
+    /// What it looked like at the last poll.
+    seen: Option<Signature>,
+    /// What it looked like when it was last said — arriving, or modified.
+    said: Option<Signature>,
+    /// When `seen` last changed.
+    changed: Instant,
+    /// What its directory is glimpsed for.
+    sort: Sort,
+}
+
 /// A directory waiting to be read: under which walk, if any is still
 /// counting, whether to go further down, and what to glimpse for.
 struct Queued {
@@ -357,6 +389,8 @@ pub(super) struct Walking {
     roots: HashSet<PathBuf>,
     /// Every directory listed, in the order the cold tier polls them.
     cold: VecDeque<PathBuf>,
+    /// The images that arrived lately, each watched by itself.
+    fresh: HashMap<PathBuf, Fresh>,
     shown: Option<PathBuf>,
     found: usize,
     cap: usize,
@@ -372,6 +406,7 @@ impl Walking {
             walks: HashMap::new(),
             roots: HashSet::new(),
             cold: VecDeque::new(),
+            fresh: HashMap::new(),
             shown: None,
             found: 0,
             cap,
@@ -596,7 +631,43 @@ impl Walking {
                 events.push(event);
             }
         }
+        events.extend(self.poll_fresh(Instant::now()));
         events
+    }
+
+    /// Looks at each image that arrived lately, and says which have been
+    /// written again and then held still for a look since they were last
+    /// said. One that has held still for [`FRESH`] is watched no longer.
+    fn poll_fresh(&mut self, now: Instant) -> Option<Event> {
+        let mut modified: Vec<(PathBuf, Sort)> = Vec::new();
+        self.fresh.retain(|path, fresh| {
+            let seen = Signature::of(path);
+            if seen != fresh.seen {
+                fresh.seen = seen;
+                fresh.changed = now;
+                return true;
+            }
+            // Gone is the directory's to say, when it is read again.
+            if seen.is_some() && seen != fresh.said {
+                fresh.said = seen;
+                modified.push((path.clone(), fresh.sort));
+            }
+            now.duration_since(fresh.changed) < FRESH
+        });
+        if modified.is_empty() {
+            return None;
+        }
+        modified.sort_by(|a, b| a.0.cmp(&b.0));
+        let glimpses = modified
+            .iter()
+            .flat_map(|(path, sort)| glimpse(std::slice::from_ref(path), *sort))
+            .collect();
+        Some(Event::Changed {
+            added: Vec::new(),
+            glimpses,
+            removed: Vec::new(),
+            modified: modified.into_iter().map(|(path, _)| path).collect(),
+        })
     }
 
     /// Reads `dir` again after its watch fired, and says what it gained
@@ -643,6 +714,22 @@ impl Walking {
                 });
             }
         }
+        for path in &removed {
+            self.fresh.remove(path);
+        }
+        let now = Instant::now();
+        for path in &added {
+            let seen = Signature::of(path);
+            self.fresh.insert(
+                path.clone(),
+                Fresh {
+                    seen,
+                    said: seen,
+                    changed: now,
+                    sort,
+                },
+            );
+        }
         if added.is_empty() && removed.is_empty() {
             return None;
         }
@@ -653,6 +740,7 @@ impl Walking {
             added,
             glimpses,
             removed,
+            modified: Vec::new(),
         })
     }
 

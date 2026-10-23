@@ -248,6 +248,12 @@ impl Chooser {
         was_failed
     }
 
+    /// Takes back having given up on `path`: the file has been written
+    /// since the thread looked, and is to be looked at again.
+    pub fn forget_failure(&mut self, path: &Path) {
+        self.dirty |= self.failed.remove(path);
+    }
+
     /// What the header of `path` said, where it has been read: what the
     /// file list orders by.
     pub fn facts_of(&self, path: &Path) -> Option<&Facts> {

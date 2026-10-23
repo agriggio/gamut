@@ -109,6 +109,20 @@ as it goes, and `]` reaches a file that did not exist when the window
 opened. The images found after the cap was reached still join: the cap is on
 walking, not on what a watched folder is seen to gain.
 
+A directory's timestamp says nothing either about a write to a file already
+in it, and a file is often on the list before its writer has finished it: a
+renderer opens its output and fills it over seconds, or minutes, and the
+directory changed when it opened. Read then, the file is a few bytes of a
+picture — its header, at best — and the thumbnail thread gives up on it. So
+each image that arrives is watched by itself, every tick, until it has gone
+`walker::FRESH` without changing; a change that has held still for a look is
+reported in `Event::Changed`'s `modified`, and `App::rewritten` takes back
+the thread's failure and asks for the file again, header and all. Only the
+newcomers are watched, which keeps it to a handful of `stat`s however large
+the tree: the files a walk found were finished, as far as anything can say,
+and a file rewritten in place long after it arrived is the file on screen's
+watch to see, or nobody's.
+
 A directory's timestamp moves on the clock's tick, not with each change, and
 its size on most file systems moves only with its entry count. A change
 inside the tick the directory was read in, which leaves as many entries as

@@ -144,22 +144,27 @@ pub enum Lookup {
 }
 
 /// What the cache holds for `key`, for a file last modified at `mtime`
-/// seconds after the epoch. A thumbnail counts only when it says it was
-/// made of this URI at this modification time; anything else — a stale one,
-/// a file that will not parse, none at all — is [`Lookup::Missing`].
-pub fn lookup(dirs: &Dirs, key: &Key, mtime: u64) -> Lookup {
+/// seconds after the epoch and `size` bytes long. A thumbnail counts only
+/// when it says it was made of this URI at this modification time; anything
+/// else — a stale one, a file that will not parse, none at all — is
+/// [`Lookup::Missing`]. A failure counts only at this size as well: a
+/// second is long enough for a writer to finish a file that was read
+/// half written, and the failure is this program's own record, which
+/// always says the size.
+pub fn lookup(dirs: &Dirs, key: &Key, mtime: u64, size: u64) -> Lookup {
     let fresh = dirs.xlarge.join(&key.name);
-    if describes(&fresh, key, mtime) {
+    if describes(&fresh, key, mtime, None) {
         return Lookup::Fresh(fresh);
     }
-    if describes(&dirs.fail.join(&key.name), key, mtime) {
+    if describes(&dirs.fail.join(&key.name), key, mtime, Some(size)) {
         return Lookup::Failed;
     }
     Lookup::Missing
 }
 
-/// Whether the PNG at `path` says it is a thumbnail of `key` as of `mtime`.
-fn describes(path: &Path, key: &Key, mtime: u64) -> bool {
+/// Whether the PNG at `path` says it is a thumbnail of `key` as of `mtime`,
+/// and where `size` is given, of a file that many bytes long.
+fn describes(path: &Path, key: &Key, mtime: u64, size: Option<u64>) -> bool {
     let Ok(file) = fs::File::open(path) else {
         return false;
     };
@@ -182,6 +187,7 @@ fn describes(path: &Path, key: &Key, mtime: u64) -> bool {
     };
     text(URI_KEY).as_deref() == Some(key.uri.as_str())
         && text(MTIME_KEY).as_deref() == Some(mtime.to_string().as_str())
+        && size.is_none_or(|size| text(SIZE_KEY).as_deref() == Some(size.to_string().as_str()))
 }
 
 /// The chunks a thumbnail of `key` carries: the two the specification
@@ -250,16 +256,16 @@ pub fn write(dirs: &Dirs, dir: &Path, key: &Key, png: &[u8]) -> Result<()> {
 }
 
 /// Records in the fail directory that this version could not thumbnail the
-/// file `key` names as it stood at `mtime`: a one-pixel PNG carrying the
-/// two chunks a lookup reads, which is what the specification asks a
-/// failure to be.
-pub fn write_failure(dirs: &Dirs, key: &Key, mtime: u64) -> Result<()> {
+/// file `key` names as it stood at `mtime` and `size` bytes: a one-pixel
+/// PNG carrying the chunks a lookup reads, which is what the specification
+/// asks a failure to be.
+pub fn write_failure(dirs: &Dirs, key: &Key, mtime: u64, size: u64) -> Result<()> {
     let mut bytes = Vec::new();
     {
         let mut encoder = png::Encoder::new(&mut bytes, 1, 1);
         encoder.set_color(png::ColorType::Grayscale);
         encoder.set_depth(png::BitDepth::Eight);
-        for (keyword, text) in text_chunks(key, mtime, 0, None) {
+        for (keyword, text) in text_chunks(key, mtime, size, None) {
             encoder
                 .add_text_chunk(keyword, text)
                 .context("adding a text chunk")?;
@@ -437,7 +443,7 @@ mod tests {
     fn a_thumbnail_written_is_found_until_the_file_changes() {
         let (dirs, root) = cache("round-trip");
         let key = key(Path::new("/tmp/picture.png"));
-        assert_eq!(lookup(&dirs, &key, 1000), Lookup::Missing);
+        assert_eq!(lookup(&dirs, &key, 1000, 10), Lookup::Missing);
 
         let mut bytes = Vec::new();
         {
@@ -454,8 +460,8 @@ mod tests {
         write(&dirs, &dirs.xlarge, &key, &bytes).expect("the temporary directory is writable");
 
         let found = dirs.xlarge.join(&key.name);
-        assert_eq!(lookup(&dirs, &key, 1000), Lookup::Fresh(found.clone()));
-        assert_eq!(lookup(&dirs, &key, 1001), Lookup::Missing);
+        assert_eq!(lookup(&dirs, &key, 1000, 10), Lookup::Fresh(found.clone()));
+        assert_eq!(lookup(&dirs, &key, 1001, 10), Lookup::Missing);
         assert_eq!(
             fs::metadata(&found).unwrap().permissions().mode() & 0o777,
             FILE_MODE
@@ -481,7 +487,7 @@ mod tests {
             uri: "file:///tmp/other.png".to_string(),
             name: key.name.clone(),
         };
-        assert_eq!(lookup(&dirs, &other, 1000), Lookup::Missing);
+        assert_eq!(lookup(&dirs, &other, 1000, 10), Lookup::Missing);
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -491,9 +497,11 @@ mod tests {
     fn a_failure_is_remembered_for_the_file_as_it_was() {
         let (dirs, root) = cache("failure");
         let key = key(Path::new("/tmp/broken.png"));
-        write_failure(&dirs, &key, 7).expect("the temporary directory is writable");
-        assert_eq!(lookup(&dirs, &key, 7), Lookup::Failed);
-        assert_eq!(lookup(&dirs, &key, 8), Lookup::Missing);
+        write_failure(&dirs, &key, 7, 100).expect("the temporary directory is writable");
+        assert_eq!(lookup(&dirs, &key, 7, 100), Lookup::Failed);
+        assert_eq!(lookup(&dirs, &key, 8, 100), Lookup::Missing);
+        // Finished within the second it was read half written in.
+        assert_eq!(lookup(&dirs, &key, 7, 4096), Lookup::Missing);
         assert_eq!(
             fs::metadata(&dirs.fail).unwrap().permissions().mode() & 0o777,
             DIR_MODE

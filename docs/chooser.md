@@ -160,7 +160,10 @@ is made again. What is written carries those two, `Thumb::Size`,
 in `tEXt` chunks ahead of the pixels, where a reader of the header alone
 finds them. A file this version cannot thumbnail is recorded as a one-pixel
 PNG under `fail/gamut-<version>`, so it is not tried again on every visit
-and a new version, which may read it, tries afresh. Directories are made
+and a new version, which may read it, tries afresh. A failure counts only
+while the file is the size it records as well: a modification time is
+whole seconds, and a file read half written and finished within the second
+would otherwise be a failure for good. Directories are made
 `0700` and files `0600`, and each file is written to a temporary name in
 the same directory and renamed into place: nothing reading the cache can
 open half a thumbnail, and the process leaving mid-write leaves nothing
