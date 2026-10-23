@@ -73,10 +73,21 @@ pub fn slot_height(slot: f32, size: Option<(u32, u32)>) -> f32 {
     (slot * shape).round()
 }
 
-/// A file's row, for a slot `slot` wide and a picture of `size`: its
-/// title, and under it the slot and the room below it.
-pub fn row_height(slot: f32, size: Option<(u32, u32)>) -> f32 {
-    TITLE_HEIGHT + TOP_INSET + slot_height(slot, size) + INSET
+/// A file's row, for a slot `slot` wide and a picture of `size`, on a
+/// device of `scale` physical pixels to the point: its title, and under it
+/// the slot and the room below it, made up to a whole number of the
+/// device's pixels. egui puts the scrolled rows on the device's grid, so
+/// a strip kept still while rows above the screen change height moves by
+/// whole rows of them: one of another height would leave every row on
+/// screen up to half a device pixel from where it was, and the words
+/// drawn on whole pixels over it a pixel up or down.
+pub fn row_height(slot: f32, size: Option<(u32, u32)>, scale: f32) -> f32 {
+    let height = TITLE_HEIGHT + TOP_INSET + slot_height(slot, size) + INSET;
+    if scale > 0.0 {
+        (height * scale).ceil() / scale
+    } else {
+        height
+    }
 }
 
 /// What the panel takes off the picture, for a slot `slot` wide: a row, and
@@ -682,13 +693,13 @@ fn file(
         let galley = super::chooser::lit(ui, &value, &[], font, ink, ink, room);
         let size = galley.size() + vec2(2.0 * VALUE_PAD_X, 2.0 * VALUE_PAD_Y);
         // On whole logical pixels, so that the words sit as crisply as the
-        // title's do.
+        // title's do — counted from the row's top, so that they move with
+        // the row and with nothing else.
         let backing = egui::Rect::from_min_size(
             pos2(
-                slot.center().x - size.x / 2.0,
-                slot.bottom() - VALUE_LIFT - size.y,
-            )
-            .round(),
+                (slot.center().x - size.x / 2.0).round(),
+                rect.top() + (slot.bottom() - VALUE_LIFT - size.y - rect.top()).round(),
+            ),
             size,
         );
         painter.rect_filled(
@@ -1154,9 +1165,11 @@ mod tests {
             "a screenshot"
         );
         assert_eq!(
-            row_height(200.0, None),
+            row_height(200.0, None, 1.0),
             TITLE_HEIGHT + TOP_INSET + 200.0 + INSET
         );
+        // 234 points are 374.4 pixels at 1.6, made up to 375.
+        assert_eq!(row_height(200.0, None, 1.6), 375.0 / 1.6);
     }
 
     #[test]

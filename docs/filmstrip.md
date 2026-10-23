@@ -134,8 +134,14 @@ and when the same files arrive with other `tops` it sets the offset
 `rescrolled` works out: the file on screen, if its row was in view, keeps
 its middle where it was on the screen and is then brought wholly into
 view; otherwise the row at the top keeps the share of it above the edge.
-"The same files" is `Input::listing`, a count `Filmstrip::relist` bumps
-whenever the list's files or their order change. A new listing is a
+Keeping a row still is only exact because `filmstrip::row_height`
+makes every row a whole number of device pixels: egui puts the scrolled
+content on the device's grid, so at a scale like 1.6 a row a whole number
+of points tall above the screen would, as it changed height, leave every
+row on screen up to half a device pixel from where it was, and the words
+rounded to whole pixels over them would flicker a pixel up and down as
+the headers came in. "The same files" is `Input::listing`, a count
+`Filmstrip::relist` bumps whenever the list's files or their order change. A new listing is a
 different thing: row `n` is then another file, so there is no row at the
 top to keep. What `anchored` keeps instead is the file on screen, by its
 own row before and after, where its row was in view: a directory being

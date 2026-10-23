@@ -50,6 +50,8 @@ pub(super) struct Filmstrip {
     /// The width each thumbnail is fitted into, which the panel's width
     /// and every file's row are made from: where its edge was last dragged.
     slot: f32,
+    /// Physical pixels to the point, which every row is a whole number of.
+    scale: f32,
 }
 
 impl Default for Filmstrip {
@@ -69,6 +71,7 @@ impl Default for Filmstrip {
             reveal: false,
             visible: 0..0,
             slot: filmstrip::SLOT_DEFAULT,
+            scale: 1.0,
         }
     }
 }
@@ -103,6 +106,15 @@ impl Filmstrip {
         let slot = slot.clamp(filmstrip::SLOT_MIN, filmstrip::SLOT_MAX);
         if slot != self.slot {
             self.slot = slot;
+            self.dirty = true;
+        }
+    }
+
+    /// Lays the rows out for a device of `scale` physical pixels to the
+    /// point, each a whole number of them tall.
+    pub(super) fn set_scale(&mut self, scale: f32) {
+        if scale != self.scale {
+            self.scale = scale;
             self.dirty = true;
         }
     }
@@ -248,7 +260,7 @@ impl Filmstrip {
         let mut top = 0.0;
         tops.push(top);
         for row in &rows {
-            top += filmstrip::row_height(self.slot, row.size);
+            top += filmstrip::row_height(self.slot, row.size, self.scale);
             tops.push(top);
         }
         (Arc::from(rows), Arc::from(tops))
@@ -334,8 +346,8 @@ mod tests {
         assert_eq!(input.rows[2].format, None, "not read yet");
         assert_eq!(input.current, Some(2));
         let (wide, square) = (
-            row_height(SLOT_DEFAULT, Some((300, 200))),
-            row_height(SLOT_DEFAULT, None),
+            row_height(SLOT_DEFAULT, Some((300, 200)), 1.0),
+            row_height(SLOT_DEFAULT, None, 1.0),
         );
         assert!(wide < square);
         assert_eq!(
@@ -399,7 +411,11 @@ mod tests {
         assert_eq!(input.slot, 200.0);
         assert_eq!(
             &*input.tops,
-            &[0.0, row_height(200.0, None), 2.0 * row_height(200.0, None)]
+            &[
+                0.0,
+                row_height(200.0, None, 1.0),
+                2.0 * row_height(200.0, None, 1.0)
+            ]
         );
         assert!(!input.reveal);
 

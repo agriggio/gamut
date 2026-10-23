@@ -31,6 +31,9 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
 
 - The file list no longer slides under the pointer when files arrive above
   the one on screen.
+- On a display scaled by a fraction, such as 1.6, the words over the file
+  list's thumbnails no longer flicker a pixel up and down while the list's
+  pictures are read.
 
 ## 0.12.2 - 2026-10-22
 

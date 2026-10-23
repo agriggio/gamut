@@ -2110,6 +2110,7 @@ impl App {
         };
         let filmstrip = if self.filmstrip_showing() {
             self.filmstrip.follow(&self.files);
+            self.filmstrip.set_scale(sight.scale);
             let (files, chooser) = (&self.files, &self.chooser);
             let glimpsed = &self.glimpsed;
             Some(self.filmstrip.input(
