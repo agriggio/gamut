@@ -257,7 +257,12 @@ its bounds are reported in the file's own units.
 
 **A no-data value is honored** where the file records one, and kept out of
 the statistics — so a clipped raster's −9999 fill cannot set the bottom of the
-automatic window and squash the real terrain into a sliver.
+automatic window and squash the real terrain into a sliver. It is the value as
+the file stores it, before any scaling: 255 in an 8-bit raster, not white.
+Zoomed out, each screen pixel shows the average of the data under it with the
+no-data left out, so thin lines across an empty raster — streams, divides,
+roads — stay at their own value rather than fading into the fill. A color
+pixel counts as no data only when every channel holds the value.
 
 Caveats:
 

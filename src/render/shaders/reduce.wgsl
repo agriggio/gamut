@@ -3,7 +3,10 @@
 // Each destination texel is the exact area average of the STEP x STEP source
 // texels under it, clipped to the source's extent so that an image whose size
 // is not a multiple of STEP averages the edge over what is actually there
-// rather than over padding.
+// rather than over padding. A picture with a no-data sentinel leaves it out:
+// the first level holds each block's data premultiplied by the share of the
+// block that is data, and that share, as `with_coverage` in texel.wgsl
+// writes them, and every level after it averages those as they are.
 
 struct Params {
     // How much of the source texture the image occupies, in source texels.
@@ -16,6 +19,8 @@ struct Params {
     map_size: vec2<f32>,
     base_offset: vec4<f32>,
     alternate_offset: vec4<f32>,
+    nodata: vec2<f32>, // (value, tolerance): the sentinel as a texel reads
+    coverage: u32,     // 0 no sentinel, 1 the picture as uploaded, 2 a level with its coverage
 };
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -50,7 +55,11 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
                 continue;
             }
             let weight = wx * wy;
-            sum = sum + load(vec2<i32>(x, y)) * weight;
+            var texel = load(vec2<i32>(x, y));
+            if params.coverage == 1u {
+                texel = with_coverage(texel, covered(vec2<i32>(x, y)));
+            }
+            sum = sum + texel * weight;
             total = total + weight;
         }
     }

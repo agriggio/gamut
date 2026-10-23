@@ -19,6 +19,7 @@ use crate::image::AlphaMode;
 use super::gpu::{self, Fullscreen};
 use super::image_layer::Lifted;
 use super::shader_codes;
+use super::upload::Sentinel;
 
 /// Size ratio between one level and the next, per axis.
 pub const STEP: u32 = 4;
@@ -36,6 +37,9 @@ struct Params {
     map_size: [f32; 2],
     base_offset: [f32; 4],
     alternate_offset: [f32; 4],
+    nodata: [f32; 2],
+    coverage: u32,
+    _pad: u32,
 }
 
 /// What a chain is built from: the image as uploaded, plus what the shader
@@ -57,6 +61,11 @@ pub struct Source<'a> {
     /// one, so that every level holds lifted light. The levels after the
     /// first read light already lifted.
     pub lift: Lifted<'a>,
+    /// The picture's no-data sentinel, which the first pass leaves out of
+    /// every block, writing the share of the block that is data beside its
+    /// mean — into a level whose `format` has room for it. `None` for the
+    /// marks' chain, and for a picture with none.
+    pub nodata: Option<Sentinel>,
 }
 
 /// One level: its texture, and everything the pass that writes it was
@@ -187,6 +196,7 @@ impl Reducer {
             swizzle,
             alpha,
             lift,
+            nodata,
         } = source;
         let occupied = occupied.unwrap_or([size[0] as f32, size[1] as f32]);
         let pipeline = self.pipeline(device, format);
@@ -220,6 +230,9 @@ impl Reducer {
                 map_size: lift.map_size,
                 base_offset: lift.base_offset,
                 alternate_offset: lift.alternate_offset,
+                nodata: nodata.map_or([0.0; 2], |nodata| [nodata.value, nodata.tolerance]),
+                coverage: shader_codes::coverage(nodata.is_some(), index),
+                _pad: 0,
             };
             let input = if index == 0 {
                 source.clone()
@@ -351,7 +364,8 @@ mod tests {
         wgsl::assert_params_match(
             super::super::REDUCE_SHADER,
             wgsl::fields!(Params:
-                extent, step, swizzle, alpha_mode, lift, map_size, base_offset, alternate_offset
+                extent, step, swizzle, alpha_mode, lift, map_size, base_offset, alternate_offset,
+                nodata, coverage
             ),
             size_of::<Params>(),
         );

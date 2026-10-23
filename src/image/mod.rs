@@ -421,6 +421,19 @@ impl DecodedImage {
         self.channels().is_gray()
     }
 
+    /// Whether a pixel whose color components are `stored`, as the file
+    /// stores them — counts for an integer picture, the value itself for a
+    /// float — is the no-data sentinel: every one of them equal to it. Held
+    /// to the stored value rather than the decoded one because that is what
+    /// the sentinel is written in, so that no curve or table can bring two
+    /// codes to the same value and drop both. A sentinel no sample can hold
+    /// — a fraction or a value past the full scale of an integer picture, a
+    /// NaN — equals nothing and leaves out nothing.
+    pub fn is_nodata(&self, stored: impl IntoIterator<Item = f32>) -> bool {
+        self.nodata
+            .is_some_and(|sentinel| stored.into_iter().all(|value| value == sentinel))
+    }
+
     /// The pixel at `(x, y)`, or `None` when that is outside the image.
     ///
     /// Reads one pixel the way `render::upload` and `shaders/image.wgsl`

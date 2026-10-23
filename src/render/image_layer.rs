@@ -14,7 +14,7 @@ use super::gpu::{self, Fullscreen};
 use super::placement::{Glass, Placement, Upscale};
 use super::reduce::{self, Level, Reducer};
 use super::shader_codes;
-use super::upload::{self, Capabilities, Layout, Reduced};
+use super::upload::{self, Capabilities, Layout, Reduced, Sentinel};
 use crate::image::auxiliary::Showing;
 use crate::image::gain_map::{Data, GainMap, Table};
 use crate::image::orient::Turn;
@@ -67,6 +67,13 @@ struct Params {
     /// pixels, for the cut quad: its own corners are the circle's square, so
     /// the shader reads the image's place off this instead.
     picture: [f32; 4],
+    /// The no-data sentinel as a texel reads, `(value, tolerance)` — see
+    /// [`upload::Sentinel`] — and zeros for a picture with none.
+    nodata: [f32; 2],
+    /// How the level drawn from holds the sentinel: see
+    /// [`shader_codes::coverage`].
+    coverage: u32,
+    _pad: u32,
 }
 
 /// A picture's gain map on the device: the map as uploaded, and the table
@@ -235,6 +242,9 @@ pub struct GpuImage {
     swizzle: u32,
     alpha: AlphaMode,
     primaries: [[f32; 4]; 3],
+    /// The picture's no-data sentinel as its texels read, which a minified
+    /// draw and the coarse chain leave out of their averages.
+    nodata: Option<Sentinel>,
     /// The gain map, where the picture has one.
     lift: Option<Lift>,
     pub reduced: Option<Reduced>,
@@ -656,10 +666,11 @@ impl ImageLayer {
                     view: &image.view,
                     size: image.size,
                     extent: None,
-                    format: image.layout.level_format(),
+                    format: image.layout.level_format(image.nodata.is_some()),
                     swizzle: image.swizzle,
                     alpha: image.alpha,
                     lift: Lifted::of(image.lift.as_ref(), &self.blank_lift),
+                    nodata: image.nodata,
                 },
             );
             image.chain_built = true;
@@ -980,6 +991,7 @@ impl Upload {
             swizzle: shader_codes::swizzle(image.channels()),
             alpha: image.alpha,
             primaries: to_columns(image.color.primaries.to_bt709()),
+            nodata: upload::sentinel(image, plan.layout),
             lift,
             reduced: plan.reduced,
         })
@@ -1017,6 +1029,7 @@ impl Upload {
         held.swizzle = shader_codes::swizzle(image.channels());
         held.alpha = image.alpha;
         held.primaries = to_columns(image.color.primaries.to_bt709());
+        held.nodata = upload::sentinel(image, plan.layout);
         Ok(true)
     }
 
@@ -1215,6 +1228,11 @@ fn params_for(
             [glass.center[0], glass.center[1], glass.radius, cut]
         }),
         picture: [placement.x, placement.y, placement.width, placement.height],
+        nodata: image
+            .nodata
+            .map_or([0.0; 2], |nodata| [nodata.value, nodata.tolerance]),
+        coverage: shader_codes::coverage(image.nodata.is_some(), level),
+        _pad: 0,
     }
 }
 
@@ -1358,6 +1376,7 @@ fn write_marks(
             swizzle: shader_codes::swizzle(Channels::Rgb),
             alpha: AlphaMode::Opaque,
             lift: Lifted::of(None, marking.blank_lift),
+            nodata: None,
         },
         &mut marks.rest,
     );
@@ -1393,7 +1412,7 @@ mod tests {
             wgsl::fields!(Params:
                 offset, scale, window, texels_per_pixel, extent, marks, turn, primaries,
                 swizzle, alpha_mode, colormap, resampler, lift, level, map_size,
-                base_offset, alternate_offset, clip, picture
+                base_offset, alternate_offset, clip, picture, nodata, coverage
             ),
             size_of::<Params>(),
         );

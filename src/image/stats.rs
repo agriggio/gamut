@@ -119,7 +119,8 @@ impl Axis {
     /// [`Plot::bin_of`] for why it is read from [`Sample::linear`].
     pub fn place_of(self, image: &DecodedImage, sample: &Sample) -> Option<f32> {
         let value = luminance(sample.linear(), sample.channels, image.mosaic);
-        if !value.is_finite() || image.nodata.is_some_and(|sentinel| value == sentinel) {
+        let colors = &sample.stored()[..sample.channels.color_count()];
+        if !value.is_finite() || image.is_nodata(colors.iter().copied()) {
             return None;
         }
         Some(self.place(value))
@@ -903,15 +904,16 @@ impl Tally {
         Some(((below as f64 + within as f64 / 2.0) / total as f64) as f32)
     }
 
-    /// Takes every pixel whose value `decode` makes `sentinel` of out of a
-    /// tally of codes: the no-data value, which is no measurement.
-    fn without(&mut self, sentinel: f32, decode: impl Fn(f32) -> f32) {
-        if let Tally::Codes { counts, full } = self {
-            for (code, count) in counts.iter_mut().enumerate() {
-                if decode(code as f32 / *full) == sentinel {
-                    *count = 0;
-                }
-            }
+    /// Takes every sample of the code `sentinel` out of a tally of codes:
+    /// the no-data value, which is no measurement. A sentinel that is no
+    /// code — a fraction, or past the full scale — takes nothing.
+    fn without(&mut self, sentinel: f32) {
+        if let Tally::Codes { counts, .. } = self
+            && sentinel.fract() == 0.0
+            && sentinel >= 0.0
+            && let Some(count) = counts.get_mut(sentinel as usize)
+        {
+            *count = 0;
         }
     }
 
@@ -1209,9 +1211,22 @@ impl<'a> Pass<'a> {
         self.lift.is_some() || self.matrix.is_some()
     }
 
+    /// Whether one sample as stored is the sentinel: what a stored
+    /// channel's own tally leaves out, each channel being plotted on its own.
     #[inline]
-    fn is_data(&self, value: f32) -> bool {
-        value.is_finite() && self.nodata.is_none_or(|sentinel| value != sentinel)
+    fn is_sentinel<R: Raw>(&self, sample: R) -> bool {
+        self.nodata
+            .is_some_and(|sentinel| sample.value() == sentinel)
+    }
+
+    /// Whether the pixel whose samples are `raw` is no data, which nothing
+    /// measured from its color counts: see [`DecodedImage::is_nodata`].
+    #[inline]
+    fn is_nodata<R: Raw>(&self, raw: &[R]) -> bool {
+        self.nodata.is_some()
+            && self
+                .image
+                .is_nodata(raw[..self.colors].iter().map(|sample| sample.value()))
     }
 
     /// The rows `rows` of `data`, each pixel handed to `visit`.
@@ -1423,16 +1438,17 @@ impl<R: Raw> Visit<R> for Counting<'_> {
         let pass = self.pass;
         let tallies = &mut self.tallies;
         let colors = pass.colors;
+        let data = !pass.is_nodata(raw);
         // The channels as stored. An integer's code goes in whatever it
-        // decodes to — the no-data code is taken out afterwards — where a
-        // float is checked as it goes.
+        // is — the no-data code is taken out afterwards — where a float is
+        // checked as it goes.
         if R::INTEGER {
             for (tally, sample) in tallies.stored.iter_mut().zip(raw) {
                 add_code(tally, sample.code());
             }
         } else {
             for (channel, (tally, sample)) in tallies.stored.iter_mut().zip(raw).enumerate() {
-                if pass.is_data(linear[channel]) {
+                if linear[channel].is_finite() && !pass.is_sentinel(*sample) {
                     add_key(tally, sample.value());
                 }
             }
@@ -1440,7 +1456,7 @@ impl<R: Raw> Visit<R> for Counting<'_> {
         // The channels as the working space has them, where it moves them.
         if let Some(planes) = tallies.planes.as_mut() {
             for (plane, &value) in planes.iter_mut().zip(shown) {
-                if pass.is_data(value) {
+                if data && value.is_finite() {
                     add_key(plane, value);
                 }
             }
@@ -1448,12 +1464,12 @@ impl<R: Raw> Visit<R> for Counting<'_> {
         match tallies.luma.as_mut() {
             Some(luma) => {
                 for &value in &shown[..colors] {
-                    if pass.is_data(value) {
+                    if data && value.is_finite() {
                         tallies.peak = tallies.peak.max(value);
                     }
                 }
                 let value = luminance(shown, pass.channels, pass.image.mosaic);
-                if pass.is_data(value) {
+                if data && value.is_finite() {
                     tallies.counted += 1;
                     tallies.min = tallies.min.min(value);
                     tallies.max = tallies.max.max(value);
@@ -1470,7 +1486,7 @@ impl<R: Raw> Visit<R> for Counting<'_> {
                 if clear && let Some(tally) = tallies.clear.as_mut() {
                     if R::INTEGER {
                         add_code(tally, raw[0].code());
-                    } else if pass.is_data(linear[0]) {
+                    } else if data && linear[0].is_finite() {
                         add_key(tally, raw[0].value());
                     }
                 }
@@ -1540,8 +1556,10 @@ impl<R: Raw> Visit<R> for Binning<'_> {
     fn pixel(&mut self, _x: u32, _y: u32, raw: &[R], linear: &[f32], shown: &[f32], _clear: bool) {
         let pass = self.pass;
         let axis = self.axis;
+        let data = !pass.is_nodata(raw);
         for (channel, (range, bins)) in self.stored.iter_mut().enumerate() {
-            if pass.is_data(linear[channel])
+            if linear[channel].is_finite()
+                && !pass.is_sentinel(raw[channel])
                 && let Some(bin) = Self::bin(*range, axis.place_stored(raw[channel].value()))
             {
                 bins[bin] += 1;
@@ -1549,7 +1567,8 @@ impl<R: Raw> Visit<R> for Binning<'_> {
         }
         if let Some(planes) = self.planes.as_mut() {
             for (bins, &value) in planes.iter_mut().zip(shown) {
-                if pass.is_data(value)
+                if data
+                    && value.is_finite()
                     && let Some(bin) = Self::bin(self.range, axis.place(value))
                 {
                     bins[bin] += 1;
@@ -1558,7 +1577,8 @@ impl<R: Raw> Visit<R> for Binning<'_> {
         }
         if let Some(bins) = self.luma.as_mut() {
             let value = luminance(shown, pass.channels, pass.image.mosaic);
-            if pass.is_data(value)
+            if data
+                && value.is_finite()
                 && let Some(bin) = Self::bin(self.range, axis.place(value))
             {
                 bins[bin] += 1;
@@ -1607,12 +1627,11 @@ impl<'a> Scan<'a> {
         });
         let mut tallies = counting.tallies;
         if let Some(sentinel) = pass.nodata {
-            let transfer = pass.transfer;
             for tally in &mut tallies.stored {
-                tally.without(sentinel, |fraction| transfer.to_linear(fraction));
+                tally.without(sentinel);
             }
             if let Some(clear) = tallies.clear.as_mut() {
-                clear.without(sentinel, |fraction| transfer.to_linear(fraction));
+                clear.without(sentinel);
             }
         }
         let stored = std::mem::take(&mut tallies.stored)
@@ -3513,6 +3532,61 @@ mod tests {
         assert_eq!(stats.counted, 3);
         assert_eq!((stored.planes[0].min, stored.planes[0].max), (1.0, 3.0));
         assert_eq!(stored.planes[0].range, [1.0, 3.0]);
+    }
+
+    /// The sentinel is a code, as the file writes it, not what the code
+    /// decodes to: the top of a 16-bit picture's range is left out, and so
+    /// is the top of an 8-bit one under a curve, which decodes to white —
+    /// and the pointer's marker on the plot finds nowhere to stand on either.
+    #[test]
+    fn the_no_data_value_is_the_code_the_file_writes() {
+        let mut wide = linear_gray(vec![1000, 2000, 4095, u16::MAX]);
+        wide.nodata = Some(65535.0);
+        let (stats, stored) = Stats::scan_both(&wide);
+        assert_eq!(stats.counted, 3);
+        assert!((stats.max - 4095.0 / 65535.0).abs() < 1e-6, "{}", stats.max);
+        assert!((stored.planes[0].max - 4095.0 / 65535.0).abs() < 1e-6);
+        let sample = wide.sample(3, 0, None).expect("in the picture");
+        assert_eq!(Axis::Stops.place_of(&wide, &sample), None);
+        let sample = wide.sample(2, 0, None).expect("in the picture");
+        assert!(Axis::Stops.place_of(&wide, &sample).is_some());
+
+        let mut curved = DecodedImage {
+            samples: Samples::U8 {
+                channels: Channels::Gray,
+                data: vec![10, 200, 255],
+            },
+            width: 3,
+            color: ColorSpace {
+                transfer: Transfer::Srgb,
+                primaries: Primaries::Bt709,
+            },
+            ..linear_gray(vec![0])
+        };
+        curved.nodata = Some(255.0);
+        let stats = Stats::scan(&curved);
+        assert_eq!(stats.counted, 2);
+        assert!((stats.max - Transfer::Srgb.to_linear(200.0 / 255.0)).abs() < 1e-6);
+    }
+
+    /// A color pixel is no data only where every channel holds the
+    /// sentinel; one with a channel off it is a color, measured as one. A
+    /// sentinel no code can be leaves every pixel in.
+    #[test]
+    fn a_color_pixel_is_no_data_only_in_every_channel() {
+        let mut color = DecodedImage {
+            samples: Samples::U16 {
+                channels: Channels::Rgb,
+                data: vec![0, 0, 0, 0, 0, 5000, 1000, 1000, 1000],
+            },
+            width: 3,
+            ..linear_gray(vec![0])
+        };
+        color.nodata = Some(0.0);
+        assert_eq!(Stats::scan(&color).counted, 2);
+
+        color.nodata = Some(0.5);
+        assert_eq!(Stats::scan(&color).counted, 3);
     }
 
     /// A photograph's integer channels share the whole range their samples
