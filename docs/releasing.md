@@ -133,12 +133,10 @@ git push
 ```
 
 The `macOS` workflow runs when `Release` has made the release, and builds
-what the tap's formula installs and the disk image besides: a bottle for each
-macOS in its matrix, and `gamut-X.Y.Z-arm64.dmg`, a `Gamut.app` that carries
-its libraries (`bin/bundle --standalone`, `bin/dmg`). Everything is attached
-to the release, with `gamut.rb`: the formula as it is with its `bottle do`
-block, which is the file to put in the tap. The same workflow run by hand,
-with no tag, does this for the head of master as the `nightly` release.
+`gamut-X.Y.Z-arm64.dmg`, a `Gamut.app` that carries its libraries
+(`bin/bundle --standalone`, `bin/dmg`), which it attaches to the release. The
+same workflow run by hand, with no tag, does this for the head of master as
+the `nightly` release.
 
 The copy replaces the tap's file whole, so a bottle block the tap's
 `brew pr-pull` workflow added for the previous version goes with it, as it
