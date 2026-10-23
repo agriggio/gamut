@@ -135,28 +135,6 @@ if [ "$STANDALONE" = 1 ]; then
     mkdir "$FRAMEWORKS"
     bring "$APP/Contents/MacOS/gamut" "$BINARY"
 
-    # libheif's codec plugins, where Homebrew's libheif-plugins has them, or
-    # LIBHEIF_PLUGINS says: libraries libheif opens by itself, so nothing
-    # links them. They go in Frameworks/libheif, each finding what it needs
-    # one directory up, and the program tells libheif where they are.
-    PLUGINS=${LIBHEIF_PLUGINS:-$(brew --prefix libheif-plugins 2>/dev/null)/lib/libheif}
-    if [ -d "$PLUGINS" ]; then
-        mkdir "$FRAMEWORKS/libheif"
-        for plugin in "$PLUGINS"/*.dylib; do
-            # Not `name`, which `bring` leaves as its last library's.
-            copy="$FRAMEWORKS/libheif/$(basename "$plugin")"
-            cp -L "$plugin" "$copy"
-            chmod u+w "$copy"
-            install_name_tool -id "@rpath/libheif/$(basename "$plugin")" "$copy"
-            bring "$copy" "$plugin"
-            for dir in $(rpaths "$copy"); do
-                install_name_tool -delete_rpath "$dir" "$copy"
-            done
-            install_name_tool -add_rpath @loader_path/.. "$copy"
-        done
-    else
-        echo "no libheif plugins at $PLUGINS: the bundle has the codecs libheif was built with" >&2
-    fi
     # The binary's own rpaths may point at the libraries it was built with,
     # which would be found first on a Mac that has them.
     for dir in $(rpaths "$APP/Contents/MacOS/gamut"); do

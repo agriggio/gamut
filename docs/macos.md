@@ -156,16 +156,11 @@ library's own libraries come too. The binary's rpaths are replaced by one,
 `@executable_path/../Frameworks`, since one pointing at Homebrew's lib would
 be found first on a Mac that has it. The script then fails if any file still
 names a path under `/opt/`, `/usr/local/` or `/Users/`, and signs each copy
-ad hoc before the bundle, which seals them. What no name reaches is what
-a library loads by itself at run time, which is libheif's codec plugins,
-Homebrew's `libheif-plugins`. They are copied into `Frameworks/libheif`, each
-with the libraries it links, and given the rpath `@loader_path/..`; the
-program sets `LIBHEIF_PLUGIN_PATH` to that directory in `main`, before it
-has a second thread, since the directory libheif was built to look in is
-Homebrew's. A bundle made where the plugins are not installed has the codecs
+ad hoc before the bundle, which seals them. What it does not copy is what a
+library loads by itself at run time: libheif's plugin directory, which
+Homebrew fills only from `libheif-plugins`, so an image carries the codecs
 libheif was built with and no others. No notice of the libraries' licenses
-goes in the bundle yet, and libx265, ffmpeg's and libx264, which libheif and
-its plugins link, are GPL.
+goes in the bundle yet, and libx265, which libheif links, is GPL.
 
 `bin/dmg` puts the bundle on a disk image, with a link to `/Applications`,
 named for the bundle's version and the Mac's architecture. The `macOS`

@@ -93,28 +93,7 @@ pub(crate) fn report(error: &anyhow::Error) {
     eprintln!("gamut: {}", escape_controls(&format!("{error:#}")));
 }
 
-/// A bundle that carries libheif's codec plugins says where they are.
-/// libheif looks where it was built to, a Homebrew prefix that a Mac without
-/// Homebrew has none of, and reads this variable as well. Done first, before
-/// a thread exists to read the environment as it is changed.
-#[cfg(target_os = "macos")]
-fn use_bundled_plugins() {
-    let Ok(exe) = std::env::current_exe() else {
-        return;
-    };
-    let Some(plugins) = exe.parent().map(|dir| dir.join("../Frameworks/libheif")) else {
-        return;
-    };
-    if plugins.is_dir() && std::env::var_os("LIBHEIF_PLUGIN_PATH").is_none() {
-        // SAFETY: nothing else is running yet; this is the first thing the
-        // only thread does.
-        unsafe { std::env::set_var("LIBHEIF_PLUGIN_PATH", plugins) };
-    }
-}
-
 fn main() -> ExitCode {
-    #[cfg(target_os = "macos")]
-    use_bundled_plugins();
     timing::begin();
     match run() {
         Ok(code) => code,
