@@ -197,6 +197,25 @@ actually holds it.
 Zooming leaves fit mode; panning does not, so Space then Down scrolls through a
 tall image at fit-width.
 
+A drag goes past the image's edge, until the edge is at the middle of the
+viewport: `view::OVERHANG`, a share of the viewport, is a half. What sits over
+the picture — the region's words, a dialog, a panel, another window — would
+otherwise cover the edge for good, and pulling the edge out from under it is
+the quickest way round. The overhang is inside `pan_limit`'s floor rather than
+added to it, so that at a smaller share an axis has none while the image is
+short of `1 − 2 × OVERHANG` of the viewport and gains it smoothly as a zoom
+brings the image up, rather than coming loose at once at the zoom where it
+starts to overflow; at a half the floor is never reached, and every picture,
+fitted or small, can be dragged. `can_pan` reads the limit, where the minimap
+reads `off_screen`, whether any of the image is off screen as it is shown. A
+view pulled past the image's edge is no longer the fit the `Space` round left
+it at, so `cycle_fit` puts the whole image back first, centered, before the
+round goes on; a filled view scrolled along the image is not pulled past it
+(`View::panned` measures from the edge, not the center), and goes on to actual
+size as before. The pan keys go to the edge and not past it — `pan_to_edge`
+takes the limit without the overhang — since the edge is what they are named
+for.
+
 A pan or zoom asked for by name — a key, a notch of the wheel, a choice from
 the zoom menu — is a move of 200 ms rather than a cut, and one asked for
 before the last has landed starts from wherever the view has got to, with the
@@ -212,8 +231,9 @@ space-scale line every point of the image crosses the screen in a straight
 line at a steady rate, and whatever a zoom is anchored on stays put from the
 first frame to the last. The views along the line are not held within the
 pan limit as a settled view is: the limit is `max(linear, 0)` in these
-coordinates, bending where the image stops overflowing the viewport, so the
-line from a fit to a zoom on a detail crosses it — for a few frames the
+coordinates, bending — at an overhang short of a half — where the image
+reaches `1 − 2 × OVERHANG` of the viewport, so the line from a view short of
+that to a zoom on a detail crosses it — for a few frames the
 image overflows one edge while still short of the other. `View::at` marks
 the view it makes as moving, and `placement` shows it where the line puts it;
 clamped, the move would pin the picture against the edge and then let it
@@ -239,9 +259,9 @@ actual size itself, and from there to the whole image, so that in and out
 again is two double-clicks on the same spot. Actual size is judged by the
 view held rather than the view shown, so a second double-click during the
 move the first began still goes back out, and by a zoom set by hand, so a
-fit that comes out at 100% still goes in. The anchor cannot always be honored: an axis the image does not
-overflow stays centered, and a view against an edge stops there, by the same
-`clamp_pan` a drag is held by. The two fits have no anchor — a fit with the
+fit that comes out at 100% still goes in. The anchor cannot always be honored: an axis the image is well
+short of stays centered, and a view at the limit past an edge stops there,
+by the same `clamp_pan` a drag is held by. The two fits have no anchor — a fit with the
 view left off to one side would show a corner of the image it had just been
 asked to fit — so `set_fit` centers. Apart from the copying chords and `Ctrl` with an
 arrow, keys held with Ctrl, Alt or Super are ignored, so window-manager chords
@@ -280,7 +300,8 @@ On by default because it costs nothing until it is wanted: it stays off screen
 for as long as the whole image is in view, so the first zoom that cuts
 something off is the moment it appears, and that is the moment it is useful.
 
-It only appears while some of the image is off screen. A view holding all of
+It only appears while some of the image is off screen — larger than the
+window, or a fitted picture dragged part way out of it. A view holding all of
 it is already its own map, and the thumbnail would be a smaller copy of the
 window laid over the corner of it, so the widget leaves and comes back on the
 zoom that first cuts something off. The toggle keeps its state through that:
@@ -293,8 +314,12 @@ frame after that until it comes up, so holding on and moving keeps the
 marked-out part under the hand. It comes back from the pass as
 `Command::Center`, carrying the image pixel the hand is on, and
 `View::center_on` moves the pan there — clamped as any pan is, so a press by
-an edge stops with the edge at the window's, and an axis the image does not
-overflow stays centered. Not animated, on the rule the rest of the view
+an edge stops with the edge as far inside the window's as a drag goes, and
+an axis the image is well short of stays centered. The marker is the
+viewport's rectangle, not clamped to the thumbnail, so a view past the
+image's edge has it hang off the thumbnail's side by as much, over the
+picture; it is cut off at the content area rather than drawn over the
+chrome, and the wash stays on the thumbnail. Not animated, on the rule the rest of the view
 follows: this is the hand on the view, as a drag on the picture is, and it
 lands where it is put. The press is read with `is_pointer_button_down_on`
 rather than `clicked` or `dragged`, both of which wait — the one for the

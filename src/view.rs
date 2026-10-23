@@ -8,6 +8,12 @@ pub const ZOOM_STEP: f32 = 1.25;
 const MIN_ZOOM: f32 = 0.02;
 const MAX_ZOOM: f32 = 64.0;
 
+/// How far past its edge the picture may be dragged, as a share of the
+/// viewport: room to pull an edge out from under whatever is over it — a
+/// panel, a dialog, another window. At a half, the edge goes as far as the
+/// middle of the viewport.
+const OVERHANG: f32 = 0.5;
+
 /// What the image is measured against when it is fitted: the viewport takes
 /// the image in, or the image covers the viewport.
 ///
@@ -251,22 +257,26 @@ impl View {
         }
     }
 
-    /// How far the pan may go from the center on each axis before the image's
-    /// edge reaches the viewport's, and so where panning that way stops. Zero
-    /// on an axis the image does not overflow, which is the axis it stays
-    /// centered on.
-    fn pan_limit(image: [f32; 2], viewport: [f32; 2], zoom: f32) -> [f32; 2] {
+    /// How far the pan may go from the center on each axis: until the image's
+    /// edge is `overhang` of the viewport past the viewport's own, and so
+    /// where panning that way stops. Zero on an axis the image is too far
+    /// short of the viewport to reach that, which is the axis it stays
+    /// centered on. The overhang is inside the floor, so the limit grows
+    /// from nothing as a zoom brings the image toward the viewport's size
+    /// rather than jumping out at the zoom where it starts to overflow.
+    fn pan_limit(image: [f32; 2], viewport: [f32; 2], zoom: f32, overhang: f32) -> [f32; 2] {
         let limit = |image_extent: f32, viewport_extent: f32| {
-            (image_extent / 2.0 - viewport_extent / (2.0 * zoom)).max(0.0)
+            (image_extent / 2.0 - viewport_extent * (0.5 - overhang) / zoom).max(0.0)
         };
         [limit(image[0], viewport[0]), limit(image[1], viewport[1])]
     }
 
-    /// Keeps the image from being dragged away from the viewport: when it is
-    /// larger than the viewport you can pan up to its edges and no further,
-    /// and when it is smaller it stays centered on that axis.
+    /// Keeps the image from being dragged away from the viewport: it can be
+    /// panned until its edge is [`OVERHANG`] of the viewport past the
+    /// viewport's and no further, and when it is well short of the viewport
+    /// it stays centered on that axis.
     fn clamp_pan(pan: [f32; 2], image: [f32; 2], viewport: [f32; 2], zoom: f32) -> [f32; 2] {
-        let [lx, ly] = Self::pan_limit(image, viewport, zoom);
+        let [lx, ly] = Self::pan_limit(image, viewport, zoom, OVERHANG);
         [pan[0].clamp(-lx, lx), pan[1].clamp(-ly, ly)]
     }
 
@@ -280,13 +290,37 @@ impl View {
         }
     }
 
-    /// Whether the view has anywhere to pan to. False when the whole image is
-    /// on screen — at `Fit::Whole`, or for anything smaller than the viewport
-    /// — which is the one state where a drag can do nothing at all.
+    /// Whether the view has anywhere to pan to. False while the image is too
+    /// far short of the viewport on both axes for any overhang — at
+    /// `Fit::Whole` on a window much wider than the picture, or for anything
+    /// small — which is the one state where a drag can do nothing at all.
     pub fn can_pan(&self, image: [f32; 2], viewport: Viewport) -> bool {
         let zoom = self.zoom(image, viewport);
-        // Half a pixel of overflow is not worth offering to drag.
-        image[0] * zoom > viewport.width + 0.5 || image[1] * zoom > viewport.height + 0.5
+        let [lx, ly] = Self::pan_limit(image, viewport.size(), zoom, OVERHANG);
+        // Half a pixel of travel is not worth offering to drag.
+        lx * zoom > 0.5 || ly * zoom > 0.5
+    }
+
+    /// Whether any of the image is off screen as the view is shown: larger
+    /// than the viewport, or pulled past its edge.
+    pub fn off_screen(&self, image: [f32; 2], viewport: Viewport) -> bool {
+        let placement = self.placement(image, viewport);
+        // Half a pixel off is not worth a map.
+        placement.x < viewport.x - 0.5
+            || placement.y < viewport.y - 0.5
+            || placement.x + placement.width > viewport.x + viewport.width + 0.5
+            || placement.y + placement.height > viewport.y + viewport.height + 0.5
+    }
+
+    /// Whether the view shown is pulled past the image's edge, by half a
+    /// pixel or more: off center on an axis the image does not overflow,
+    /// and past the edge on one it does. A filled view scrolled along the
+    /// image is not, being where the fill is for.
+    fn panned(&self, image: [f32; 2], viewport: Viewport) -> bool {
+        let zoom = self.zoom(image, viewport);
+        let pan = self.shown_pan(image, viewport.size(), zoom);
+        let edge = Self::pan_limit(image, viewport.size(), zoom, 0.0);
+        (0..2).any(|axis| (pan[axis].abs() - edge[axis]) * zoom >= 0.5)
     }
 
     pub fn placement(&self, image: [f32; 2], viewport: Viewport) -> Placement {
@@ -415,13 +449,13 @@ impl View {
         self.pan = Self::clamp_pan(panned, image, viewport.size(), zoom);
     }
 
-    /// Pans as far as the view goes, in the direction given as a sign per
-    /// axis: to the image's edge on an axis there is more of than fits, and
-    /// nowhere at all on one the image is centered on. An axis whose sign is
-    /// zero keeps the pan it had.
+    /// Pans to the image's edge, in the direction given as a sign per axis:
+    /// the edge at the viewport's on an axis there is more of than fits —
+    /// not past it, as a drag may go — and nowhere at all on one the image
+    /// is centered on. An axis whose sign is zero keeps the pan it had.
     pub fn pan_to_edge(&mut self, direction: [f32; 2], image: [f32; 2], viewport: Viewport) {
         let zoom = self.zoom(image, viewport);
-        let limit = Self::pan_limit(image, viewport.size(), zoom);
+        let limit = Self::pan_limit(image, viewport.size(), zoom, 0.0);
         for axis in 0..2 {
             if direction[axis] != 0.0 {
                 self.pan[axis] = direction[axis].signum() * limit[axis];
@@ -434,8 +468,8 @@ impl View {
 
     /// Puts `point`, in image pixels, at the center of the viewport, at the
     /// zoom the view has. As near as the pan goes, that is: a point close to
-    /// an edge stops with the edge at the viewport's, as a drag there would,
-    /// and one on an axis the image does not overflow leaves that axis
+    /// an edge stops with the edge as far past the viewport's as a drag there
+    /// would, and one on an axis the image is well short of leaves that axis
     /// centered as it was.
     pub fn center_on(&mut self, point: [f32; 2], image: [f32; 2], viewport: Viewport) {
         let zoom = self.zoom(image, viewport);
@@ -446,12 +480,16 @@ impl View {
     /// What `Space` does: the whole image, the window filled, then actual
     /// size, and round again. Actual size is a zoom like any other, so a
     /// view zoomed by hand — to 100% or anything else — is at the same
-    /// point of the round, and the next press shows the whole image.
+    /// point of the round, and the next press shows the whole image. So is
+    /// a fit pulled past the image's edge: the round goes on only from a
+    /// fit as it was put — a filled view scrolled along the image still is
+    /// — and the press first puts the whole image back.
     pub fn cycle_fit(&mut self, anchor: [f32; 2], image: [f32; 2], viewport: Viewport) {
+        let panned = self.panned(image, viewport);
         match self.fit {
-            None => self.set_fit(Fit::Whole),
-            Some(Fit::Whole) => self.set_fit(Fit::Fill),
-            Some(Fit::Fill) => self.set_zoom_at(1.0, anchor, image, viewport),
+            Some(Fit::Whole) if !panned => self.set_fit(Fit::Fill),
+            Some(Fit::Fill) if !panned => self.set_zoom_at(1.0, anchor, image, viewport),
+            _ => self.set_fit(Fit::Whole),
         }
     }
 

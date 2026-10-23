@@ -100,7 +100,7 @@ pub fn thumbnail(content: Rect, image: [f32; 2]) -> Option<Rect> {
 /// The image pixel a point of the thumbnail stands for: the other way
 /// round from [`minimap_marker`], for what a press on the map asks to see.
 /// Not clamped: a drag that runs off the map asks for a point past the
-/// image's edge, and the view stops at the edge as it does for any pan.
+/// image's edge, and the view stops at the limit as it does for any pan.
 fn image_point(rect: Rect, image: [f32; 2], point: [f32; 2]) -> [f32; 2] {
     [
         (point[0] - rect.x) / rect.width * image[0],
@@ -110,16 +110,16 @@ fn image_point(rect: Rect, image: [f32; 2], point: [f32; 2]) -> [f32; 2] {
 
 /// The part of `rect` standing for what the viewport is showing.
 ///
-/// The viewport's corners in image pixels, clamped to the image and scaled
-/// into the thumbnail. Clamped because a view zoomed out sees past the
-/// image's edges, and this marks out part of the image rather than part of
-/// the window.
+/// The viewport's corners in image pixels, scaled into the thumbnail. Not
+/// clamped to it: a view pulled past the image's edge sees past it, and the
+/// marker hangs off the thumbnail's side by as much, which is what says the
+/// view is overhanging rather than at the edge.
 fn minimap_marker(rect: Rect, image: [f32; 2], placement: Placement, viewport: Viewport) -> Rect {
     let corner = |point: [f32; 2]| {
         let point = placement.image_point(point);
         [
-            rect.x + (point[0] / image[0]).clamp(0.0, 1.0) * rect.width,
-            rect.y + (point[1] / image[1]).clamp(0.0, 1.0) * rect.height,
+            rect.x + point[0] / image[0] * rect.width,
+            rect.y + point[1] / image[1] * rect.height,
         ]
     };
     let start = corner([viewport.x, viewport.y]);
@@ -127,9 +127,21 @@ fn minimap_marker(rect: Rect, image: [f32; 2], placement: Placement, viewport: V
     Rect::new(start[0], start[1], end[0] - start[0], end[1] - start[1])
 }
 
+/// The part of `marker` over `rect`: what of the thumbnail is left bright.
+fn within(marker: Rect, rect: Rect) -> Rect {
+    let x = marker.x.clamp(rect.x, rect.right());
+    let y = marker.y.clamp(rect.y, rect.bottom());
+    let right = marker.right().clamp(rect.x, rect.right());
+    let bottom = marker.bottom().clamp(rect.y, rect.bottom());
+    Rect::new(x, y, right - x, bottom - y)
+}
+
 /// Draws the minimap over the thumbnail the image layer has already put in
 /// the bottom-left of `content`: a border around the whole image, and the part
 /// of it the viewport is showing left bright while the rest is washed over.
+/// The marker around that part is the viewport's, so a view pulled past the
+/// image's edge has it hang off the thumbnail, over the picture — as far as
+/// the content area, where it is cut off rather than drawn over the chrome.
 ///
 /// Nothing here is filled where the thumbnail shows through, and the
 /// interface is composited over the image layer, so the two halves of the
@@ -196,9 +208,10 @@ pub(super) fn show(pass: &mut Pass, ui: &mut egui::Ui) {
         outline(painter, grid, rect, INSET_STROKE, theme.inset_edge.into());
 
         let placement = pass.view.placement(image, pass.input.viewport);
-        let shown = pass
+        let marker = pass
             .grid
             .rect(minimap_marker(rect, image, placement, pass.input.viewport));
+        let shown = within(marker, rect);
         let wash: egui::Color32 = theme.minimap_dim.into();
         for aside in [
             Rect::new(rect.x, rect.y, rect.width, shown.y - rect.y),
@@ -227,7 +240,8 @@ pub(super) fn show(pass: &mut Pass, ui: &mut egui::Ui) {
                 );
             }
         }
-        outline(painter, grid, shown, 1.5, theme.accent.into());
+        let painter = painter.with_clip_rect(content.into());
+        outline(&painter, grid, marker, 1.5, theme.accent.into());
     });
 }
 
@@ -297,10 +311,16 @@ mod tests {
         let rect = Rect::new(100.0, 20.0, 160.0, 120.0);
         let close = |a: f32, b: f32| (a - b).abs() < 0.5;
 
-        // Fitted, the whole image is on screen and the marker covers the map.
+        // Fitted, the whole image is on screen and what is left bright is
+        // the whole map, the window's margins beside the image hanging off
+        // its sides.
         let view = View::new();
         let marker = minimap_marker(rect, image, view.placement(image, viewport), viewport);
-        assert_eq!(marker, rect);
+        assert_eq!(within(marker, rect), rect);
+        assert!(
+            marker.x < rect.x && marker.right() > rect.right(),
+            "{marker:?}"
+        );
 
         // At 1:1 in a window half the image's size, half of it in each
         // direction is on screen, and centered that is the middle of the map.
@@ -315,15 +335,30 @@ mod tests {
             rect.x + rect.width / 2.0
         ));
 
-        // Panned into the top-left corner it goes to the corner of the map,
-        // and stops there rather than running off it.
-        view.pan_by(-10_000.0, -10_000.0, image, half);
+        // Panned to the top-left edges it goes to the corner of the map.
+        view.pan_to_edge([-1.0, -1.0], image, half);
         let marker = minimap_marker(rect, image, view.placement(image, half), half);
         assert!(
             close(marker.x, rect.x) && close(marker.y, rect.y),
             "{marker:?}"
         );
-        assert!(marker.right() <= rect.right() + 0.5 && marker.bottom() <= rect.bottom() + 0.5);
+
+        // Pulled as far past them as a drag goes — half the window, 200 by
+        // 150 of the image's pixels — it hangs off the map by as much, a
+        // quarter of the map's own size, while still as large as before.
+        view.pan_by(-10_000.0, -10_000.0, image, half);
+        let marker = minimap_marker(rect, image, view.placement(image, half), half);
+        assert!(
+            close(marker.x, rect.x - rect.width / 4.0)
+                && close(marker.y, rect.y - rect.height / 4.0),
+            "{marker:?}"
+        );
+        assert!(close(marker.width, rect.width / 2.0), "{marker:?}");
+        let shown = within(marker, rect);
+        assert!(
+            close(shown.x, rect.x) && close(shown.width, rect.width / 4.0),
+            "{shown:?}"
+        );
     }
 
     /// The wash around the marker is four quads meeting along its edges, and
