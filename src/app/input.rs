@@ -3478,7 +3478,7 @@ impl App {
             // been chosen in the dialog.
             Control::OpenLastFolder => {
                 if let Some(folder) = self.offered_folder.clone() {
-                    self.open_named(vec![folder]);
+                    self.open_named(vec![folder], false);
                 }
                 Effect::Redraw
             }

@@ -1,49 +1,104 @@
 //! Which files there are to show, and keeping that list up to date.
 //!
-//! A directory named on the command line is a place to look rather than a
-//! fixed list: it stands for the images directly inside it, and it is read
-//! again while the program runs, so that an image arriving in it or leaving it
-//! joins or leaves the walk. [`expand`] is the reading start-up does, which
-//! reports a directory it can make nothing of; [`relist`] is the same reading
-//! done again with a window already open, where a directory that has emptied
-//! or gone away is nothing to abandon the picture on screen for.
+//! A directory named is a place to look rather than a fixed list: it stands
+//! for the images inside it, and it is watched while the program runs, so
+//! that an image arriving in it or leaving it joins or leaves the list.
+//! [`contents`] is the one read of a directory, which the walker thread
+//! (`app::walker`) makes of each directory in a tree, one level or all of
+//! them, and again of each one that changes.
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 
-/// The images directly inside `dir`, in name order. One level deep: a
-/// directory names a place to look, not a tree to walk.
+/// The images directly inside `dir`, in name order. One level deep: the
+/// walk through a tree is [`contents`] asked of each of its directories.
+pub fn images_in(dir: &Path) -> Result<Vec<PathBuf>> {
+    Ok(contents(dir)?.images)
+}
+
+/// What one directory holds that a walk through it wants: the images in
+/// it, and the directories in it worth walking into, each in name order.
+pub struct Contents {
+    pub images: Vec<PathBuf>,
+    pub subdirectories: Vec<PathBuf>,
+}
+
+/// Reads `dir` once for [`Contents`].
 ///
-/// The extension decides here, since the alternative is opening every file in
-/// the directory to look at its leading bytes. A file named on the command
-/// line is still read for what it holds rather than what it is called.
+/// The extension decides what is an image here, since the alternative is
+/// opening every file in the directory to look at its leading bytes. A
+/// file named on the command line is still read for what it holds rather
+/// than what it is called.
 ///
-/// Each image is `dir` joined to its name, so that the empty path — the
+/// A subdirectory is walked into unless it is hidden — a dot-directory,
+/// where `~/.cache/thumbnails` alone holds thousands of pictures of
+/// pictures — or a link, which is how a walk loops, or on a Mac a package,
+/// which Finder shows as one file. A link to an image is an image.
+///
+/// Each entry is `dir` joined to its name, so that the empty path — the
 /// folder of a file named without one — lists as bare names, which is how
 /// that file itself was named.
-pub fn images_in(dir: &Path) -> Result<Vec<PathBuf>> {
+pub fn contents(dir: &Path) -> Result<Contents> {
     let extensions = crate::image::decode::supported_extensions();
-    let mut found = Vec::new();
+    let mut images = Vec::new();
+    let mut subdirectories = Vec::new();
     let entries = std::fs::read_dir(opened(dir))
         .with_context(|| format!("reading {}", opened(dir).display()))?;
     for entry in entries {
         let entry = entry.with_context(|| format!("reading {}", opened(dir).display()))?;
         let candidate = dir.join(entry.file_name());
-        let extension = candidate
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.to_ascii_lowercase())
-            .unwrap_or_default();
+        let extension = lowercase_extension(&candidate);
         // The extension is checked first because it costs nothing; the
         // directory test that follows it is for the rare directory named
         // like an image.
         if extensions.contains(&extension.as_str()) && !is_directory(&entry, &candidate) {
-            found.push(candidate);
+            images.push(candidate);
+        } else if walked_into(&entry, &extension) {
+            subdirectories.push(candidate);
         }
     }
-    found.sort();
-    Ok(found)
+    images.sort();
+    subdirectories.sort();
+    Ok(Contents {
+        images,
+        subdirectories,
+    })
+}
+
+fn lowercase_extension(path: &Path) -> String {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default()
+}
+
+/// The extensions of the directories a Mac shows as single files: an
+/// application, and the libraries photo programs keep their own copies
+/// and previews in, which a walk would show beside the originals.
+const PACKAGES: [&str; 9] = [
+    "app",
+    "bundle",
+    "framework",
+    "photoslibrary",
+    "aplibrary",
+    "lrdata",
+    "lrcat",
+    "imovielibrary",
+    "fcpbundle",
+];
+
+/// Whether a walk goes into the entry: a real directory, not hidden and
+/// not a package. Asked of the listing's own kind, never followed through
+/// a link.
+fn walked_into(entry: &std::fs::DirEntry, extension: &str) -> bool {
+    let Ok(kind) = entry.file_type() else {
+        return false;
+    };
+    if !kind.is_dir() || entry.file_name().as_encoded_bytes().starts_with(b".") {
+        return false;
+    }
+    !(cfg!(target_os = "macos") && PACKAGES.contains(&extension))
 }
 
 /// Whether the entry `candidate` names is a directory, asked of the listing
@@ -65,12 +120,6 @@ pub fn folder_of(file: &Path) -> PathBuf {
     file.parent().map(Path::to_path_buf).unwrap_or_default()
 }
 
-/// Whether `path` is a directory to list: the empty path is the current
-/// one.
-pub fn is_folder(path: &Path) -> bool {
-    path.as_os_str().is_empty() || path.is_dir()
-}
-
 /// The path a directory is opened and shown by: `.` for the empty path,
 /// which would otherwise show as nothing at all.
 pub fn opened(dir: &Path) -> &Path {
@@ -79,64 +128,6 @@ pub fn opened(dir: &Path) -> &Path {
     } else {
         dir
     }
-}
-
-/// Replaces every directory named on the command line with the images
-/// directly inside it. Fails only when what was named leaves nothing at all
-/// to show, which is a command line worth answering rather than an empty
-/// window; a command line naming nothing is answered with the empty window
-/// itself, and expands to nothing without complaint.
-pub fn expand(named: Vec<PathBuf>) -> Result<Vec<PathBuf>> {
-    if named.is_empty() {
-        return Ok(Vec::new());
-    }
-    let mut files = Vec::new();
-    let mut empty = Vec::new();
-    for path in named {
-        if !path.is_dir() {
-            files.push(path);
-            continue;
-        }
-        let mut found = images_in(&path)?;
-        if found.is_empty() {
-            empty.push(path);
-            continue;
-        }
-        files.append(&mut found);
-    }
-
-    if !files.is_empty() {
-        // Worth mentioning only once we know we are carrying on without them,
-        // as with a file whose header will not read.
-        for path in empty {
-            eprintln!("gamut: no images in {}", crate::shown_path(&path));
-        }
-        return Ok(files);
-    }
-    let names: Vec<String> = empty
-        .iter()
-        .map(|path| path.display().to_string())
-        .collect();
-    bail!("no images in {}", names.join(", "))
-}
-
-/// The list as it stands now, built from the same names in the same order.
-///
-/// Silent where [`expand`] speaks up: a directory that has emptied or that
-/// will not read any more contributes nothing and is not mentioned. There is
-/// a picture on screen by this point, the list is never allowed to lose it
-/// (see `Files::relist`), and a directory being written to passes through
-/// states not worth a word.
-pub fn relist(named: &[PathBuf]) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    for path in named {
-        if is_folder(path) {
-            files.append(&mut images_in(path).unwrap_or_default());
-        } else {
-            files.push(path.clone());
-        }
-    }
-    files
 }
 
 #[cfg(test)]
@@ -152,7 +143,7 @@ mod tests {
     /// lying beside them are not files to show.
     #[test]
     fn a_directory_becomes_the_images_inside_it() {
-        let files = expand(vec![fixtures()]).expect("test_images/ holds images");
+        let files = images_in(&fixtures()).expect("test_images/ holds images");
         let mut sorted = files.clone();
         sorted.sort();
         assert_eq!(files, sorted, "the list is in name order");
@@ -160,13 +151,8 @@ mod tests {
 
         let extensions = crate::image::decode::supported_extensions();
         for file in &files {
-            let extension = file
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or_default()
-                .to_ascii_lowercase();
             assert!(
-                extensions.contains(&extension.as_str()),
+                extensions.contains(&lowercase_extension(file).as_str()),
                 "{} is not an image and should not be listed",
                 file.display()
             );
@@ -194,48 +180,44 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Whatever is not a directory is passed through untouched, extension and
-    /// all, so that the sniffing which opens a JPEG named `.png` still has its
-    /// chance and a missing file still reports itself.
+    /// A directory lists the subdirectories a walk goes into beside its
+    /// images: not a hidden one, not a link to one — a link back up the
+    /// tree being how a walk would loop. One named like an image is a
+    /// directory like any other.
     #[test]
-    fn files_are_left_as_they_were_named() {
-        let named = vec![
-            fixtures().join("unsupported.tga"),
-            PathBuf::from("no-such-file"),
-        ];
-        assert_eq!(expand(named.clone()).expect("names to pass through"), named);
-    }
-
-    /// Nothing named is nothing to complain about: the list is empty, and
-    /// the window opens on the buttons that fill it.
-    #[test]
-    fn nothing_named_expands_to_nothing() {
+    fn a_directory_lists_the_subdirectories_worth_walking_into() {
+        let dir = std::env::temp_dir().join(format!("gamut-contents-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for sub in ["b", "a", ".cache", "album.jpg"] {
+            std::fs::create_dir_all(dir.join(sub)).unwrap();
+        }
+        std::fs::write(dir.join("z.png"), b"").unwrap();
+        std::fs::write(dir.join("notes.txt"), b"").unwrap();
+        std::os::unix::fs::symlink(&dir, dir.join("up")).unwrap();
+        let read = contents(&dir).unwrap();
+        assert_eq!(read.images, [dir.join("z.png")]);
         assert_eq!(
-            expand(Vec::new()).expect("nothing to fail on"),
-            Vec::<PathBuf>::new()
+            read.subdirectories,
+            [dir.join("a"), dir.join("album.jpg"), dir.join("b")]
         );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A directory with nothing to show in it is an error worth naming,
-    /// rather than an empty list that opens a window onto nothing.
+    /// A package is one file to a Mac, and is not walked into there.
     #[test]
-    fn a_directory_holding_no_images_is_reported() {
-        let empty = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
-        let error = expand(vec![empty.clone()]).expect_err("src/ holds no images");
-        assert!(error.to_string().contains(&empty.display().to_string()));
+    #[cfg(target_os = "macos")]
+    fn a_package_is_not_walked_into_on_a_mac() {
+        let dir = std::env::temp_dir().join(format!("gamut-package-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("Photos Library.photoslibrary")).unwrap();
+        std::fs::create_dir_all(dir.join("trip")).unwrap();
+        assert_eq!(contents(&dir).unwrap().subdirectories, [dir.join("trip")]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The running program's reading of the same names: the same list, and no
-    /// complaint about the directory that start-up would have called empty.
+    /// A directory that will not read is an error, not an empty one.
     #[test]
-    fn relisting_reads_the_same_names_again_without_complaint() {
-        let named = vec![fixtures()];
-        assert_eq!(relist(&named), expand(named.clone()).expect("images"));
-
-        let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
-        assert!(
-            relist(&[src]).is_empty(),
-            "a directory with no images in it"
-        );
+    fn a_missing_directory_is_an_error() {
+        assert!(contents(Path::new("/no/such/directory")).is_err());
     }
 }

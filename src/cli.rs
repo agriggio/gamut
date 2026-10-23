@@ -34,8 +34,9 @@ const TAGLINE: &str = "preview images";
 const DESCRIPTION: &str = "\
 The first file is shown, stretched to fit the window, and re-read whenever
 something else writes to it. A directory stands for the images directly
-inside it, in name order, and is read again as it changes: an image added
-to it or taken out of it joins or leaves the list. --paste puts the image
+inside it, or with --recursive for every image in its subfolders too, and
+is watched as it changes: an image added to it or taken out of it joins or
+leaves the list. --paste puts the image
 on the clipboard at the front of the list, and needs no path at all. With
 no path and no paste the window opens empty, offering to open files or a
 folder through the desktop's file dialog, or to paste; Ctrl+O, or Cmd+O on
@@ -62,6 +63,7 @@ struct Parsed {
     minimap: Option<bool>,
     paused: bool,
     alone: bool,
+    recursive: bool,
     paste: bool,
     upscale: Upscale,
     size: Option<[u32; 2]>,
@@ -385,6 +387,20 @@ const FLAGS: &[Flag] = &[
         },
     },
     Flag {
+        long: "--recursive",
+        short: Some("-r"),
+        value: "",
+        help: &[
+            "Open every image under a directory named, in its",
+            "subfolders too, rather than only those directly",
+            "inside it",
+        ],
+        apply: |parsed, _| {
+            parsed.recursive = true;
+            Ok(Then::Continue)
+        },
+    },
+    Flag {
         long: "--paused",
         short: None,
         value: "",
@@ -629,9 +645,8 @@ pub struct Args {
     /// clipboard is not looked at here: what is on it is a word with the
     /// compositor, which `main` has when it puts the list together.
     pub paste: bool,
-    /// The paths as they were given, before any directory among them was
-    /// replaced by the images inside it. Kept so that the list can be built
-    /// again, in the same order, when one of those directories changes.
+    /// The paths as they were given. The directories among them are not in
+    /// `files`: each is walked for its images once the program is running.
     pub named: Vec<PathBuf>,
     /// What the window says about the configuration file, if some of it
     /// could not be used; the terminal has already been told.
@@ -680,29 +695,21 @@ pub fn parse_args() -> Result<Option<Args>> {
         minimap,
         paused,
         alone,
+        recursive,
         paste,
         upscale,
         size,
     } = parsed;
 
-    // No path at all is a complete command line: the window opens on the
-    // buttons that give it something. So is `--paste` alone, a paste being
-    // a file to show; whether the clipboard actually holds one is found out
-    // when it is asked for.
-    let files = match crate::listing::expand(named.clone()) {
-        Ok(files) => files,
-        // Nothing to show among the paths is fatal only when they were all
-        // there was: with `--paste`, whether there is anything to show is
-        // the clipboard's to answer, and a directory with no images in it is
-        // worth the word it would get beside a path that could be read.
-        Err(error) if paste => {
-            if !named.is_empty() {
-                crate::report(&error);
-            }
-            Vec::new()
-        }
-        Err(error) => return Err(error),
-    };
+    // A directory is walked for its images once the window is on its way,
+    // so that one with thousands of them, or one on a share, does not hold
+    // it shut; whatever is not a directory is a file, a missing one
+    // included, which the header check then reports.
+    let files: Vec<PathBuf> = named
+        .iter()
+        .filter(|path| !path.is_dir())
+        .cloned()
+        .collect();
     let (mut config, complaint) = Config::load();
     // The side panel holds one of the two, the histogram where both are
     // on, so a flag asking for the information alone is not overruled by
@@ -727,6 +734,7 @@ pub fn parse_args() -> Result<Option<Args>> {
             upscale,
             size,
             paused,
+            recursive,
         },
     }))
 }

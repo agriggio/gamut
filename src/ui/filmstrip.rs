@@ -73,10 +73,21 @@ pub fn slot_height(slot: f32, size: Option<(u32, u32)>) -> f32 {
     (slot * shape).round()
 }
 
-/// A file's row, for a slot `slot` wide and a picture of `size`: its
-/// title, and under it the slot and the room below it.
-pub fn row_height(slot: f32, size: Option<(u32, u32)>) -> f32 {
-    TITLE_HEIGHT + TOP_INSET + slot_height(slot, size) + INSET
+/// A file's row, for a slot `slot` wide and a picture of `size`, on a
+/// device of `scale` physical pixels to the point: its title, and under it
+/// the slot and the room below it, made up to a whole number of the
+/// device's pixels. egui puts the scrolled rows on the device's grid, so
+/// a strip kept still while rows above the screen change height moves by
+/// whole rows of them: one of another height would leave every row on
+/// screen up to half a device pixel from where it was, and the words
+/// drawn on whole pixels over it a pixel up or down.
+pub fn row_height(slot: f32, size: Option<(u32, u32)>, scale: f32) -> f32 {
+    let height = TITLE_HEIGHT + TOP_INSET + slot_height(slot, size) + INSET;
+    if scale > 0.0 {
+        (height * scale).ceil() / scale
+    } else {
+        height
+    }
 }
 
 /// What the panel takes off the picture, for a slot `slot` wide: a row, and
@@ -343,6 +354,8 @@ struct Scrolled {
     tops: Arc<[f32]>,
     offset: f32,
     viewport: f32,
+    /// The row of the file on screen then.
+    current: Option<usize>,
 }
 
 /// The offset that keeps the strip where it was when the same rows go from
@@ -381,6 +394,32 @@ fn rescrolled(offset: f32, viewport: f32, was: &[f32], now: &[f32], current: Opt
         }
     };
     kept.clamp(0.0, (now[count] - viewport).max(0.0))
+}
+
+/// The offset that keeps the file on screen where it was on screen when
+/// the list itself has changed — files arriving above it as a directory is
+/// walked, or the list put in another order — its row having gone from
+/// `was_row` in `was` to `row` in `now`. Only where its row was in view:
+/// otherwise there is nothing on screen the eye was on that the offset
+/// could keep, and `None` leaves the strip as egui has it. Without this
+/// the strip would keep its offset in points while rows went in above,
+/// and the rows the user was looking at would slide down out from under
+/// the pointer a batch at a time.
+fn anchored(
+    offset: f32,
+    viewport: f32,
+    (was, was_row): (&[f32], Option<usize>),
+    (now, row): (&[f32], Option<usize>),
+) -> Option<f32> {
+    let was_row = was_row.filter(|&row| row + 1 < was.len())?;
+    let row = row.filter(|&row| row + 1 < now.len())?;
+    if was[was_row] >= offset + viewport || was[was_row + 1] <= offset {
+        return None;
+    }
+    let middle = (was[was_row] + was[was_row + 1]) / 2.0 - offset;
+    let kept = (now[row] + now[row + 1]) / 2.0 - middle;
+    let total = now.last().copied().unwrap_or(0.0);
+    Some(kept.clamp(0.0, (total - viewport).max(0.0)))
 }
 
 /// Lays the panel out in `ui`, which is the whole of it: the head, and the
@@ -490,24 +529,34 @@ fn rows(pass: &mut Pass, ui: &mut egui::Ui, input: &Input) {
     // The same files with rows of new heights — a new slot, or a header
     // read that gave a row its picture's shape — are put where the same
     // rows stay on screen, from where the strip was scrolled at the last
-    // frame. A list of other files or in another order is left to the
-    // reveal that comes with it.
+    // frame. A list of other files or in another order keeps the file on
+    // screen where it was, if it was in view; a reveal that comes with it
+    // then has nothing to do.
     let scrolled_id = egui::Id::new("filmstrip scrolled");
     let mut area = egui::ScrollArea::vertical()
         .id_salt("filmstrip rows")
         .auto_shrink(false);
-    if let Some(was) = ui.data(|data| data.get_temp::<Scrolled>(scrolled_id))
-        && was.listing == input.listing
-        && !Arc::ptr_eq(&was.tops, &input.tops)
-        && was.tops != input.tops
-    {
-        area = area.vertical_scroll_offset(rescrolled(
-            was.offset,
-            was.viewport,
-            &was.tops,
-            &input.tops,
-            input.current,
-        ));
+    if let Some(was) = ui.data(|data| data.get_temp::<Scrolled>(scrolled_id)) {
+        let offset = match was.listing == input.listing {
+            true => (!Arc::ptr_eq(&was.tops, &input.tops) && was.tops != input.tops).then(|| {
+                rescrolled(
+                    was.offset,
+                    was.viewport,
+                    &was.tops,
+                    &input.tops,
+                    input.current,
+                )
+            }),
+            false => anchored(
+                was.offset,
+                was.viewport,
+                (&was.tops, was.current),
+                (&input.tops, input.current),
+            ),
+        };
+        if let Some(offset) = offset {
+            area = area.vertical_scroll_offset(offset);
+        }
     }
     let scroll = area.show_viewport(ui, |ui, viewport| {
         ui.set_height(total.max(viewport.height()));
@@ -549,6 +598,7 @@ fn rows(pass: &mut Pass, ui: &mut egui::Ui, input: &Input) {
                 tops: Arc::clone(&input.tops),
                 offset: scroll.state.offset.y,
                 viewport: scroll.inner_rect.height(),
+                current: input.current,
             },
         )
     });
@@ -643,13 +693,13 @@ fn file(
         let galley = super::chooser::lit(ui, &value, &[], font, ink, ink, room);
         let size = galley.size() + vec2(2.0 * VALUE_PAD_X, 2.0 * VALUE_PAD_Y);
         // On whole logical pixels, so that the words sit as crisply as the
-        // title's do.
+        // title's do — counted from the row's top, so that they move with
+        // the row and with nothing else.
         let backing = egui::Rect::from_min_size(
             pos2(
-                slot.center().x - size.x / 2.0,
-                slot.bottom() - VALUE_LIFT - size.y,
-            )
-            .round(),
+                (slot.center().x - size.x / 2.0).round(),
+                rect.top() + (slot.bottom() - VALUE_LIFT - size.y - rect.top()).round(),
+            ),
             size,
         );
         painter.rect_filled(
@@ -1061,6 +1111,41 @@ mod tests {
         );
     }
 
+    /// Files arriving above the file on screen move its row down the
+    /// strip, and the offset with it, so that it stays where it was on
+    /// screen; files arriving below move nothing; and a file that was not
+    /// in view leaves the strip as it was.
+    #[test]
+    fn files_arriving_keep_the_file_on_screen_where_it_was() {
+        let was = tops(100, 100.0, None);
+        let more = tops(105, 100.0, None);
+        // Rows 10 to 13 on screen, the file in row 11; five arrive above
+        // it, and it is row 16.
+        assert_eq!(
+            anchored(1000.0, 400.0, (&was, Some(11)), (&more, Some(16))),
+            Some(1500.0)
+        );
+        assert_eq!(
+            anchored(1000.0, 400.0, (&was, Some(11)), (&more, Some(11))),
+            Some(1000.0),
+            "below it, nothing moves"
+        );
+        assert_eq!(
+            anchored(1000.0, 400.0, (&was, Some(50)), (&more, Some(55))),
+            None,
+            "off screen, nothing to keep"
+        );
+        assert_eq!(
+            anchored(1000.0, 400.0, (&was, None), (&more, Some(16))),
+            None
+        );
+        // Never past the end of the strip.
+        assert_eq!(
+            anchored(9600.0, 400.0, (&was, Some(99)), (&was, Some(99))),
+            Some(9600.0)
+        );
+    }
+
     /// A slot is its picture's shape, held to the range and rounded, and
     /// square where the shape is not known.
     #[test]
@@ -1080,9 +1165,11 @@ mod tests {
             "a screenshot"
         );
         assert_eq!(
-            row_height(200.0, None),
+            row_height(200.0, None, 1.0),
             TITLE_HEIGHT + TOP_INSET + 200.0 + INSET
         );
+        // 234 points are 374.4 pixels at 1.6, made up to 375.
+        assert_eq!(row_height(200.0, None, 1.6), 375.0 / 1.6);
     }
 
     #[test]

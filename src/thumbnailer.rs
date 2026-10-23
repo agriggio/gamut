@@ -499,7 +499,7 @@ fn thumbnail_one(
         return News::Failed;
     };
     let key = thumbnail::key(&absolute);
-    match thumbnail::lookup(dirs, &key, mtime) {
+    match thumbnail::lookup(dirs, &key, mtime, bytes) {
         Lookup::Fresh(png) => match guard("reading the cached thumbnail", || read_png(&png)) {
             Ok(thumb) => News::Thumb(thumb),
             // A file in the cache that will not read is not this file's
@@ -540,7 +540,7 @@ fn thumbnail_from(
         return News::Failed;
     };
     let key = thumbnail::key(&absolute);
-    if let Lookup::Fresh(png) = thumbnail::lookup(dirs, &key, mtime)
+    if let Lookup::Fresh(png) = thumbnail::lookup(dirs, &key, mtime, bytes)
         && let Ok(thumb) = guard("reading the cached thumbnail", || read_png(&png))
     {
         return News::Thumb(thumb);
@@ -659,8 +659,8 @@ fn make(
             // being read — moved to the trash under the decode, say — is
             // not a broken file, and a marker for it would stand against
             // the same file coming back with the same modification time.
-            let unchanged = stat(path).is_ok_and(|(now, _)| now == mtime);
-            if unchanged && let Err(error) = thumbnail::write_failure(dirs, key, mtime) {
+            let unchanged = stat(path).is_ok_and(|now| now == (mtime, bytes));
+            if unchanged && let Err(error) = thumbnail::write_failure(dirs, key, mtime, bytes) {
                 report(path, &error);
             }
             News::Failed
@@ -967,8 +967,28 @@ mod tests {
         );
         assert!(matches!(failed, News::Failed));
         let key = thumbnail::key(&std::path::absolute(&broken).unwrap());
-        let (mtime, _) = stat(&broken).unwrap();
-        assert_eq!(thumbnail::lookup(&dirs, &key, mtime), Lookup::Failed);
+        let (mtime, bytes) = stat(&broken).unwrap();
+        assert_eq!(thumbnail::lookup(&dirs, &key, mtime, bytes), Lookup::Failed);
+
+        // The same file finished by its writer within the second it was read
+        // half written in is not the file that failed.
+        let written = std::fs::metadata(&broken).unwrap().modified().unwrap();
+        std::fs::write(&broken, std::fs::read(&picture).unwrap()).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&broken)
+            .unwrap()
+            .set_modified(written)
+            .unwrap();
+        assert_eq!(stat(&broken).unwrap().0, mtime, "the same second");
+        let finished = thumbnail_one(
+            &broken,
+            &facts,
+            Some(&dirs),
+            Overrides::default(),
+            &AtomicBool::new(false),
+        );
+        assert!(matches!(finished, News::Thumb(_)));
 
         // A file that has gone by the time the decode gets to it — moved
         // to the trash under the thread — is not remembered as broken: the
@@ -990,7 +1010,10 @@ mod tests {
             &AtomicBool::new(false),
         );
         assert!(matches!(vanished, News::Failed));
-        assert_eq!(thumbnail::lookup(&dirs, &key, mtime), Lookup::Missing);
+        assert_eq!(
+            thumbnail::lookup(&dirs, &key, mtime, bytes),
+            Lookup::Missing
+        );
 
         std::fs::remove_dir_all(dir).unwrap();
     }

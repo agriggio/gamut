@@ -23,6 +23,8 @@ const PORTAL_NAME: &str = "org.freedesktop.portal.Desktop";
 const PORTAL_PATH: &str = "/org/freedesktop/portal/desktop";
 const FILE_CHOOSER: &str = "org.freedesktop.portal.FileChooser";
 const REQUEST: &str = "org.freedesktop.portal.Request";
+/// The id of the folder dialog's box for subfolders among its choices.
+const SUBFOLDERS_CHOICE: &str = "subfolders";
 
 /// Numbers the requests, so that each has a handle token of its own.
 static REQUESTS: AtomicU64 = AtomicU64::new(0);
@@ -37,7 +39,17 @@ static REQUESTS: AtomicU64 = AtomicU64::new(0);
 ///
 /// `folder` is where the dialog starts, where there is somewhere to start:
 /// the folder of the picture on screen, or of the last one shown.
-pub fn choose(pick: Pick, folder: Option<&Path>) -> Result<Option<Vec<PathBuf>>> {
+///
+/// `subfolders` is how the folder dialog's box for subfolders is put up,
+/// and the answer says how it was left when something was chosen: the
+/// `choices` the portal reads, a box with no options of its own being a
+/// check box. A desktop whose dialog has nothing to show it in leaves it
+/// out of the answer, and it is taken to have been left unticked.
+pub fn choose(
+    pick: Pick,
+    folder: Option<&Path>,
+    subfolders: bool,
+) -> Result<(Option<Vec<PathBuf>>, bool)> {
     let mut bus = Connection::session()?;
     let token = format!(
         "{}_{}_{}",
@@ -72,7 +84,24 @@ pub fn choose(pick: Pick, folder: Option<&Path>) -> Result<Option<Vec<PathBuf>>>
             ));
             options.push(("current_filter", images));
         }
-        Pick::Folder => options.push(("directory", Value::Bool(true))),
+        Pick::Folder => {
+            options.push(("directory", Value::Bool(true)));
+            options.push((
+                "choices",
+                Value::Array {
+                    element: "(ssa(ss)s)".to_string(),
+                    items: vec![Value::Struct(vec![
+                        Value::Str(SUBFOLDERS_CHOICE.to_string()),
+                        Value::Str(super::SUBFOLDERS.to_string()),
+                        Value::Array {
+                            element: "(ss)".to_string(),
+                            items: Vec::new(),
+                        },
+                        Value::Str(subfolders.to_string()),
+                    ])],
+                },
+            ));
+        }
     }
     // A byte string the portal wants with its terminating zero, the path
     // being bytes rather than text.
@@ -112,21 +141,51 @@ pub fn choose(pick: Pick, folder: Option<&Path>) -> Result<Option<Vec<PathBuf>>>
         ))?;
     }
     let response = bus.wait_signal(&[&expected, &handle], REQUEST, "Response")?;
-    read_response(&response)
+    let chosen = read_response(&response)?;
+    let ticked = chosen.is_some() && choice(&response, SUBFOLDERS_CHOICE);
+    Ok((chosen, ticked))
 }
 
 /// As [`choose`], on a thread of its own, the answer handed to `deliver`
 /// when it comes. Not joined: a dialog left up is up for as long as the
 /// user leaves it, and the window has nothing to wait on it for.
-pub fn choose_on_thread(pick: Pick, folder: Option<PathBuf>, deliver: Deliver) {
+pub fn choose_on_thread(pick: Pick, folder: Option<PathBuf>, subfolders: bool, deliver: Deliver) {
     std::thread::Builder::new()
         .name("file dialog".into())
         .spawn(move || {
+            // How the box was left, said only for a folder chosen: a dialog
+            // dismissed says nothing of it, and leaves it as it was.
+            let (outcome, ticked) = match choose(pick, folder.as_deref(), subfolders) {
+                Ok((Some(chosen), ticked)) => (Ok(Some(chosen)), Some(ticked)),
+                Ok((None, _)) => (Ok(None), None),
+                Err(error) => (Err(error), None),
+            };
             deliver(Picked {
-                outcome: choose(pick, folder.as_deref()),
+                outcome,
+                subfolders: ticked.filter(|_| pick == Pick::Folder),
             });
         })
         .expect("a thread can be spawned");
+}
+
+/// What a `Response` signal's results say the box `id` was left as: the
+/// value `"true"` for a ticked check box. Unticked where the results say
+/// nothing of it.
+fn choice(body: &[Value], id: &str) -> bool {
+    let Some(choices) = body
+        .get(1)
+        .and_then(|results| results.get("choices"))
+        .and_then(Value::as_array)
+    else {
+        return false;
+    };
+    choices.iter().any(|pair| match pair {
+        Value::Struct(fields) => {
+            fields.first().and_then(Value::as_str) == Some(id)
+                && fields.get(1).and_then(Value::as_str) == Some("true")
+        }
+        _ => false,
+    })
 }
 
 /// What a `Response` signal's body says: the code and, on success, the
@@ -231,6 +290,49 @@ mod tests {
         assert!(read_response(&[Value::U32(2), Value::dict(vec![])]).is_err());
         assert!(read_response(&[Value::U32(0), Value::dict(vec![])]).is_err());
         assert!(read_response(&[]).is_err());
+    }
+
+    /// The box for subfolders comes back as the portal says it was left,
+    /// and unticked where a desktop's dialog had nowhere to show it.
+    #[test]
+    fn the_box_for_subfolders_is_read_from_the_choices() {
+        let answer = |choices: Option<Vec<(&str, &str)>>| {
+            let mut entries = vec![(
+                "uris",
+                Value::Array {
+                    element: "s".into(),
+                    items: vec![Value::Str("file:///photos".into())],
+                },
+            )];
+            if let Some(choices) = choices {
+                entries.push((
+                    "choices",
+                    Value::Array {
+                        element: "(ss)".into(),
+                        items: choices
+                            .into_iter()
+                            .map(|(id, value)| {
+                                Value::Struct(vec![Value::Str(id.into()), Value::Str(value.into())])
+                            })
+                            .collect(),
+                    },
+                ));
+            }
+            vec![Value::U32(0), Value::dict(entries)]
+        };
+        assert!(choice(
+            &answer(Some(vec![("subfolders", "true")])),
+            "subfolders"
+        ));
+        assert!(!choice(
+            &answer(Some(vec![("subfolders", "false")])),
+            "subfolders"
+        ));
+        assert!(!choice(
+            &answer(Some(vec![("other", "true")])),
+            "subfolders"
+        ));
+        assert!(!choice(&answer(None), "subfolders"));
     }
 
     /// The images filter names every extension the decoders read, in both

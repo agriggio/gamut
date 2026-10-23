@@ -1254,7 +1254,7 @@ fn strip(count: usize, current: Option<usize>, reveal: bool) -> filmstrip::Input
             thumb: None,
         })
         .collect();
-    let height = filmstrip::row_height(filmstrip::SLOT_MIN, None);
+    let height = filmstrip::row_height(filmstrip::SLOT_MIN, None, 1.0);
     let tops: Vec<f32> = (0..=count).map(|row| row as f32 * height).collect();
     filmstrip::Input {
         rows,

@@ -20,7 +20,9 @@ mod order;
 mod playback;
 mod region;
 mod tags;
+mod tree;
 mod visited;
+pub mod walker;
 mod window;
 
 use std::collections::{HashMap, HashSet};
@@ -108,6 +110,9 @@ pub enum UserEvent {
     /// exiftool has read a file for the info panel's Tags tab — see
     /// [`exiftool`]. Boxed: it carries every tag.
     Tags(Box<exiftool::Delivered>),
+    /// The walker found images, or saw a directory change — see
+    /// [`walker`].
+    Tree(walker::Event),
     /// The desktop has asked for these files to be opened: on a Mac, what
     /// Finder sends — see `finder`. Nothing sends it elsewhere, where the
     /// files arrive on the command line.
@@ -167,6 +172,12 @@ impl From<Measured> for UserEvent {
     }
 }
 
+impl From<walker::Event> for UserEvent {
+    fn from(event: walker::Event) -> Self {
+        UserEvent::Tree(event)
+    }
+}
+
 impl From<exiftool::Delivered> for UserEvent {
     fn from(delivered: exiftool::Delivered) -> Self {
         UserEvent::Tags(Box::new(delivered))
@@ -211,6 +222,8 @@ pub struct Threads {
     pub measured: measuring::Deliver,
     /// How exiftool's reading of a file comes back.
     pub tags: exiftool::Deliver,
+    /// The thread walking and watching the directories named.
+    pub walker: walker::Walker,
 }
 
 impl Threads {
@@ -220,7 +233,12 @@ impl Threads {
     /// through the loop and is never spoken to again, so it has no handle.
     /// A thread added is a variant of [`UserEvent`], a `From` for it, an
     /// arm of `user_event` and a field here.
-    pub fn new(event_loop: &EventLoop<UserEvent>, overrides: decode::Overrides) -> Self {
+    /// `max_files` is how many images the walker may find this session.
+    pub fn new(
+        event_loop: &EventLoop<UserEvent>,
+        overrides: decode::Overrides,
+        max_files: usize,
+    ) -> Self {
         let proxy = || event_loop.create_proxy();
         let monitor = proxy();
         let clipboard = proxy();
@@ -239,6 +257,7 @@ impl Threads {
             arranged: deliver(proxy()),
             measured: deliver(proxy()),
             tags: deliver(proxy()),
+            walker: walker::Walker::new(max_files, waking(proxy())),
         }
     }
 }
@@ -292,6 +311,9 @@ pub struct Options {
     pub size: Option<[u32; 2]>,
     /// Whether an animation opens stopped on its first frame.
     pub paused: bool,
+    /// Whether a directory named stands for every image in its subtree,
+    /// rather than for those directly inside it.
+    pub recursive: bool,
 }
 
 /// How long the window is held to the size it asked for, waiting on the
@@ -433,14 +455,13 @@ pub struct App {
     menubar: Option<menubar::MenuBar>,
     #[cfg(target_os = "macos")]
     menu_deliver: Option<crate::menubar::Deliver>,
-    /// The paths as the command line gave them, and a watch on each directory
-    /// among them. A directory is a place to look rather than a fixed list:
-    /// images appearing in it or disappearing from it while the window is open
-    /// join or leave the walk, noticed on the same cadence as a write to the
-    /// file on screen. Empty — and so costing nothing — when every path named
-    /// was a file.
+    /// The paths as the command line gave them, and as the window has had
+    /// them named since: what a name chosen again is checked against. A
+    /// directory among them is a place to look rather than a fixed list —
+    /// see [`tree`] — walked and watched by the walker thread.
     named: Vec<PathBuf>,
-    directories: Vec<Watch>,
+    /// The directories named, as the walker reports on them.
+    trees: tree::Trees,
     /// The web address the map button opens, with `{lat}` and `{lng}` for
     /// the coordinates: the setting.
     open_map_link: String,
@@ -641,6 +662,7 @@ impl App {
             arranged: arranged_delivered,
             measured,
             tags: tags_delivered,
+            walker,
         } = threads;
         let Options {
             overrides,
@@ -650,6 +672,7 @@ impl App {
             upscale,
             size: asked_size,
             paused,
+            recursive,
         } = options;
         let (index, source, size) = match opening {
             Some(Opening {
@@ -663,11 +686,6 @@ impl App {
             Some(path) => Watch::new(path),
             None => Watch::idle(),
         };
-        let directories = named
-            .iter()
-            .filter(|path| path.is_dir())
-            .map(|path| Watch::new(path))
-            .collect();
         // One file named, and nothing else: its folder is there to step on
         // through, once it is asked for.
         let folder = match (named.as_slice(), &source) {
@@ -678,6 +696,7 @@ impl App {
             }
             _ => Folder::Closed,
         };
+        let named_directory = named.iter().any(|path| path.is_dir());
         let theme_watch = theme::watch();
         let mut view = View::new();
         view.set_upscale(upscale);
@@ -728,7 +747,7 @@ impl App {
             #[cfg(target_os = "macos")]
             menu_deliver: None,
             named,
-            directories,
+            trees: tree::Trees::new(walker, kept_state.include_subfolders),
             open_map_link: config.open_map_link.clone(),
             open_map_bounds_link: config.open_map_bounds_link.clone(),
             exiftool: exiftool::Program::new(&config.exiftool),
@@ -794,7 +813,7 @@ impl App {
             picking: false,
             clipboard_offers: false,
             show_beside: None,
-            from_command_line: source.is_some(),
+            from_command_line: source.is_some() || named_directory,
             said_how_to_restore: false,
             keys: Rc::new(config.keys),
             gestures: Rc::new(config.gestures),
@@ -824,6 +843,17 @@ impl App {
             }
             None => {}
         }
+        // Each directory named walked for its images, the first found asked
+        // for at once where nothing else was named.
+        let directories: Vec<PathBuf> = app
+            .named
+            .iter()
+            .filter(|path| path.is_dir())
+            .cloned()
+            .collect();
+        for dir in directories {
+            app.start_tree(dir, recursive, tree::Origin::CommandLine);
+        }
         // The whole list, from the start: the cache fills while the first
         // file is being looked at, and the chooser then has thumbnails the
         // moment it opens.
@@ -845,15 +875,23 @@ impl App {
         self.picking = true;
         self.close_menus();
         let folder = self.last_folder.clone().filter(|folder| folder.is_dir());
-        portal::choose_on_thread(pick, folder, Arc::clone(&self.picker));
+        portal::choose_on_thread(
+            pick,
+            folder,
+            self.trees.include_subfolders,
+            Arc::clone(&self.picker),
+        );
     }
 
     /// Takes in what the dialog answered. A frame is owed either way: the
     /// buttons that put the dialog up were drawn dead while it was.
     fn picked(&mut self, picked: Picked) -> Effect {
         self.picking = false;
+        if let Some(subfolders) = picked.subfolders {
+            self.trees.include_subfolders = subfolders;
+        }
         match picked.outcome {
-            Ok(Some(paths)) => self.open_named(paths),
+            Ok(Some(paths)) => self.open_named(paths, picked.subfolders.unwrap_or(false)),
             // Dismissed: nothing was asked for.
             Ok(None) => {}
             Err(error) => {
@@ -866,36 +904,35 @@ impl App {
 
     /// Opens `named` as a command line naming them beside what was already
     /// named would have: a directory among them stands for the images
-    /// inside it, and what they come to joins the end of the list. The
-    /// first of the newcomers is asked for as a walk, so a file that will
-    /// not decode is stepped over as it is at start-up; the picture on
-    /// screen stays up until it arrives, as it does for a step.
+    /// inside it — with `recursive`, for every image in its subtree — and
+    /// is walked for them, which join the end of the list as they are
+    /// found. The files among them join it at once, and the first of them
+    /// is asked for as a walk, so a file that will not decode is stepped
+    /// over as it is at start-up; the picture on screen stays up until it
+    /// arrives, as it does for a step.
     ///
     /// The names join `named` too — those not already there — so that a
-    /// directory chosen is watched, and a rebuild of the list puts the
-    /// newcomers back in the order they were chosen in.
-    pub(super) fn open_named(&mut self, named: Vec<PathBuf>) {
-        let files = match crate::listing::expand(named.clone()) {
-            Ok(files) => files,
-            Err(error) => {
-                input::report(&error);
-                self.toast(input::briefly(&error), Level::Warning);
-                return;
-            }
-        };
+    /// directory chosen twice is walked once.
+    pub(super) fn open_named(&mut self, named: Vec<PathBuf>, recursive: bool) {
         self.from_command_line = false;
+        let mut files = Vec::new();
         for path in named {
-            if self.named.contains(&path) {
-                continue;
-            }
             if path.is_dir() {
-                self.directories.push(Watch::new(&path));
+                if !self.named.contains(&path) {
+                    self.start_tree(path.clone(), recursive, tree::Origin::Window);
+                }
+            } else {
+                files.push(path.clone());
             }
-            self.named.push(path);
+            if !self.named.contains(&path) {
+                self.named.push(path);
+            }
         }
         // In the list's order, so that the first of them shown is the
         // first in it.
-        self.arrange(files, arranging::Arrive::Append);
+        if !files.is_empty() {
+            self.arrange(files, arranging::Arrive::Append);
+        }
     }
 
     /// Sizes the window to `image` as it would have opened on it: the same
@@ -1259,7 +1296,10 @@ impl App {
     /// it. Not while a read is in flight, since what is coming is a
     /// picture, and the buttons would be up for the length of a decode.
     fn is_empty(&self) -> bool {
-        self.current.is_none() && self.files.is_idle() && self.arranging.jobs.is_empty()
+        self.current.is_none()
+            && self.files.is_idle()
+            && self.arranging.jobs.is_empty()
+            && !self.walking()
     }
 
     /// The size to open the window at: the image's, once there is one, and
@@ -1686,6 +1726,7 @@ impl App {
             pixel_format: self.panels.pixel_format,
             coordinate_format: self.panels.coordinate_format,
             geographic_format: self.panels.geographic_format,
+            include_subfolders: self.trees.include_subfolders,
         }
     }
 
@@ -1817,7 +1858,10 @@ impl App {
     /// read beside a single file is said the same way.
     fn reading(&self) -> Option<Toast> {
         let Some(pending) = self.files.pending() else {
-            return self.reading_folder().or_else(|| self.arranging_toast());
+            return self
+                .reading_folder()
+                .or_else(|| self.arranging_toast())
+                .or_else(|| self.finding_toast());
         };
         let raised = pending.announced?;
         let name = file_label(self.files.path(pending.index));
@@ -1960,7 +2004,8 @@ impl App {
         }
         self.next_poll = now + watch::INTERVAL;
         self.poll_file()
-            .also(self.poll_directories())
+            .also(self.settle_trees())
+            .also(Effect::redraw_if(self.finding_counts()))
             .also(self.poll_folder())
             .also(self.settle_arranged())
             .also(Effect::redraw_if(self.arranging_counts()))
@@ -2065,6 +2110,7 @@ impl App {
         };
         let filmstrip = if self.filmstrip_showing() {
             self.filmstrip.follow(&self.files);
+            self.filmstrip.set_scale(sight.scale);
             let (files, chooser) = (&self.files, &self.chooser);
             let glimpsed = &self.glimpsed;
             Some(self.filmstrip.input(
@@ -2344,34 +2390,6 @@ impl App {
             let _ = self.send(request);
         }
         Effect::redraw_if(self.watch.missing() != was_missing)
-    }
-
-    /// Notices images arriving in or leaving a directory that was named on the
-    /// command line, and builds the list from it again. Says whether the
-    /// window owes a redraw, which it does only when the list really changed —
-    /// the bar counts the files and says which of them is on screen.
-    fn poll_directories(&mut self) -> Effect {
-        // Between reads only: rebuilding moves the file on screen to a new
-        // index, and a reply on its way is aimed at the old one. Nothing is
-        // lost by waiting, since a watch not polled is a watch that has not
-        // seen the change yet and will see it at a later look.
-        if self.directories.is_empty() || !self.files.is_idle() {
-            return Effect::Nothing;
-        }
-        // Every one of them is polled, not just as far as the first that
-        // fires: each has its own idea of what has settled to keep up to date.
-        let changed = self.directories.iter_mut().fold(false, |changed, watch| {
-            let fired = watch.poll();
-            fired || changed
-        });
-        let relisted = changed && self.files.relist(crate::listing::relist(&self.named));
-        if relisted {
-            self.list_changed();
-            // Put in order at once, nothing being read: the rebuild came
-            // back merged rather than sorted.
-            let _ = self.apply_order();
-        }
-        Effect::redraw_if(relisted)
     }
 
     /// Takes in what the thread watching the clipboard said: a picture
@@ -2753,10 +2771,13 @@ impl App {
         // screen, and keeps what the picture was left in: the picture's,
         // not an image it carries shown in its place.
         let _ = self.show(Showing::Picture);
-        self.last_folder = std::path::absolute(&file.path)
+        let folder = std::path::absolute(&file.path)
             .ok()
-            .and_then(|path| path.parent().map(Path::to_path_buf))
-            .or(self.last_folder.take());
+            .and_then(|path| path.parent().map(Path::to_path_buf));
+        if folder.is_some() && folder != self.last_folder {
+            self.last_folder = folder;
+            self.tell_walker_shown();
+        }
         // The turn the picture arrives under: the file on screen read again
         // keeps its own, whatever it has become — a page of another size is
         // still a page of the same file — and another file takes back the
@@ -3183,6 +3204,7 @@ impl App {
         let _ = self.poll_order();
         let _ = self.settle_folder();
         let _ = self.settle_arranged();
+        let _ = self.settle_trees();
         Effect::Redraw
     }
 
@@ -3597,6 +3619,7 @@ impl ApplicationHandler<UserEvent> for App {
             self.window_due().filter(|_| self.arranging.awaiting_window),
             self.folder_due(now),
             self.arranging_due(now),
+            self.finding_due(now),
         ]
         .into_iter()
         .flatten()
@@ -3624,7 +3647,7 @@ impl ApplicationHandler<UserEvent> for App {
                 // Stop, rather than sit in an empty window with nothing on
                 // the way. A choice made in the window is answered in the
                 // window instead, which stays up for the next choice.
-                if self.showed_nothing() && self.files.is_idle() {
+                if self.showed_nothing() && self.files.is_idle() && !self.walking() {
                     Effect::Quit
                 } else {
                     delivered
@@ -3635,6 +3658,7 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::Arranged(arranged) => self.arranged_read(arranged),
             UserEvent::Measured(measured) => self.measured(*measured),
             UserEvent::Tags(delivered) => self.tags_read(*delivered),
+            UserEvent::Tree(event) => self.tree_event(event),
             UserEvent::Opened(paths) => {
                 self.open_sent(paths);
                 // The files the program was launched to open, which the

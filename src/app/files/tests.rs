@@ -144,6 +144,10 @@ fn named(names: &[&str]) -> Vec<PathBuf> {
     names.iter().map(PathBuf::from).collect()
 }
 
+fn gone(names: &[&str]) -> HashSet<PathBuf> {
+    names.iter().map(PathBuf::from).collect()
+}
+
 /// A program opened on nothing has an empty list: nothing to step to,
 /// nothing to reload, nothing on screen to name — and the first thing
 /// handed to it, whether chosen or pasted, goes at the head.
@@ -155,7 +159,8 @@ fn an_empty_list_names_nothing_and_takes_the_first_thing_it_is_given() {
     assert!(files.step(true).is_none());
     assert!(files.reload().is_none());
     assert!(files.page(1).is_none());
-    assert!(!files.relist(Vec::new()));
+    assert!(files.add(Vec::new()).is_empty());
+    assert!(!files.remove(&gone(&["a.png"])));
     assert!(files.is_idle());
 
     let pasted = files.adopt(PathBuf::from("pasted.png"), Source::Disk);
@@ -210,26 +215,20 @@ fn an_empty_list_names_nothing_and_takes_the_first_thing_it_is_given() {
     assert_eq!(files.len(), 4);
 }
 
-/// A directory read again is a list read again: a file written into it
-/// joins the walk, and the one on screen goes on being the one on screen.
+/// A file written into a watched directory joins the list, and the one on
+/// screen goes on being the one on screen.
 #[test]
 fn a_file_that_has_appeared_joins_the_list() {
     let mut files = list(2);
     files.shown(1);
-    assert!(files.relist(named(&["0.png", "1.png", "2.png"])));
+    assert_eq!(
+        files.add(named(&["0.png", "1.png", "2.png"])),
+        named(&["2.png"])
+    );
     assert_eq!(files.len(), 3);
     assert_eq!(files.shown_path(), Some(Path::new("1.png")));
     assert_eq!(files.index(), 1);
     assert_eq!(files.step(true).map(|r| r.index), Some(2));
-
-    let mut files = list(2);
-    files.shown(1);
-    assert!(files.relist(named(&["0.png", "0a.png", "1.png"])));
-    assert_eq!(files.index(), 2, "a file arriving before it moves it along");
-    assert!(
-        !files.relist(named(&["0.png", "0a.png", "1.png"])),
-        "a directory that has not changed changes nothing"
-    );
 }
 
 /// The file on screen is never dropped from the list, whatever has become
@@ -241,7 +240,7 @@ fn a_file_that_has_appeared_joins_the_list() {
 fn the_file_on_screen_survives_being_deleted_under_us() {
     let mut files = list(4);
     files.shown(1);
-    assert!(files.relist(named(&["0.png", "2.png"])));
+    assert!(files.remove(&gone(&["1.png", "3.png"])));
     assert_eq!(files.shown_path(), Some(Path::new("1.png")));
     assert_eq!(files.len(), 3, "the file on screen, and what is left");
     assert_eq!(files.step(true).map(|r| r.index), Some(2));
@@ -257,7 +256,7 @@ fn the_file_on_screen_survives_being_deleted_under_us() {
 fn a_file_deleted_with_its_neighbors_keeps_its_place_among_the_survivors() {
     let mut files = list(5);
     files.shown(2);
-    assert!(files.relist(named(&["0.png", "4.png"])));
+    assert!(files.remove(&gone(&["1.png", "2.png", "3.png"])));
     assert_eq!(files.shown_path(), Some(Path::new("2.png")));
     assert_eq!(files.index(), 1);
     assert_eq!(files.path(0), Path::new("0.png"));
@@ -267,40 +266,31 @@ fn a_file_deleted_with_its_neighbors_keeps_its_place_among_the_survivors() {
     // And with everything before it gone, it leads what is left.
     let mut files = list(3);
     files.shown(1);
-    assert!(files.relist(named(&["2.png"])));
+    assert!(files.remove(&gone(&["0.png", "1.png"])));
     assert_eq!(files.index(), 0);
     assert_eq!(files.path(1), Path::new("2.png"));
 }
 
-/// The list is read again every time the directory changes, so a file
-/// already deleted is passed over the missing path again and again. It
-/// stays where it was put, and the rebuilds around it go on as normal.
+/// A file already deleted is said to be gone each time its directory
+/// changes again. It stays where it was put, and the changes around it go
+/// on as normal; and should it come back, it is not added a second time.
 #[test]
-fn a_file_already_gone_keeps_its_place_through_later_rebuilds() {
+fn a_file_already_gone_keeps_its_place_through_later_changes() {
     let mut files = list(3);
     files.shown(1);
     assert!(
-        !files.relist(named(&["0.png", "2.png"])),
-        "the file on screen going back in leaves the list as it was, and \
-         nothing in the bar reads any differently for it"
+        !files.remove(&gone(&["1.png"])),
+        "the file on screen staying leaves the list as it was, and nothing \
+         in the bar reads any differently for it"
     );
-
-    // A file arrives after it: the one on screen has not moved.
-    assert!(files.relist(named(&["0.png", "2.png", "3.png"])));
+    assert_eq!(files.add(named(&["3.png"])), named(&["3.png"]));
     assert_eq!(files.index(), 1);
     assert_eq!(files.shown_path(), Some(Path::new("1.png")));
+    assert!(
+        files.add(named(&["1.png"])).is_empty(),
+        "no phantom beside it"
+    );
     assert_eq!(files.len(), 4);
-
-    // One arrives before it, and it moves along with the rest.
-    assert!(files.relist(named(&["0.png", "0a.png", "2.png", "3.png"])));
-    assert_eq!(files.index(), 2);
-    assert_eq!(files.shown_path(), Some(Path::new("1.png")));
-
-    // And the file itself comes back: it is an ordinary member again,
-    // in the place the directory gives it rather than the place we kept.
-    assert!(files.relist(named(&["0.png", "0a.png", "1.png", "2.png"])));
-    assert_eq!(files.index(), 2);
-    assert_eq!(files.len(), 4, "no phantom left behind beside it");
 }
 
 /// A pasted picture goes in beside the file on screen and is asked for
@@ -348,7 +338,16 @@ fn a_pasted_file_survives_the_list_being_read_again() {
     let request = files.step(true).expect("somewhere to step");
     files.accept(request.generation);
     files.shown(request.index);
-    assert!(files.relist(named(&["0.png", "1.png", "2.png", "3.png"])));
+    assert_eq!(
+        files
+            .add(named(&["0.png", "1.png", "2.png", "3.png"]))
+            .len(),
+        1
+    );
+    assert!(
+        !files.remove(&gone(&["pasted.png"])),
+        "no directory lists it"
+    );
     assert_eq!(files.len(), 5);
     assert_eq!(
         files.path(2),
@@ -360,7 +359,7 @@ fn a_pasted_file_survives_the_list_being_read_again() {
 
 /// `--paste` puts the clipboard's picture at the head of the list, and it
 /// is a paste like any other from then on: fetched by the loader, kept
-/// through a relist that no named directory would put it back into, and
+/// whatever a directory says, since no directory would list it, and
 /// walked past — since the rest of the list was asked for too — if it
 /// never arrives.
 #[test]
@@ -381,7 +380,8 @@ fn a_paste_at_the_head_of_the_list_is_kept_like_any_other() {
     files.accept(next.generation);
     files.shown(1);
 
-    assert!(files.relist(named(&["0.png", "1.png", "2.png"])));
+    assert_eq!(files.add(named(&["0.png", "1.png", "2.png"])).len(), 1);
+    assert!(!files.remove(&gone(&["pasted.png"])));
     assert_eq!(files.path(0), Path::new("pasted.png"), "still at the head");
     assert_eq!(files.shown_path(), Some(Path::new("0.png")));
     assert_eq!(files.len(), 4);
@@ -392,7 +392,7 @@ fn a_paste_at_the_head_of_the_list_is_kept_like_any_other() {
 #[test]
 fn an_emptied_directory_leaves_the_one_file_on_screen() {
     let mut files = list(2);
-    assert!(files.relist(Vec::new()));
+    assert!(files.remove(&gone(&["0.png", "1.png"])));
     assert_eq!(files.len(), 1);
     assert_eq!(files.shown_path(), Some(Path::new("0.png")));
     assert!(files.step(true).is_none());
@@ -545,16 +545,16 @@ fn a_reinstated_file_goes_back_where_it_was() {
     assert_eq!(request.index, 4, "past the end goes at the end");
     assert!(files.is_adopted(Path::new("9.png")));
     assert!(!files.is_adopted(Path::new("1b.png")));
-    // A rebuild that does not list it keeps it, as it keeps a paste.
+    // A directory that never lists it keeps it, as it keeps a paste.
     files.accept(request.generation);
     files.shown(4);
-    assert!(files.relist(named(&["0.png", "1.png", "2.png"])));
+    assert!(files.remove(&gone(&["1b.png", "9.png"])));
     assert_eq!(files.len(), 4);
     assert_eq!(files.shown_path(), Some(Path::new("9.png")));
 }
 
 /// A renamed file keeps its place on the list under its new name, and
-/// stays kept through a rebuild if it was a paste.
+/// stays kept whatever a directory says if it was a paste.
 #[test]
 fn a_renamed_file_keeps_its_place() {
     let mut files = list(3);
@@ -566,10 +566,7 @@ fn a_renamed_file_keeps_its_place() {
     assert_eq!(files.position(Path::new("pasted.png")), None);
     assert!(files.is_adopted(Path::new("kept.png")));
     files.shown(0);
-    assert!(
-        !files.relist(named(&["0.png", "1.png", "2.png"])),
-        "put back where it was, the list is as it was"
-    );
+    assert!(!files.remove(&gone(&["kept.png"])), "a paste is kept");
     assert_eq!(files.position(Path::new("kept.png")), Some(1));
 }
 
@@ -595,7 +592,7 @@ fn a_read_of_a_file_that_left_the_list_is_dropped() {
 /// listing it again does not bring it back, since the user just said
 /// they did not want it there. Opening it by name again is what does.
 #[test]
-fn a_hidden_file_leaves_the_list_and_stays_out_of_a_rebuild() {
+fn a_hidden_file_leaves_the_list_and_stays_out_of_it() {
     let mut files = list(3);
     files.shown(1);
     files.hide();
@@ -614,8 +611,8 @@ fn a_hidden_file_leaves_the_list_and_stays_out_of_a_rebuild() {
     );
 
     assert!(
-        !files.relist(named(&["0.png", "1.png", "2.png"])),
-        "a rebuild that lists the hidden file changes nothing"
+        files.add(named(&["0.png", "1.png", "2.png"])).is_empty(),
+        "a directory that lists the hidden file changes nothing"
     );
     assert_eq!(files.paths(), &named(&["0.png", "2.png"]));
 
@@ -627,7 +624,7 @@ fn a_hidden_file_leaves_the_list_and_stays_out_of_a_rebuild() {
     files.accept(request.generation);
     files.shown(2);
     assert!(
-        !files.relist(named(&["0.png", "1.png", "2.png"])),
+        files.add(named(&["0.png", "1.png", "2.png"])).is_empty(),
         "listed again, it is kept where it went in"
     );
     assert_eq!(files.paths(), &named(&["0.png", "2.png", "1.png"]));
@@ -667,11 +664,10 @@ fn a_hidden_file_put_back_is_hidden_no_longer() {
 }
 
 /// Put in another order, the list keeps the file on screen the file on
-/// screen, wherever it has gone; and a rebuild keeps that order among
-/// the files it still lists, putting a newcomer in beside the file the
-/// directory has before it rather than starting over from name order.
+/// screen, wherever it has gone; and a file a directory gains goes in at
+/// the end, the order standing among the rest, for the order to place.
 #[test]
-fn a_reordered_list_keeps_its_order_through_a_rebuild() {
+fn a_reordered_list_keeps_its_order_as_files_arrive() {
     let mut files = list(4);
     files.shown(1);
     assert!(!files.reorder(&[0, 1, 2, 3]), "nothing moved");
@@ -682,20 +678,91 @@ fn a_reordered_list_keeps_its_order_through_a_rebuild() {
     assert!(files.reorder(&[2, 0, 1, 3]));
     assert_eq!(files.index(), 2, "moved along with its file");
 
-    // A rebuild in name order that lists a newcomer.
-    assert!(files.relist(named(&["0.png", "1.png", "1a.png", "2.png", "3.png"])));
+    files.add(named(&["0.png", "1.png", "1a.png", "2.png", "3.png"]));
     assert_eq!(
         files.paths(),
-        &named(&["0.png", "3.png", "1.png", "1a.png", "2.png"]),
-        "the order stands, and the newcomer follows the file listed before it"
+        &named(&["0.png", "3.png", "1.png", "2.png", "1a.png"])
     );
     assert_eq!(files.shown_path(), Some(Path::new("1.png")));
-    assert!(!files.relist(named(&["0.png", "1.png", "1a.png", "2.png", "3.png"])));
+}
 
-    // One that lists only newcomers goes in ahead of everything, in
-    // its own order, as a name-ordered list would have them.
-    let mut files = list(1);
-    files.shown(0);
-    assert!(files.relist(named(&["a.png", "b.png"])));
-    assert_eq!(files.paths(), &named(&["0.png", "a.png", "b.png"]));
+/// What a walk found joins the end of the list, and only what the list
+/// does not already hold; nothing is asked for, and the listing moves on
+/// only when something joined.
+#[test]
+fn a_batch_adds_only_what_is_new_and_asks_for_nothing() {
+    let mut files = list(2);
+    let listing = files.listing();
+    assert_eq!(
+        files.add(named(&["1.png", "2.png", "2.png", "3.png"])),
+        named(&["2.png", "3.png"])
+    );
+    assert_eq!(files.len(), 4);
+    assert_eq!(files.path(3), Path::new("3.png"));
+    assert!(files.is_idle(), "a batch asks for nothing");
+    assert_ne!(files.listing(), listing);
+
+    let listing = files.listing();
+    assert!(files.add(named(&["0.png", "3.png"])).is_empty());
+    assert_eq!(files.listing(), listing, "nothing new, the same list");
+}
+
+/// A file taken off the list stays off it however often a walk finds it.
+#[test]
+fn a_hidden_file_is_not_added_back_by_a_batch() {
+    let mut files = list(3);
+    files.shown(1);
+    files.hide();
+    let request = files.step(true).expect("somewhere to step");
+    files.accept(request.generation);
+    files.shown(request.index);
+    assert!(files.add(named(&["1.png", "9.png"])) == named(&["9.png"]));
+    assert!(files.position(Path::new("1.png")).is_none());
+}
+
+/// A file gone from its directory leaves the list, and the file on screen
+/// keeps its place among those that are left.
+#[test]
+fn a_removal_keeps_the_file_on_screen_where_it_was() {
+    let mut files = list(5);
+    files.shown(3);
+    let gone: HashSet<PathBuf> = named(&["0.png", "1.png", "4.png"]).into_iter().collect();
+    assert!(files.remove(&gone));
+    assert_eq!(files.paths(), named(&["2.png", "3.png"]));
+    assert_eq!(files.shown_path(), Some(Path::new("3.png")));
+}
+
+/// The file on screen survives being deleted under us, and a pasted file
+/// survives the directory never having listed it.
+#[test]
+fn a_removal_never_takes_the_file_on_screen_or_a_paste() {
+    let mut files = list(3);
+    files.shown(1);
+    let request = files.adopt(
+        PathBuf::from("pasted.png"),
+        Source::Clipboard("image/png".into()),
+    );
+    files.accept(request.generation);
+    files.shown(1);
+    let gone: HashSet<PathBuf> = named(&["0.png", "1.png", "2.png", "pasted.png"])
+        .into_iter()
+        .collect();
+    assert!(files.remove(&gone));
+    assert_eq!(files.paths(), named(&["1.png", "pasted.png"]));
+    assert_eq!(files.shown_path(), Some(Path::new("1.png")));
+
+    assert!(!files.remove(&gone), "nothing else to take");
+}
+
+/// A renamed file is the name it has now: a walk that finds it under that
+/// name does not add it again, and one that no longer lists the old name
+/// has nothing to take.
+#[test]
+fn a_renamed_file_is_neither_added_again_nor_removed() {
+    let mut files = list(3);
+    files.rename(2, PathBuf::from("renamed.png"));
+    assert!(files.add(named(&["renamed.png"])).is_empty());
+    let gone: HashSet<PathBuf> = named(&["2.png"]).into_iter().collect();
+    assert!(!files.remove(&gone));
+    assert_eq!(files.len(), 3);
 }

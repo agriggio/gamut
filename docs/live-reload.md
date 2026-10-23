@@ -2,13 +2,39 @@
 
 ## What a path stands for
 
-A directory named on the command line stands for the images directly inside
-it, in name order — one level, and chosen by extension, since the alternative
-is opening every file in the directory to see what it is. That makes it a
-place to look rather than a list fixed at startup, which is what the rest of
-this page is about. `src/listing.rs` owns the reading. Name order is how a
-directory is *read*; the order the list stands in is the
-[file list's](filmstrip.md), and a rebuild keeps it.
+A directory named on the command line — or chosen in the
+[file dialog](interface.md#the-empty-window-and-the-file-dialog) — stands for
+the images directly inside it, or with `--recursive` for every image in its
+subtree. Images are chosen by extension, since the alternative is opening
+every file to see what it is. That makes a directory a place to look rather
+than a list fixed at startup, which is what the rest of this page is about.
+`listing::contents` is the one read of a directory; the order the list stands
+in is the [file list's](filmstrip.md).
+
+The walking is `app/walker.rs`'s, on a thread of its own, never on the event
+loop: a tree can be thousands of directories, or on a share where each read
+is a round trip, and the window has a picture to show meanwhile. So
+`cli::parse_args` leaves a directory named as it was, `App::new` hands each to
+`App::start_tree`, and the window opens on the first image the walk finds —
+waiting up to `files::SLOW_READ` for it, through `App::window_due`, so that it
+opens at that image's size rather than at the empty window's. The walk is
+depth first, each directory's own images ahead of its subdirectories', each
+level in name order, so the first image found is the root's own first. What
+is found is handed over in batches: the first at once, and after that no
+more often than `walker::BATCH`, since every batch is a `Files::add`, a
+`Files::reindex` and an `App::apply_order` over the whole list. A batch asks
+for nothing, so the screen never moves under the walk; `app/tree.rs` takes it
+in between reads, as every change to the list is.
+
+The walk does not go into a dot-directory — `~/.cache/thumbnails` alone holds
+a picture of every picture — nor through a link to a directory, which is how
+a walk would loop, nor on a Mac into a package, which Finder shows as one
+file; a link to an image is an image. A directory inside the tree that will
+not read is passed over in silence, while a root that will not is said. And
+every image the walking finds counts against `Config::max_files` for the
+session: a walk started at the top of a disk by mistake would otherwise have
+the [thumbnail thread](chooser.md) reading headers and making thumbnails for
+hours. Reaching it stops the walking and says so.
 
 ## The folder beside a single file
 
@@ -32,13 +58,15 @@ once, at low priority, and a step has to wait for the whole folder to land
 on the file that really comes next. The wait is said as a file's is, in the
 toast that goes up after `files::SLOW_READ`, with a count once there is one.
 
-The folder then takes the file's place in `App::named`, so it is watched
-and rebuilt like a directory named outright. A bare name's folder is the
-empty path, which `listing::images_in` reads as the current directory and
-lists as bare names, so the file is found among them under the spelling it
-was named by; a file the folder does not list — read for what it holds
-rather than what its extension says — stays named beside it. Like any
-rebuild, it waits for a read in flight to finish.
+The folder then takes the file's place in `App::named`, its images join the
+list through `Files::add`, and the walker is told to watch it with
+`walker::Ask::Watch`, which hands over what was read rather than having it
+read again. A bare name's folder is the empty path, which
+`listing::images_in` reads as the current directory and lists as bare names,
+so the file is found among them under the spelling it was named by; a file
+the folder does not list — read for what it holds rather than what its
+extension says — stays named beside it. Like any change to the list, it
+waits for a read in flight to finish.
 
 ## Watching
 
@@ -62,20 +90,54 @@ A change is read only once the size and timestamp have held still for a whole
 interval, so a file caught halfway through being written is waited out rather
 than decoded and reported as corrupt.
 
-A directory named on the command line is watched the same way and by the same
-means — its own `stat`, on the same cadence — and when it changes the list is
-read from it again. An image written into the directory joins the walk where
-its name puts it; one deleted leaves it. So a script dropping frames into a
-folder builds the list as it goes, and `]` reaches a file that did not exist
-when the window opened.
+A directory named is watched the same way, by its own `stat`, and so is every
+directory a walk went into: a directory's timestamp moves when an entry in it
+comes or goes and says nothing about its subdirectories, so there is a
+`Watch` apiece, on the walker thread. A tree's worth of `stat`s every quarter
+second would be a load of its own on a share, so they are polled in two
+tiers. The roots and the folder of the file on screen — told to the walker
+by `App::tell_walker_shown` as each file arrives — are looked at every
+250 ms, since that is where a file exported, saved or rendered beside the
+picture lands. The rest are looked at in rotation, `walker::COLD_BUDGET` a
+tick, so that a change in a folder nobody is looking at is seen within
+seconds rather than at once. A directory that changed is read again by
+itself, and `Walking::reread` reports what it gained and lost as a diff —
+`walker::Event::Changed` — never as a list to rebuild. A subdirectory that
+arrived under a recursive walk is walked; one that went takes everything
+under it with it. So a script dropping frames into a folder builds the list
+as it goes, and `]` reaches a file that did not exist when the window
+opened. The images found after the cap was reached still join: the cap is on
+walking, not on what a watched folder is seen to gain.
+
+A directory's timestamp says nothing either about a write to a file already
+in it, and a file is often on the list before its writer has finished it: a
+renderer opens its output and fills it over seconds, or minutes, and the
+directory changed when it opened. Read then, the file is a few bytes of a
+picture — its header, at best — and the thumbnail thread gives up on it. So
+each image that arrives is watched by itself, every tick, until it has gone
+`walker::FRESH` without changing; a change that has held still for a look is
+reported in `Event::Changed`'s `modified`, and `App::rewritten` takes back
+the thread's failure and asks for the file again, header and all. Only the
+newcomers are watched, which keeps it to a handful of `stat`s however large
+the tree: the files a walk found were finished, as far as anything can say,
+and a file rewritten in place long after it arrived is the file on screen's
+watch to see, or nobody's.
+
+A directory's timestamp moves on the clock's tick, not with each change, and
+its size on most file systems moves only with its entry count. A change
+inside the tick the directory was read in, which leaves as many entries as
+it found, is not seen until the next change — in practice, a file renamed in
+the instant the directory was read. The watch is made before the read rather
+than after it, so that a change between the two is seen at the next look.
 
 Two things hold still through that. The file on screen is never dropped from
 the list, whatever has happened to it on disk: its pixels are up and correct,
 and everything the interface says about them — the title, the bars, the
 information panel — is read off the path they came from. It keeps its
 neighbors too, so `]` from a file deleted under you goes on to whatever has
-taken its place rather than back over one already seen. And the list is only
-rebuilt between reads, since a rebuild moves the file on screen to a new index
-and a reply already on its way is aimed at the old one; a change noticed
-during a read is simply seen again at a later look.
+taken its place rather than back over one already seen. And the list only
+changes between reads, since a change moves the file on screen to a new index
+and a reply already on its way is aimed at the old one; what the walker says
+during a read waits in `Trees::landed`, and is taken in the moment the read is
+over, by `App::settle_trees` from the decode's own handler.
 

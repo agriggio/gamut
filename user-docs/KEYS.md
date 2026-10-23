@@ -158,6 +158,21 @@ file list's menus put it in after that; naming a directory puts the images in it
 on the list, and keeps it up to date as images are added to that directory or
 taken out of it.
 
+`-r` or `--recursive` takes in the images in a directory's subfolders too,
+however deep, and keeps every one of those folders up to date the same way;
+a folder that appears inside it while the window is open is searched as well.
+The window opens on the first image found and the rest join the list as they
+are found, so a large tree or one on a network share can be looked at before
+the search is over; while it goes on, the foot of the window counts what it
+has found. Hidden folders — those whose names start with a dot, where other
+programs keep their caches — are not searched, nor folders reached through a
+link, and on a Mac nor a photo library or other package. The search stops
+at 10,000 images and says so, which `max_files` in the configuration file
+changes (see [settings](SETTINGS.md)): a tree that large is usually one
+named by mistake, and every image on the list is one whose thumbnail is
+made. A folder already being watched keeps adding what arrives in it after
+that.
+
 A single file opened by itself, as a file manager opens one, steps on
 through the other images in its folder. The folder is not read until you
 ask for more than the one file — `]` or `[`, `Ctrl+P` or `Tab` — so until
@@ -271,7 +286,9 @@ without its extension. Choose one file or several: what you choose joins
 the end of the list, exactly as if it had been named on the command line
 after everything else, and the first of it in the list's order is shown. `Ctrl+Shift+O` puts up the same dialog for a
 folder, which stands for the images inside it as a directory on the command
-line does — kept up to date as images arrive in it or leave. Two keys rather
+line does — kept up to date as images arrive in it or leave. Its
+**Include subfolders** box takes in every image under the folder, as
+`--recursive` does, and is left as you last left it. Two keys rather
 than one because a desktop's dialog picks files or it picks a folder, never
 both at once. Cancel the dialog and nothing changes. The dialog starts in
 the folder of the picture on screen, or of the last one shown.

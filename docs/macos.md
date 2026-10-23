@@ -16,7 +16,7 @@ names:
 | Module | Linux | macOS |
 | --- | --- | --- |
 | `clipboard/` | `wayland.rs`: the selection, held by a second process | `macos.rs`: `NSPasteboard` |
-| `portal/` | `freedesktop.rs`: the file chooser portal over `dbus.rs` | `macos.rs`: `NSOpenPanel` |
+| `portal/` | `freedesktop.rs`: the file chooser portal over `dbus.rs`, the box for subfolders one of its `choices` | `macos.rs`: `NSOpenPanel`, the box for subfolders an `NSButton` as its accessory view |
 | `trash/` | `freedesktop.rs`: the Trash specification by hand | `macos.rs`: `NSFileManager`, and `freedesktop.rs` for the tests |
 | `openers/` | `linux.rs`: desktop entries and `mimeapps.list` | `macos.rs`: Launch Services through `NSWorkspace` |
 | `monitor/` | `wayland.rs`: the color-management protocol | `macos.rs`: `NSScreen` |
@@ -46,7 +46,9 @@ main thread, so neither needs a thread of its own:
 
 - **The file dialog** runs modally in `portal::choose_on_thread` and hands its
   answer to the same `Deliver` the Linux dialog's thread does. The event loop
-  is inside the modal session meanwhile, as every Mac program's is.
+  is inside the modal session meanwhile, as every Mac program's is. The
+  folder dialog's check box is made with no target and no action, and its
+  state read once the panel is down.
 - **The monitors** are read afresh each time the table is asked, which
   `App::sync_monitor` does on every turn of the loop. `Monitors::live` is what
   tells the shared table to call `macos::refresh` first; a stub for the tests

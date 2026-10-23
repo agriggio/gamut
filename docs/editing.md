@@ -83,9 +83,9 @@ second removal and a deletion, each with a message that says which it is.
 ## One undo stack, and only for the disk
 
 `src/app/edits.rs` holds a `Vec<Edit>`: `Trashed`, with the entry, the
-path as the list spelled it, where it stood and whether a rebuild of the
-list kept it; `Renamed`, with both spellings; and `Removed`, with the
-path, where it stood and whether a rebuild kept it — a removal touches
+path as the list spelled it, where it stood and whether it was kept
+whatever its directory said — a paste; `Renamed`, with both spellings; and
+`Removed`, with the path, where it stood and whether it was kept so — a removal touches
 nothing on disk, but it takes a file out of the walk, and that is as
 much a mistake to reach for undo over. One stack and one key for all
 three, because the moment a reader reaches for undo is the moment they

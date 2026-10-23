@@ -4,6 +4,43 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+- `-r` or `--recursive` opens every image under a directory named, in its
+  subfolders however deep, and keeps each of those folders watched as a
+  directory named is. Hidden folders, folders reached through a link and,
+  on a Mac, photo libraries and other packages are not searched.
+- The folder dialog has an *Include subfolders* box that does the same for
+  the folder chosen, left as it was last left.
+- `max_files` in the configuration file: how many images opening folders
+  may add to the list in one run, 10,000 unless it says otherwise. The
+  search stops there, and the window says so.
+
+### Changed
+
+- A directory is read off to one side rather than before the window opens:
+  the window opens on the first image found, the rest join the list as they
+  are found, and the window counts them while a large folder is read.
+- A folder in a tree that changes is read again by itself, the open folder
+  and the one named looked at four times a second and the rest in turn, so
+  a large tree costs little to keep watched.
+
+### Fixed
+
+- The file list no longer slides under the pointer when files arrive above
+  the one on screen.
+- On a display scaled by a fraction, such as 1.6, the words over the file
+  list's thumbnails no longer flicker a pixel up and down while the list's
+  pictures are read.
+- A file that appears in a watched folder before the program writing it has
+  finished gets its thumbnail once the writing is done, rather than keeping
+  the placeholder until the file is opened.
+- A file read while it was half written is no longer recorded in the
+  thumbnail cache as one that cannot be read when it was finished within the
+  same second.
+
 ## 0.12.2 - 2026-10-22
 
 ### Fixed
