@@ -8,6 +8,9 @@ Notable changes to `gamut` as maintained overly verbosely by AI. The format foll
 
 ### Added
 
+- A disk image of the Mac application, `gamut-X.Y.Z-arm64.dmg`, attached to
+  each release and to the nightly one. The application carries the libraries
+  it reads images with, so it needs no Homebrew.
 - `-r` or `--recursive` opens every image under a directory named, in its
   subfolders however deep, and keeps each of those folders watched as a
   directory named is. Hidden folders, folders reached through a link and,

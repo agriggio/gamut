@@ -148,6 +148,31 @@ it was built on, which is how the Homebrew formula uses it, and handing one
 to another Mac would need the libraries inside it and a Developer ID
 signature.
 
+`bin/bundle --standalone` puts the libraries inside. It reads the binary's
+names with `otool -L`, copies each library that is not the system's into
+`Contents/Frameworks` under the name it was asked for, rewrites the name to
+`@rpath/NAME` with `install_name_tool`, and goes on into each copy, so a
+library's own libraries come too. The binary's rpaths are replaced by one,
+`@executable_path/../Frameworks`, since one pointing at Homebrew's lib would
+be found first on a Mac that has it. The script then fails if any file still
+names a path under `/opt/`, `/usr/local/` or `/Users/`, and signs each copy
+ad hoc before the bundle, which seals them. What no name reaches is what
+a library loads by itself at run time, which is libheif's codec plugins,
+Homebrew's `libheif-plugins`. They are copied into `Frameworks/libheif`, each
+with the libraries it links, and given the rpath `@loader_path/..`; the
+program sets `LIBHEIF_PLUGIN_PATH` to that directory in `main`, before it
+has a second thread, since the directory libheif was built to look in is
+Homebrew's. A bundle made where the plugins are not installed has the codecs
+libheif was built with and no others. No notice of the libraries' licenses
+goes in the bundle yet, and libx265, ffmpeg's and libx264, which libheif and
+its plugins link, are GPL.
+
+`bin/dmg` puts the bundle on a disk image, with a link to `/Applications`,
+named for the bundle's version and the Mac's architecture. The `macOS`
+workflow makes one for each release and for the nightly, on the architecture
+of its runner. Nothing signs it with a Developer ID or notarizes it, so a Mac
+that downloaded it asks to have it opened anyway.
+
 The Info.plist claims the image types by the identifiers macOS gives each
 extension, at `LSHandlerRank` `Alternate`, so Finder offers the program under
 "Open With" without taking any type over. Five extensions have no type on

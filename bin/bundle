@@ -7,26 +7,43 @@
 # formula installs, not one to hand to another Mac. It is signed ad hoc,
 # which is all a program built on the machine that runs it needs.
 #
+# With --standalone the libraries come too: every one the binary links that
+# is not the system's, and every one of theirs in turn, is copied into
+# Contents/Frameworks and the names that reach them rewritten to find them
+# there, so the bundle runs on a Mac with nothing of Homebrew's. It still
+# wants the macOS the libraries were built for, which is the one they were
+# built on, and an ad hoc signature is one Gatekeeper asks to be overridden
+# on a Mac that downloaded it.
+#
 #   bin/bundle                      target/release/gamut into target/release/
 #   bin/bundle BINARY [DIRECTORY]   this binary, into this directory
+#   bin/bundle --standalone ...     either, with its libraries inside
 #
-# Everything used is part of macOS: sips draws the icon from the SVG,
-# iconutil packs it, plutil stamps the version, codesign signs.
+# What is used is part of macOS: sips draws the icon from the SVG, iconutil
+# packs it, plutil stamps the version, codesign signs, and for --standalone
+# otool and install_name_tool find and rename the libraries.
 
 set -eu
 
 usage() {
-    echo "usage: bin/bundle [BINARY [DIRECTORY]]" >&2
+    echo "usage: bin/bundle [--standalone] [BINARY [DIRECTORY]]" >&2
     exit 2
 }
 
+STANDALONE=0
+if [ "${1:-}" = --standalone ]; then
+    STANDALONE=1
+    shift
+fi
 [ $# -le 2 ] || usage
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 BINARY=${1:-$ROOT/target/release/gamut}
 OUT=${2:-$(dirname "$BINARY")}
 
-for tool in sips iconutil plutil codesign; do
+TOOLS="sips iconutil plutil codesign"
+[ "$STANDALONE" = 0 ] || TOOLS="$TOOLS otool install_name_tool"
+for tool in $TOOLS; do
     command -v "$tool" >/dev/null || { echo "$tool is not installed" >&2; exit 1; }
 done
 [ -x "$BINARY" ] || { echo "$BINARY is not a built binary" >&2; exit 1; }
@@ -51,6 +68,118 @@ plutil -insert CFBundleVersion -string "$VERSION" "$APP/Contents/Info.plist"
 plutil -lint -s "$APP/Contents/Info.plist"
 
 cp "$BINARY" "$APP/Contents/MacOS/gamut"
+
+# The rpaths of a Mach-O file, which is where an @rpath name is looked for.
+rpaths() {
+    otool -l "$1" | awk '$1 == "cmd" && $2 == "LC_RPATH" { r = 1 } r && $1 == "path" { print $2; r = 0 }'
+}
+
+# Where on this Mac a library is, as the Mach-O file FROM names it as DEP:
+# its real path, or nothing and a failure. An absolute name is where it says;
+# the others are read as the loader reads them, and Homebrew's lib is tried
+# last, where a library only found through a rpath of its own might be.
+locate() {
+    dep=$1
+    from=$2
+    here=$(dirname "$from")
+    case $dep in
+    /*) candidates=$dep ;;
+    @loader_path/*) candidates="$here/${dep#@loader_path/}" ;;
+    @executable_path/*) candidates="$(dirname "$BINARY")/${dep#@executable_path/}" ;;
+    @rpath/*)
+        candidates=
+        for dir in $(rpaths "$from") /opt/homebrew/lib /usr/local/lib; do
+            dir=$(echo "$dir" | sed -e "s|@loader_path|$here|" -e "s|@executable_path|$(dirname "$BINARY")|")
+            candidates="$candidates $dir/${dep#@rpath/}"
+        done
+        ;;
+    *) candidates= ;;
+    esac
+    for candidate in $candidates; do
+        [ -e "$candidate" ] && { echo "$candidate"; return 0; }
+    done
+    return 1
+}
+
+# Copy into Frameworks each library the Mach-O file $1 names — which is a
+# copy of $2, where the names are read from — and point the names at the
+# copies, going on into each library copied. A library is called by the name
+# it was asked for, so the files that name it find it by `@rpath/NAME`, which
+# the binary's rpath resolves to Frameworks. The system's libraries are not
+# copied: they are the same on every Mac, and in a cache that has no file.
+bring() {
+    deps=$(otool -L "$1" | tail -n +2 | awk '{ print $1 }')
+    for dep in $deps; do
+        case $dep in /usr/lib/* | /System/*) continue ;; esac
+        name=$(basename "$dep")
+        # A library's own name is the first it lists.
+        [ "$name" != "$(basename "$1")" ] || continue
+        found=$(locate "$dep" "$2") || {
+            echo "$dep, which $2 names, is not on this Mac" >&2
+            exit 1
+        }
+        install_name_tool -change "$dep" "@rpath/$name" "$1"
+        # Last, because the function has no variables of its own: what it
+        # leaves in `dep`, `name` and `found` is its callee's.
+        if [ ! -e "$FRAMEWORKS/$name" ]; then
+            cp -L "$found" "$FRAMEWORKS/$name"
+            chmod u+w "$FRAMEWORKS/$name"
+            install_name_tool -id "@rpath/$name" "$FRAMEWORKS/$name"
+            bring "$FRAMEWORKS/$name" "$found"
+        fi
+    done
+}
+
+if [ "$STANDALONE" = 1 ]; then
+    FRAMEWORKS="$APP/Contents/Frameworks"
+    mkdir "$FRAMEWORKS"
+    bring "$APP/Contents/MacOS/gamut" "$BINARY"
+
+    # libheif's codec plugins, where Homebrew's libheif-plugins has them, or
+    # LIBHEIF_PLUGINS says: libraries libheif opens by itself, so nothing
+    # links them. They go in Frameworks/libheif, each finding what it needs
+    # one directory up, and the program tells libheif where they are.
+    PLUGINS=${LIBHEIF_PLUGINS:-$(brew --prefix libheif-plugins 2>/dev/null)/lib/libheif}
+    if [ -d "$PLUGINS" ]; then
+        mkdir "$FRAMEWORKS/libheif"
+        for plugin in "$PLUGINS"/*.dylib; do
+            # Not `name`, which `bring` leaves as its last library's.
+            copy="$FRAMEWORKS/libheif/$(basename "$plugin")"
+            cp -L "$plugin" "$copy"
+            chmod u+w "$copy"
+            install_name_tool -id "@rpath/libheif/$(basename "$plugin")" "$copy"
+            bring "$copy" "$plugin"
+            for dir in $(rpaths "$copy"); do
+                install_name_tool -delete_rpath "$dir" "$copy"
+            done
+            install_name_tool -add_rpath @loader_path/.. "$copy"
+        done
+    else
+        echo "no libheif plugins at $PLUGINS: the bundle has the codecs libheif was built with" >&2
+    fi
+    # The binary's own rpaths may point at the libraries it was built with,
+    # which would be found first on a Mac that has them.
+    for dir in $(rpaths "$APP/Contents/MacOS/gamut"); do
+        install_name_tool -delete_rpath "$dir" "$APP/Contents/MacOS/gamut"
+    done
+    install_name_tool -add_rpath @executable_path/../Frameworks "$APP/Contents/MacOS/gamut"
+
+    # Nothing in the bundle may still look outside it. Homebrew's prefix is
+    # /opt/homebrew or /usr/local; a name there that got through is a library
+    # that would only be found on the Mac that built this.
+    for file in "$APP/Contents/MacOS/gamut" $(find "$FRAMEWORKS" -name '*.dylib'); do
+        if otool -L "$file" | tail -n +2 | awk '{ print $1 }' | grep -E '^(/opt/|/usr/local/|/Users/)'; then
+            echo "$file still names a library outside the bundle" >&2
+            exit 1
+        fi
+    done
+
+    # Changing a name breaks the signature the linker gave the file, and each
+    # file in Frameworks is signed before the bundle is, which seals them.
+    for lib in $(find "$FRAMEWORKS" -name '*.dylib'); do
+        codesign --force --sign - "$lib"
+    done
+fi
 
 # Every size an icon set holds, each at one and two device pixels to the
 # point, drawn from the SVG rather than scaled from one picture of it.

@@ -1,9 +1,10 @@
-name: macOS bottle
+name: macOS
 
-# Builds the Homebrew bottle on each macOS the formula is installed on, and
-# attaches the bottles to a release together with gamut.rb, the formula with
-# its `bottle do` block, which is what goes into the tap,
-# dcervelli/homebrew-gamut.
+# Builds gamut for the Mac two ways and attaches both to a release: the
+# Homebrew bottle, on each macOS the formula is installed on, with gamut.rb,
+# the formula with its `bottle do` block, which is what goes into the tap,
+# dcervelli/homebrew-gamut; and a disk image holding a Gamut.app that carries
+# its libraries, for a Mac without Homebrew.
 #
 # Two things start it. A release, once the `Release` workflow has made it: the
 # source tarball the formula names exists only then, and a release made with
@@ -28,6 +29,8 @@ env:
   HOMEBREW_NO_AUTO_UPDATE: 1
   HOMEBREW_NO_ANALYTICS: 1
   HOMEBREW_NO_INSTALL_CLEANUP: 1
+  # What to build: the tag's own source, or for a nightly the commit run from.
+  REF: ${{ inputs.tag || github.event.workflow_run.head_branch || github.sha }}
 
 jobs:
   formula:
@@ -38,7 +41,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.event.workflow_run.head_branch || github.sha }}
+          ref: ${{ env.REF }}
 
       - name: Point the copy at this source
         # The formula in the tree carries the previous release's checksum
@@ -82,7 +85,7 @@ jobs:
         # A bottle is for one macOS and one architecture: Homebrew names it
         # by the release it was built on, and a Mac on another builds from
         # source.
-        os: [macos-15, macos-26]
+        os: [macos-15]
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -123,9 +126,65 @@ jobs:
           path: bottles/*
           if-no-files-found: error
 
+  dmg:
+    name: Disk image on ${{ matrix.os }}
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    strategy:
+      fail-fast: false
+      matrix:
+        # The libraries inside are Homebrew's, built for the macOS they are
+        # built on, so the image needs that macOS or a later one, and the
+        # architecture it was made on.
+        os: [macos-15]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.REF }}
+
+      - name: Install the libraries it links
+        run: brew install pkgconf libheif libheif-plugins libraw little-cms2
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Bundle it with its libraries
+        run: bin/bundle --standalone
+
+      - name: It has libheif's plugins
+        run: |
+          ls target/release/Gamut.app/Contents/Frameworks/libheif/*.dylib
+
+      - name: Run it as a Mac without Homebrew would
+        # It starts, reads a file, and loads nothing from Homebrew's prefix:
+        # `bin/bundle` has checked the names, and this checks the loader.
+        run: |
+          app=target/release/Gamut.app/Contents/MacOS/gamut
+          printf 'not a picture' >"$RUNNER_TEMP/broken.png"
+          DYLD_PRINT_LIBRARIES=1 "$app" --version 2>"$RUNNER_TEMP/loaded" || true
+          DYLD_PRINT_LIBRARIES=1 "$app" "$RUNNER_TEMP/broken.png" 2>>"$RUNNER_TEMP/loaded" \
+            | grep -q "reading the header" || {
+              echo "it does not read a file" >&2
+              exit 1
+            }
+          if grep -E '/opt/homebrew|/usr/local' "$RUNNER_TEMP/loaded"; then
+            echo "it loaded a library from outside the bundle" >&2
+            exit 1
+          fi
+
+      - name: Disk image
+        run: bin/dmg
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dmg-${{ matrix.os }}
+          path: target/release/*.dmg
+          if-no-files-found: error
+
   publish:
-    name: Attach the bottles to the release
-    needs: bottle
+    name: Attach the bottles and the disk images to the release
+    needs: [bottle, dmg]
     runs-on: macos-15
     permissions:
       contents: write
@@ -139,6 +198,12 @@ jobs:
         with:
           path: bottles
           pattern: bottle-*
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dmgs
+          pattern: dmg-*
           merge-multiple: true
 
       - name: Write the bottles into the formula
@@ -173,4 +238,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" \
-            bottles/*.bottle.tar.gz bottles/*.json bottles/gamut.rb --clobber
+            bottles/*.bottle.tar.gz bottles/*.json bottles/gamut.rb dmgs/*.dmg --clobber

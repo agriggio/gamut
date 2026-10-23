@@ -345,8 +345,10 @@ packaging/     what the packages are built from: the Arch PKGBUILD, the Homebrew
                formula (gamut.rb), the Mac bundle's Info.plist, the .desktop entry,
                the icon, and hand-written shell completions
 bin/           release, pkgbuild-sha which points the PKGBUILD and the formula at a
-               published tag, bundle which wraps a built binary in Gamut.app, and
-               icon, which draws packaging/'s icon from a model of its scene's light
+               published tag, bundle which wraps a built binary in Gamut.app — with
+               --standalone, carrying its libraries — dmg which puts that on a disk
+               image, and icon, which draws packaging/'s icon from a model of its
+               scene's light
 REUSE.toml     which file in the tree is under what license; LICENSES/ holds the
                texts it names, and `reuse lint` checks the two agree
 about.toml     which licenses a dependency may arrive under; packaging/about.hbs

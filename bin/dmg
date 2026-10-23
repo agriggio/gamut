@@ -1,0 +1,46 @@
+#!/bin/sh
+# Put an application bundle on a disk image: Gamut.app beside a link to
+# /Applications to drag it onto, which is all a Mac asks of one.
+#
+# The image is named for the bundle's version and the Mac's architecture,
+# since a bundle is built for one: gamut-0.12.2-arm64.dmg. Make the bundle
+# with `bin/bundle --standalone`, or the image holds one that runs only
+# where it was built.
+#
+#   bin/dmg                    target/release/Gamut.app into target/release/
+#   bin/dmg APP [DIRECTORY]    this bundle, into this directory
+
+set -eu
+
+usage() {
+    echo "usage: bin/dmg [APP [DIRECTORY]]" >&2
+    exit 2
+}
+
+[ $# -le 2 ] || usage
+
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+APP=${1:-$ROOT/target/release/Gamut.app}
+OUT=${2:-$(dirname "$APP")}
+
+for tool in hdiutil plutil; do
+    command -v "$tool" >/dev/null || { echo "$tool is not installed" >&2; exit 1; }
+done
+[ -d "$APP/Contents/MacOS" ] || { echo "$APP is not a bundle" >&2; exit 1; }
+
+# The bundle's own version, which `bin/bundle` took from the binary.
+VERSION=$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")
+IMAGE="$OUT/gamut-$VERSION-$(uname -m).dmg"
+
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+
+# `cp -R` keeps the bundle's links and its signature's seal as they are.
+mkdir "$TMP/Gamut"
+cp -R "$APP" "$TMP/Gamut/Gamut.app"
+ln -s /Applications "$TMP/Gamut/Applications"
+
+rm -f "$IMAGE"
+hdiutil create -quiet -volname Gamut -srcfolder "$TMP/Gamut" -format UDZO "$IMAGE"
+
+echo "$IMAGE"
