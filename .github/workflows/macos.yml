@@ -1,14 +1,16 @@
 name: macOS bottle
 
-# Builds the Homebrew bottle of a release on each macOS the formula is
-# installed on, and attaches the bottles to that release together with
-# gamut.rb, the formula with its `bottle do` block, which is what goes into the
-# tap, dcervelli/homebrew-gamut.
+# Builds the Homebrew bottle on each macOS the formula is installed on, and
+# attaches the bottles to a release together with gamut.rb, the formula with
+# its `bottle do` block, which is what goes into the tap,
+# dcervelli/homebrew-gamut.
 #
-# It follows the `Release` workflow rather than the tag, because the source
-# tarball the formula names exists only once that has made the release; and it
-# is not triggered by the release itself, since a release made with the
-# workflow token starts nothing. `workflow_dispatch` builds a tag again.
+# Two things start it. A release, once the `Release` workflow has made it: the
+# source tarball the formula names exists only then, and a release made with
+# the workflow token starts nothing itself, so this follows that workflow
+# rather than the release. And a run by hand, which builds the tag it is given
+# again, or with none builds the commit it is run from — the head of master —
+# and publishes it as the `nightly` release, made anew each time.
 on:
   workflow_run:
     workflows: [Release]
@@ -16,21 +18,64 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: The release to build bottles for, as vX.Y.Z
-        required: true
+        description: The release to build bottles for, as vX.Y.Z; empty for a nightly of this commit
+        required: false
 
 env:
-  # The tag is the push's for a run that follows `Release`, and the one given
-  # for a run by hand.
-  TAG: ${{ inputs.tag || github.event.workflow_run.head_branch }}
+  # The tag is the push's for a run that follows `Release`, the one given for
+  # a run by hand, and `nightly` where there is none.
+  TAG: ${{ inputs.tag || github.event.workflow_run.head_branch || 'nightly' }}
   HOMEBREW_NO_AUTO_UPDATE: 1
   HOMEBREW_NO_ANALYTICS: 1
   HOMEBREW_NO_INSTALL_CLEANUP: 1
 
 jobs:
+  formula:
+    name: Point the formula at its source
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.event.workflow_run.head_branch || github.sha }}
+
+      - name: Point the copy at this source
+        # The formula in the tree carries the previous release's checksum
+        # until `bin/pkgbuild-sha` has run, so the copy is pointed at the
+        # tarball of what is being built, and its checksum. A nightly has no
+        # tag to name it by, so it is named by its commit, and says the
+        # version Cargo.toml does, which is what the binary reports and what
+        # the formula's test looks for.
+        run: |
+          if [ "$TAG" = nightly ]; then
+            ref=$(git rev-parse HEAD)
+          else
+            ref=refs/tags/$TAG
+          fi
+          url="https://github.com/$GITHUB_REPOSITORY/archive/$ref.tar.gz"
+          curl -fsSL --retry 5 --retry-delay 3 "$url" -o "$RUNNER_TEMP/src.tar.gz"
+          sha=$(sha256sum "$RUNNER_TEMP/src.tar.gz" | cut -d' ' -f1)
+
+          sed -i \
+            -e "s|^  url \".*\"|  url \"$url\"|" \
+            -e "s|^  sha256 \".*\"|  sha256 \"$sha\"|" \
+            packaging/gamut.rb
+          if [ "$TAG" = nightly ]; then
+            version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+            sed -i "s|^  sha256 \".*\"|&\n  version \"$version\"|" packaging/gamut.rb
+          fi
+          grep -E '^  (url|sha256|version) ' packaging/gamut.rb
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: formula
+          path: packaging/gamut.rb
+          if-no-files-found: error
+
   bottle:
     name: Bottle on ${{ matrix.os }}
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    needs: formula
     strategy:
       fail-fast: false
       matrix:
@@ -41,28 +86,15 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
         with:
-          ref: ${{ env.TAG }}
+          name: formula
 
       - name: Put the formula in a tap of its own
-        # `brew bottle` works on a formula that came from a tap. The one in
-        # the tree carries the previous release's checksum until
-        # `bin/pkgbuild-sha` has run, so the copy is pointed at this tag's
-        # tarball, which is what the formula installs from.
+        # `brew bottle` works on a formula that came from a tap.
         run: |
           brew tap-new --no-git local/gamut
-          formula="$(brew --repository local/gamut)/Formula/gamut.rb"
-          cp packaging/gamut.rb "$formula"
-
-          url="https://github.com/$GITHUB_REPOSITORY/archive/refs/tags/$TAG.tar.gz"
-          curl -fsSL --retry 5 --retry-delay 3 "$url" -o "$RUNNER_TEMP/src.tar.gz"
-          sha=$(shasum -a 256 "$RUNNER_TEMP/src.tar.gz" | cut -d' ' -f1)
-          sed -i '' \
-            -e "s|^  url \".*\"|  url \"$url\"|" \
-            -e "s|^  sha256 \".*\"|  sha256 \"$sha\"|" \
-            "$formula"
-          grep -E '^  (url|sha256) ' "$formula"
+          cp gamut.rb "$(brew --repository local/gamut)/Formula/gamut.rb"
 
       - name: Build
         run: brew install --build-bottle --verbose local/gamut/gamut
@@ -99,9 +131,9 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
         with:
-          ref: ${{ env.TAG }}
+          name: formula
 
       - uses: actions/download-artifact@v4
         with:
@@ -115,23 +147,30 @@ jobs:
         run: |
           brew tap-new --no-git local/gamut
           formula="$(brew --repository local/gamut)/Formula/gamut.rb"
-          cp packaging/gamut.rb "$formula"
-
-          url="https://github.com/$GITHUB_REPOSITORY/archive/refs/tags/$TAG.tar.gz"
-          curl -fsSL --retry 5 --retry-delay 3 "$url" -o "$RUNNER_TEMP/src.tar.gz"
-          sha=$(shasum -a 256 "$RUNNER_TEMP/src.tar.gz" | cut -d' ' -f1)
-          sed -i '' \
-            -e "s|^  url \".*\"|  url \"$url\"|" \
-            -e "s|^  sha256 \".*\"|  sha256 \"$sha\"|" \
-            "$formula"
-
+          cp gamut.rb "$formula"
           brew bottle --merge --write --no-commit bottles/*.json
           cp "$formula" bottles/gamut.rb
           cat "$formula"
+
+      - name: The nightly release is made anew
+        # The one release that is not a version's: its tag moves to the commit
+        # built, and the bottles of the last one go with the release they
+        # were on. The tag is not a `v*`, so `Release` does not run for it.
+        if: env.TAG == 'nightly'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+        run: |
+          gh release delete nightly --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes || true
+          gh release create nightly --repo "$GITHUB_REPOSITORY" \
+            --target "$SHA" \
+            --prerelease \
+            --title "Nightly" \
+            --notes "Built from $SHA. Bottles and the formula that names them; not a release."
 
       - name: Upload
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload "$TAG" bottles/*.bottle.tar.gz bottles/*.json bottles/gamut.rb \
-            --clobber
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" \
+            bottles/*.bottle.tar.gz bottles/*.json bottles/gamut.rb --clobber
