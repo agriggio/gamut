@@ -867,6 +867,17 @@ pub(super) const ARROW_RIGHT: &[Mark] = &[
     Mark::Line([19.0, 12.0], [12.0, 19.0]),
 ];
 
+/// Lucide's `arrow-right-left`: two arrows passing each other — the mark
+/// on the region panel's button that trades the region's width and height.
+pub(super) const ARROW_RIGHT_LEFT: &[Mark] = &[
+    Mark::Line([16.0, 3.0], [20.0, 7.0]),
+    Mark::Line([20.0, 7.0], [16.0, 11.0]),
+    Mark::Line([20.0, 7.0], [4.0, 7.0]),
+    Mark::Line([8.0, 21.0], [4.0, 17.0]),
+    Mark::Line([4.0, 17.0], [8.0, 13.0]),
+    Mark::Line([4.0, 17.0], [20.0, 17.0]),
+];
+
 /// Lucide's `x`: the cross that takes a thing off the screen. Its two strokes
 /// cross at the middle of the grid and reach the same distance into each
 /// corner, so it stays square however the square it is fitted into rounds.

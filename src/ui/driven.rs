@@ -21,6 +21,7 @@ use super::control::{Naming, Unnamed};
 use super::filmstrip;
 use super::help;
 use super::menu::Copies;
+use super::region_panel::Field;
 use super::rename::{self, Verdict};
 use super::tooltip::{Tip, Tooltip};
 use super::transport::{Kind, Transport};
@@ -150,6 +151,7 @@ pub(super) fn input(logical: [f32; 2], count: usize) -> FrameInput {
         modifiers: crate::gestures::Mods::empty(),
         gestures: std::rc::Rc::new(crate::gestures::Gestures::table()),
         zoom_box: None,
+        aspect: crate::image::aspect::Aspect::Free,
         transport: None,
         filmstrip: None,
         side: None,
@@ -1801,10 +1803,15 @@ fn a_region_on_screen_is_moved_with_shift_or_by_its_middle() {
     let commands = drag(&mut harness, inside, to);
     assert!(held(&commands, Grip::Inside), "{commands:?}");
 
-    // Off the region, the key held changes nothing: the picture pans.
-    let outside = [60.0, 100.0];
+    // Off the region, the key held changes nothing: the picture pans. At
+    // the picture's top right, clear of the region's panel at its top left.
+    let outside = screen_point(&harness, [3.5, 0.5]);
     assert!(!region.contains(image_point(&harness, outside)));
-    let commands = drag(&mut harness, outside, [90.0, 130.0]);
+    let commands = drag(
+        &mut harness,
+        outside,
+        [outside[0] - 30.0, outside[1] + 30.0],
+    );
     assert!(panned(&commands), "{commands:?}");
 
     harness.state_mut().input.modifiers = crate::gestures::Mods::empty();
@@ -2029,7 +2036,9 @@ fn a_double_click_is_handed_back_where_its_slot_names_a_key() {
         height: 1,
     };
     harness.state_mut().input.selection = Selection::Shown(region);
-    harness.run();
+    // Stepped rather than run: the region brings its panel up, which fades
+    // in by a clock this test holds still.
+    harness.step();
     let right = screen_point(&harness, [2.0, 1.5]);
     let handle = Command::Handle(Grip::Edge(Side::Right));
     assert_eq!(twice(&mut harness, right), [handle.clone(), handle]);
@@ -3485,4 +3494,87 @@ fn the_readout_says_which_way_a_pixel_looks() {
     // place is written instead.
     current.exif.focal_equivalent = None;
     assert_eq!(write(&current, false), "2,1");
+}
+
+/// The region's panel comes up with the region asked for, with what needs a
+/// drawn region dead until there is one, and goes with it. A box hands over
+/// what is typed in it only when it lets go of the keyboard — `Enter` or
+/// `Tab` — and `Esc` throws it away; an aspect typed or chosen from the
+/// menu is pressed as the aspect.
+#[test]
+fn the_region_panel_hands_over_what_is_typed_when_it_is_let_go() {
+    use crate::image::aspect::Aspect;
+    use egui::accesskit::Role;
+    let mut harness = open(WINDOW, 1, panels());
+    let close = Control::RegionClose.label();
+    assert!(
+        harness.query_by_label(&close).is_none(),
+        "no region, no panel"
+    );
+
+    harness.state_mut().input.selection = Selection::Armed;
+    harness.run();
+    for dead in [Control::RegionCopy, Control::RegionFit, Control::RegionSwap] {
+        let label = dead.label();
+        let node = harness.get_by_label(&label);
+        assert!(node.accesskit_node().is_disabled(), "{dead:?}");
+    }
+    harness.state_mut().commands.clear();
+    harness.get_by_label(&close).click();
+    harness.run();
+    assert_eq!(asked(&harness), [Command::Press(Control::RegionClose)]);
+
+    let region = Region {
+        x: 1,
+        y: 1,
+        width: 2,
+        height: 1,
+    };
+    harness.state_mut().input.selection = Selection::Shown(region);
+    harness.run();
+    let label = Control::RegionCopy.label();
+    let copy = harness.get_by_label(&label);
+    assert!(!copy.accesskit_node().is_disabled());
+
+    // Typed into and let go of: by `Enter`, by `Esc`, by `Tab`.
+    let typed = |harness: &mut Harness<'static, State>, holds: &str, text: &str, key| {
+        harness
+            .get_all_by_role(Role::TextInput)
+            .find(|node| node.value().as_deref() == Some(holds))
+            .expect("the box")
+            .focus();
+        harness.run();
+        harness.state_mut().commands.clear();
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        harness.event(egui::Event::Text(text.to_string()));
+        harness.step();
+        assert_eq!(asked(harness), [], "nothing while it is typed");
+        harness.key_press(key);
+        harness.step();
+        harness.step();
+        asked(harness)
+    };
+    assert_eq!(
+        typed(&mut harness, "2", "30", egui::Key::Enter),
+        [Command::RegionField(Field::Width, 30)]
+    );
+    assert_eq!(typed(&mut harness, "2", "9", egui::Key::Escape), []);
+    assert_eq!(
+        typed(&mut harness, "Free", "16:10", egui::Key::Tab),
+        [Command::Press(Control::Aspect(Aspect::Ratio(16.0, 10.0)))]
+    );
+    // What will not do is let go of and nothing more.
+    assert_eq!(typed(&mut harness, "2", "0", egui::Key::Enter), []);
+    assert_eq!(typed(&mut harness, "Free", "wide", egui::Key::Enter), []);
+
+    // The menu offers the ratios the way up the region is.
+    harness.get_by_label(&Control::AspectMenu.label()).click();
+    harness.run();
+    harness.state_mut().commands.clear();
+    harness.get_by_label("16:9").click();
+    harness.run();
+    assert_eq!(
+        asked(&harness),
+        [Command::Press(Control::Aspect(Aspect::Ratio(16.0, 9.0)))]
+    );
 }

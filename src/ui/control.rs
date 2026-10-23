@@ -9,6 +9,7 @@
 use std::ops::Range;
 
 use crate::gestures::{Button, Kind};
+use crate::image::aspect::Aspect;
 use crate::image::decode::Reading;
 use crate::image::region::{Grip, Region};
 
@@ -19,6 +20,7 @@ use super::help;
 use super::info::Copyable;
 use super::menu::{Copies, ZoomChoice};
 use super::pixel::{CoordinateFormat, GeographicFormat, PixelFormat};
+use super::region_panel::Field;
 use super::tags::{Fold, Tab, Table};
 use super::tooltip::{Tip, Tooltip};
 
@@ -80,6 +82,19 @@ controls! {
     /// asked for or is on screen, and a press while it is lit takes the
     /// region off — see [`Selection`].
     Region,
+    /// The panel a region brings up beside that button while one is asked
+    /// for or drawn — see [`region_panel`](super::region_panel): the cross
+    /// at its head that takes the region off, as `x` does; the copy of the
+    /// region, as `Ctrl+C` makes; the window fitted to it; and its width
+    /// and height traded, with the aspect it is held to.
+    RegionClose,
+    RegionCopy,
+    RegionFit,
+    RegionSwap,
+    /// The button at the end of the panel's aspect field that opens the
+    /// menu of aspects, and a cell of that menu, or an aspect typed.
+    AspectMenu,
+    Aspect(Aspect) = Aspect::Free,
     Histogram,
     Info,
     Grid,
@@ -308,6 +323,12 @@ impl Control {
             Control::Seek(frame) => format!("Frame {frame}"),
             Control::Paste => "Paste".to_string(),
             Control::Region => "Region".to_string(),
+            Control::RegionClose => "Clear region".to_string(),
+            Control::RegionCopy => "Copy region".to_string(),
+            Control::RegionFit => "Fit region".to_string(),
+            Control::RegionSwap => "Swap width and height".to_string(),
+            Control::AspectMenu => "Aspect ratio".to_string(),
+            Control::Aspect(aspect) => aspect.label(),
             Control::Histogram => "Histogram".to_string(),
             Control::Info => "Information".to_string(),
             Control::Grid => "Grid".to_string(),
@@ -509,6 +530,10 @@ pub enum Command {
     /// The file list's edge was dragged: the width its thumbnails are
     /// fitted into, which the panel's width is made from.
     FilmstripSlot(f32),
+    /// One of the region panel's four boxes was typed in and let go of —
+    /// `Enter`, `Tab` or a click elsewhere — with a number in it: which,
+    /// and the number.
+    RegionField(Field, u32),
 }
 
 /// What a region on the picture is in: nothing, waiting for the drag that

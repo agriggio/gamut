@@ -8,6 +8,7 @@
 //! thing earns a tooltip by becoming a [`Tip`] the application has something
 //! to say about.
 
+use crate::image::aspect::Aspect;
 use crate::image::decode::Reading;
 use crate::image::display::{AutoWindow, Colormap, ToneMap};
 use crate::theme::Theme;
@@ -261,6 +262,14 @@ pub const NOTHING_TO_PASTE: &str = "No image on the clipboard";
 /// copy button, and the region button, which have nothing to take or mark.
 pub const NOTHING_OPEN: &str = "Nothing is open.";
 
+/// What the region panel's copy and fit say while the region is only asked
+/// for, with nothing drawn for them to take or frame.
+pub const NO_REGION: &str = "No region drawn yet.";
+
+/// What the panel's swap says with nothing drawn and nothing held: there is
+/// no shape either way up to trade.
+pub const NOTHING_TO_SWAP: &str = "No region or aspect to swap.";
+
 /// What a control acting on the file says while another file is on its way
 /// in: the bar names that one already, and the file on screen is the one a
 /// press would act on.
@@ -275,6 +284,8 @@ pub const STILL_OPENING: &str = "Waiting for file.";
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Conditions {
     pub region_selected: bool,
+    /// Whether regions are held to an aspect rather than free.
+    pub region_held: bool,
     pub several_files: bool,
     pub animation: bool,
     pub pages: bool,
@@ -348,6 +359,7 @@ impl Default for Conditions {
     fn default() -> Self {
         Self {
             region_selected: false,
+            region_held: false,
             several_files: false,
             animation: false,
             pages: false,
@@ -396,6 +408,7 @@ impl Conditions {
     #[cfg(test)]
     pub const ALIVE: Conditions = Conditions {
         region_selected: false,
+        region_held: false,
         several_files: false,
         animation: false,
         pages: false,
@@ -459,6 +472,8 @@ pub struct Refused {
 /// control owes the reader is the reason and not the binding.
 pub fn disabled(tip: Tip, conditions: Conditions) -> Option<Refused> {
     let Conditions {
+        region_selected,
+        region_held,
         room,
         hdr,
         openable,
@@ -484,6 +499,12 @@ pub fn disabled(tip: Tip, conditions: Conditions) -> Option<Refused> {
         ..
     } = conditions;
     let said = |said| Some(Refused { said, hint: None });
+    if matches!(tip, Tip::Control(Control::RegionCopy | Control::RegionFit)) && !region_selected {
+        return said(NO_REGION);
+    }
+    if tip == Tip::Control(Control::RegionSwap) && !region_selected && !region_held {
+        return said(NOTHING_TO_SWAP);
+    }
     if tip == Tip::Control(Control::Back) && !visited_before {
         return said(NOTHING_BEFORE);
     }
@@ -556,6 +577,7 @@ pub fn disabled(tip: Tip, conditions: Conditions) -> Option<Refused> {
         Tip::Control(
             Control::Copy
                 | Control::Copies(_)
+                | Control::RegionCopy
                 | Control::Facts(_)
                 | Control::TagsCopyMenu
                 | Control::TagsCopy(_)
@@ -698,6 +720,20 @@ pub fn words(tip: Tip) -> Option<String> {
         Tip::Control(Control::Grid) => "Toggle the pixel grid",
         Tip::Control(Control::HorizonGrid) => "Toggle the horizon grid",
         Tip::Control(Control::Region) => "Draw a region",
+        // The region panel's: its cross and its copy say what they do and
+        // name the key that does the same, the rest name themselves.
+        Tip::Control(Control::RegionClose) => "Clear the region",
+        Tip::Control(Control::RegionCopy) => COPY_REGION,
+        Tip::Control(Control::RegionFit) => "Fit the region in the window",
+        Tip::Control(Control::RegionSwap) => "Swap the region's width and height",
+        Tip::Control(Control::AspectMenu) => "Choose an aspect ratio",
+        Tip::Control(Control::Aspect(aspect)) => match aspect {
+            Aspect::Free => "Draw the region any shape",
+            Aspect::Original { .. } => "Keep the region the shape of the image",
+            Aspect::Ratio(..) => {
+                return Some(format!("Keep the region {}", aspect.label()));
+            }
+        },
         Tip::Control(Control::Output) => "Toggle HDR output, when monitor is capable",
         Tip::Control(Control::Maximize) => "Toggle the UI",
         // The dot at the head of the pixel readout names the whole of what

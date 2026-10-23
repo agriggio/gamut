@@ -36,6 +36,7 @@ pub mod panel;
 pub mod pixel;
 mod rect;
 pub mod region;
+pub mod region_panel;
 mod status;
 pub mod style;
 
@@ -698,6 +699,9 @@ pub struct FrameInput {
     /// The box being dragged out to zoom to, while a drag is drawing one:
     /// painted over the picture, and gone when the drag lets go.
     pub zoom_box: Option<Region>,
+    /// The shape a region is held to, which the region panel shows and
+    /// chooses.
+    pub aspect: crate::image::aspect::Aspect,
     /// The transport bar's state, for a file of frames or pages, and
     /// `None` for a still — which is what decides whether the bar is there.
     pub transport: Option<Transport>,
@@ -1176,6 +1180,12 @@ impl Pass<'_> {
         if picture {
             region::show(self, ui);
             region::show_zoom_box(self, ui);
+        }
+        // Over the region it is about, which it may cover a corner of, and
+        // with the rest of the interface: a region drawn with the interface
+        // away is drawn for the picture alone.
+        if self.panels.show_ui {
+            region_panel::show(self, ui, current);
         }
         // Over the region: the loupe is under the hand, and the newer mark.
         loupe::show(self, ui);

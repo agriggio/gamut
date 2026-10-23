@@ -923,6 +923,60 @@ off, and so does the file coming back a different size — the pixels it
 marked out are no longer the pixels — while a reload at the same size keeps
 it, being the same picture read again. The key is `x`.
 
+### Holding a region to an aspect
+
+The shape a region is held to is an `Aspect`, in `src/image/aspect.rs`:
+free, the picture's own, or a ratio of two positive numbers. The picture's
+own is kept as itself rather than as the number it came to when it was
+chosen, so that it follows the file on screen and the turn on it;
+`Aspect::ratio` resolves it against the picture as shown each time it is
+asked. `Marking` holds the aspect and `Marking::clear` leaves it alone,
+which is what keeps it from one region, and one file, to the next.
+
+Every change to a region takes the ratio as an `Option<f64>` beside the
+image's size, so a caller cannot change the region and forget the shape it
+is held to. The held changes all come down to `Region::held`: one side's
+length, the side it is along, and where each side is placed — from a
+boundary one way or the other, or about a middle. The governing side is
+rounded first and the other worked out from it, so that an arrow's
+one-pixel step along the side it moves is never lost to the rounding of
+the side that follows. Where the image has no room for that length in that
+shape, both shrink together. The region gives up size rather than shape,
+since a shape the user chose and then saw quietly broken at an edge would be
+worse than a region that stops short.
+
+A corner held keeps the corner opposite, as a free one does. An edge held
+keeps the edge opposite and the middle across it: an edge has no corner to
+anchor the side that follows, and growing that side from one end would
+shift the region sideways for no reason the hand gave. A drag that draws a
+new region governs by whichever side the hand has gone further along in the
+ratio's terms, so the region always reaches the hand along one side and
+never past it on the other. A turn of the picture turns a ratio with the
+region, through `Aspect::quarter_turned` in `Marking::turned`, since the
+region turned with the pixels it marks out and a ratio left behind would no
+longer describe it.
+
+### The region panel
+
+`ui/region_panel.rs` draws the panel that is up while a region is asked
+for or drawn. It is a `panel::area` at `Place::TopLeft`, beside the region
+button, and is up while the region is only asked for, so the shape can be
+chosen before anything is drawn. Its buttons are `Control`s like any other,
+pressed through `App::press`. The cross is `ToggleRegion`'s key, the copy is
+`CopyImage`'s and the fit is the first stop of `Space`'s cycle, which then
+goes on from there, so the panel and the keys cannot disagree.
+
+Its five boxes keep what is typed in them in egui's temporary memory, under
+the box's id, for as long as the box has the keyboard, and hand it over —
+`Command::RegionField`, or the aspect pressed as `Control::Aspect` — only on
+the pass it lets go: `Enter`, which the box takes before the toolkit can,
+`Tab`, or a click elsewhere. A box that applied every keystroke would
+reshape the region at `1` on the way to `1200`, and a ratio at `16:1` on the
+way to `16:10`. egui drops the keyboard on `Esc` before the pass, so a box
+that finds itself let go with `Esc` down throws what was typed away. Keys go
+to egui while a box has the keyboard, so `x` and the arrows typed into one
+are text rather than the region's keys.
+
 ## The zoom box
 
 Holding `Space` — whatever key `zoom.fit` is bound to — and dragging a box

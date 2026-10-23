@@ -9,6 +9,7 @@
 //! that produce it are [`decode`].
 
 pub mod apple_note;
+pub mod aspect;
 pub mod attitude;
 pub mod auxiliary;
 pub mod color;

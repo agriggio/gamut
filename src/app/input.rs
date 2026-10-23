@@ -33,6 +33,7 @@ use crate::timing;
 use crate::ui::histogram;
 use crate::ui::info::Copyable;
 use crate::ui::menu::{Copies, ZoomChoice};
+use crate::ui::region_panel::Field;
 use crate::ui::toast::Level;
 pub(super) use crate::ui::tooltip::Conditions;
 use crate::ui::tooltip::Hdr;
@@ -409,6 +410,10 @@ pub(super) fn action_of(tip: Tip) -> Option<Action> {
         Tip::Control(Control::Profile) => ToggleProfile,
         Tip::Control(Control::Paste) => Action::Paste,
         Tip::Control(Control::Region) => ToggleRegion,
+        // The region panel's cross takes the region off as the key does,
+        // and its copy is the copy the key makes while a region is up.
+        Tip::Control(Control::RegionClose) => ToggleRegion,
+        Tip::Control(Control::RegionCopy) => CopyImage,
         Tip::Control(Control::Help) => ShowHelp,
         Tip::Control(Control::EditConfig) => OpenSettings,
         Tip::Control(Control::Play) => TogglePlay,
@@ -495,7 +500,11 @@ pub(super) fn action_of(tip: Tip) -> Option<Action> {
             | Control::ExportAs(_)
             | Control::ExportTo
             | Control::CancelExport
-            | Control::OpenLastFolder,
+            | Control::OpenLastFolder
+            | Control::RegionFit
+            | Control::RegionSwap
+            | Control::AspectMenu
+            | Control::Aspect(_),
         ) => return None,
         // The words at the end of the bottom bar are about four settings at
         // once, so no one key does what they do; what a press on them opens
@@ -2489,10 +2498,11 @@ impl App {
     /// pixel has nothing to animate.
     fn perform_on_region(&mut self, region: Region, action: Action) -> Option<Effect> {
         let image = self.image_pixels();
+        let ratio = self.marking.ratio(image);
         Some(match action {
             GrowRegion(direction) => {
                 self.marking
-                    .select(region.grown(direction.side(), 1, image));
+                    .select(region.grown(direction.side(), 1, ratio, image));
                 Effect::Redraw
             }
             // Left pulls the right edge in: the edge that moves lies the
@@ -2500,7 +2510,7 @@ impl App {
             // lies its way.
             ShrinkRegion(direction) => {
                 self.marking
-                    .select(region.shrunk(direction.side().opposite(), 1));
+                    .select(region.shrunk(direction.side().opposite(), 1, ratio, image));
                 Effect::Redraw
             }
             MoveRegion(direction) => {
@@ -2509,7 +2519,7 @@ impl App {
                 // that has no edge to move the way the arrow points — an
                 // edge's own axis — rather than leaving the key dead.
                 let moved = region
-                    .nudged(self.marking.handle, step, image)
+                    .nudged(self.marking.handle, step, ratio, image)
                     .unwrap_or_else(|| region.moved_by(step[0], step[1], image));
                 self.marking.select(moved);
                 Effect::Redraw
@@ -2533,6 +2543,41 @@ impl App {
             }
             _ => return None,
         })
+    }
+
+    /// The window fitted to the region, as the first press of the fit key
+    /// with a region up does, and the next press of that key going on from
+    /// there.
+    fn fit_region(&mut self) -> Effect {
+        let Selection::Shown(region) = self.marking.selection else {
+            return Effect::Nothing;
+        };
+        let framing = Framing::Region(Fit::Whole);
+        self.animate(|view, image, viewport| {
+            view.fit_region(Fit::Whole, region.as_f32(), image, viewport);
+        });
+        self.marking.framing = framing.next();
+        Effect::Redraw
+    }
+
+    /// One of the region panel's boxes was typed in: the place moves the
+    /// region, keeping its size, and the size sets that side from the top
+    /// left corner, the other following where the region is held.
+    fn type_region(&mut self, field: Field, number: u32) -> Effect {
+        let Selection::Shown(region) = self.marking.selection else {
+            return Effect::Nothing;
+        };
+        let image = self.image_pixels();
+        let axis = field.axis();
+        let typed = if field.is_size() {
+            region.sized(axis, number, self.marking.ratio(image), image)
+        } else {
+            let mut by = [0, 0];
+            by[axis] = i64::from(number) - i64::from([region.x, region.y][axis]);
+            region.moved_by(by[0], by[1], image)
+        };
+        self.marking.select(typed);
+        Effect::Redraw
     }
 
     /// The image on screen in whole pixels, which is what a region is
@@ -2638,6 +2683,7 @@ impl App {
         let georeference = current.and_then(|current| current.exif.georeference.as_ref());
         Conditions {
             region_selected: matches!(self.marking.selection, Selection::Shown(_)),
+            region_held: self.marking.aspect != crate::image::aspect::Aspect::Free,
             several_files: self.files.len() > 1 || self.beside.folder.unread(),
             animation: self.animation.is_some(),
             pages: current.is_some_and(|current| {
@@ -2836,6 +2882,7 @@ impl App {
             ui::Command::FilmstripSlot(slot) => {
                 self.filmstrip.set_slot(slot);
             }
+            ui::Command::RegionField(field, number) => return self.type_region(field, number),
         }
         Effect::Redraw
     }
@@ -3502,6 +3549,25 @@ impl App {
                     Selection::Off => self.marking.selection = Selection::Armed,
                     Selection::Armed | Selection::Shown(_) => self.marking.clear(),
                 }
+                Effect::Redraw
+            }
+            // The region panel's. The cross is the region button's own press
+            // while a region is up, and the copy the key's, which takes the
+            // region while there is one.
+            Control::RegionClose => {
+                self.marking.clear();
+                Effect::Redraw
+            }
+            Control::RegionCopy => self.perform(CopyImage),
+            Control::RegionFit => self.fit_region(),
+            Control::RegionSwap => {
+                self.marking.swap(self.image_pixels());
+                Effect::Redraw
+            }
+            // A menu button, which opens its menu by itself.
+            Control::AspectMenu => Effect::Nothing,
+            Control::Aspect(aspect) => {
+                self.marking.hold_to(aspect, self.image_pixels());
                 Effect::Redraw
             }
             // The keys' own actions, so that the bar and `Enter`, `n` and

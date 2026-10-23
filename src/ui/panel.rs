@@ -12,6 +12,8 @@ pub enum Place {
     TopCenter,
     /// The middle of the content.
     Center,
+    /// The top left corner, beside the left strip's buttons.
+    TopLeft,
 }
 
 /// Where a panel goes on `content`, or `None` where the content has no room
@@ -34,9 +36,10 @@ pub fn fit(content: Rect, most: [f32; 2], least: [f32; 2], place: Place) -> Opti
     }
     let x = match place {
         Place::TopCenter | Place::Center => content.x + (content.width - size[0]) / 2.0,
+        Place::TopLeft => content.x + PADDING,
     };
     let y = match place {
-        Place::TopCenter => content.y + PADDING,
+        Place::TopCenter | Place::TopLeft => content.y + PADDING,
         Place::Center => content.y + (content.height - size[1]) / 2.0,
     };
     Some(Rect::new(

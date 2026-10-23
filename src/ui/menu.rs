@@ -1,7 +1,7 @@
 //! Popup menus: what is on each, and how its cells are drawn. Where a popup
 //! goes and how it is dismissed are egui's.
 //!
-//! Five of them, one open at a time: a second would have to say which of the
+//! Six of them, one open at a time: a second would have to say which of the
 //! two a press outside dismisses. Adding another is a set of choices, a
 //! function that lays them out, and the button in the chrome that opens it.
 //! The file chooser is a sixth popup under the same rule, though not a menu
@@ -9,6 +9,7 @@
 
 use egui::{Button, RichText, Sense, Ui, Vec2, WidgetInfo, WidgetType, vec2};
 
+use crate::image::aspect::Aspect;
 use crate::render::Upscale;
 use crate::view::{Axis, Fit, View, Viewport};
 
@@ -472,6 +473,35 @@ pub(super) fn copy_items(pass: &mut Pass, ui: &mut Ui) {
             if response.clicked() {
                 pass.press(control);
             }
+        }
+    });
+}
+
+/// The menu of aspects, off the end of the region panel's aspect box: free
+/// and the picture's own, then set apart the ratios, the way up `portrait`
+/// says — the way up the region is — with the one in force lit.
+pub(super) fn aspect_items(pass: &mut Pass, ui: &mut Ui, aspect: Aspect, portrait: bool) {
+    titled(pass, ui, &Control::AspectMenu.label(), |pass, ui| {
+        let item = |pass: &mut Pass, ui: &mut Ui, choice: Aspect, active: bool| {
+            let control = Control::Aspect(choice);
+            let response = ui.add(Button::new(control.label()).selected(active));
+            let response = pass.tooltip(response, Tip::Control(control));
+            if response.clicked() {
+                pass.press(control);
+                ui.close();
+            }
+        };
+        item(pass, ui, Aspect::Free, aspect == Aspect::Free);
+        let original = Aspect::Original { turned: portrait };
+        item(
+            pass,
+            ui,
+            original,
+            matches!(aspect, Aspect::Original { .. }),
+        );
+        ui.add_space(MENU_SECTION_GAP);
+        for choice in Aspect::presets(portrait) {
+            item(pass, ui, choice, choice == aspect);
         }
     });
 }

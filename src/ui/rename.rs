@@ -364,8 +364,62 @@ pub(super) fn name_field(
     field: NameField<'_>,
     changed: impl FnOnce(String) -> Command,
 ) {
+    let (output, typed) = boxed_field(
+        pass,
+        ui,
+        Boxed {
+            id: field.id,
+            text: field.name,
+            refused: field.refused,
+            size: vec2(field.width, FIELD_HEIGHT),
+            suffix: field.suffix,
+        },
+    );
+    if let Some(text) = typed {
+        pass.commands.push(changed(text));
+    }
+    let field_id = field.id;
+    if field.opened {
+        let mut state = output.state;
+        state
+            .cursor
+            .set_char_range(Some(egui::text::CCursorRange::two(
+                egui::text::CCursor::new(0),
+                egui::text::CCursor::new(stem_chars(field.name)),
+            )));
+        state.store(ui.ctx(), field_id);
+        output.response.request_focus();
+    } else if field.primary && ui.memory(|memory| memory.focused().is_none()) {
+        output.response.request_focus();
+    }
+}
+
+/// What a field in a hand-drawn box is drawn from.
+pub(super) struct Boxed<'a> {
+    /// The field's id in egui's memory, where its selection is kept.
+    pub id: egui::Id,
+    pub text: &'a str,
+    /// Whether what it holds will not do, which outlines the box in the
+    /// warning color.
+    pub refused: bool,
+    pub size: egui::Vec2,
+    /// A word painted inside the box after what is typed — see
+    /// [`NameField::suffix`].
+    pub suffix: Option<&'static str>,
+}
+
+/// A single line of text in a hand-drawn box, as the chooser's is: the box
+/// outlined in the warning color while what it holds will not do, and in
+/// the hairline otherwise. Hands back egui's output, for the focus and the
+/// selection, and what the field says now where a key changed it. `Enter`
+/// is left to the caller, as a dialog takes it before the field can.
+pub(super) fn boxed_field(
+    pass: &mut Pass,
+    ui: &mut egui::Ui,
+    field: Boxed<'_>,
+) -> (egui::text_edit::TextEditOutput, Option<String>) {
     let theme = pass.theme;
-    let (rect, _) = ui.allocate_exact_size(vec2(field.width, FIELD_HEIGHT), Sense::HOVER);
+    let (rect, _) = ui.allocate_exact_size(field.size, Sense::HOVER);
     let outline = match field.refused {
         true => theme.warning,
         false => theme.border,
@@ -392,10 +446,9 @@ pub(super) fn name_field(
         inner.set_right(at.x - FIELD_INSET / 2.0);
         painter.galley(at, galley, theme.text_dim.into());
     }
-    let field_id = field.id;
-    let mut text = field.name.to_string();
+    let mut text = field.text.to_string();
     let edit = TextEdit::singleline(&mut text)
-        .id(field_id)
+        .id(field.id)
         .return_key(None)
         .frame(Frame::NONE)
         .font(egui::FontId::proportional(TEXT_SIZE))
@@ -413,22 +466,8 @@ pub(super) fn name_field(
         egui::Layout::centered_and_justified(egui::Direction::TopDown),
     ));
     let output = edit.show(&mut child);
-    if output.response.changed() {
-        pass.commands.push(changed(text));
-    }
-    if field.opened {
-        let mut state = output.state;
-        state
-            .cursor
-            .set_char_range(Some(egui::text::CCursorRange::two(
-                egui::text::CCursor::new(0),
-                egui::text::CCursor::new(stem_chars(field.name)),
-            )));
-        state.store(ui.ctx(), field_id);
-        output.response.request_focus();
-    } else if field.primary && ui.memory(|memory| memory.focused().is_none()) {
-        output.response.request_focus();
-    }
+    let typed = output.response.changed().then_some(text);
+    (output, typed)
 }
 
 /// The line under the field: what is wrong with the name, in the warning
